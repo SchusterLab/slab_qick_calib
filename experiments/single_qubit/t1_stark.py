@@ -132,12 +132,13 @@ class T1StarkExperiment(QickExperiment):
         acStark=True,
         min_r2=None,
         max_err=None,
+        check_params=True
     ):
 
         if prefix is None:
             prefix = f"t1_stark_qubit{qi}"
 
-        super().__init__(cfg_dict=cfg_dict, prefix=prefix, progress=progress, qi=qi)
+        super().__init__(cfg_dict=cfg_dict, prefix=prefix, progress=progress, qi=qi, check_params=check_params)
 
         params_def = {
             "reps": 3 * self.reps,
@@ -256,7 +257,7 @@ class T1StarkPowerExperiment(QickExperiment2DSimple):
             "qubit": [qi],
         }
         self.expt = T1StarkExperiment(
-            cfg_dict, qi=qi, go=False, params=params, acStark=acStark, style=style, check_params=False
+            cfg_dict, qi=qi, go=False, params=params, acStark=acStark, style=style
         )
         params = {**params_def, **params}
         params = {**self.expt.cfg.expt, **params}

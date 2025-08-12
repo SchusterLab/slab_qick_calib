@@ -21,9 +21,8 @@ class RamseyStarkExperiment(QickExperiment):
         ramsey_freq: frequency by which to advance phase [MHz]
         reps: number averages per experiment
         rounds: number rounds to repeat experiment sweep
-        checkZZ: True/False for putting another qubit in e (specify as qA)
         checkEF: does ramsey on the EF transition instead of ge
-        qubits: if not checkZZ, just specify [1 qubit]. if checkZZ: [qA in e , qB sweeps length rabi]
+        qubits: 
     )
     """
 
@@ -38,11 +37,12 @@ class RamseyStarkExperiment(QickExperiment):
         style="",
         min_r2=None,
         max_err=None,
+        check_params=True
     ):
         if prefix is None:
             prefix = f"ramsey_stark_qubit{qi}"
 
-        super().__init__(cfg_dict=cfg_dict, prefix=prefix, progress=progress, qi=qi)
+        super().__init__(cfg_dict=cfg_dict, prefix=prefix, progress=progress, qi=qi, check_params=check_params)
 
         params_def = {
             "expts": 200,
@@ -51,13 +51,13 @@ class RamseyStarkExperiment(QickExperiment):
             "start": 0.1,
             "ramsey_freq": "smart",
             "stark_gain": 0.5,
-            "step": 1 / 430,
+            "step": cfg_dict['soc'].cycles2us(1)+0.001,
             "df": 70,
             "acStark": True,
             "checkEF": False,
             'active_reset': self.cfg.device.readout.active_reset[qi],
             'experiment_type': 'ramsey',
-            "num_pi":1, 
+            "num_pi":0, 
             "qubit": [qi],
             "qubit_chan": self.cfg.hw.soc.adcs.readout.ch[qi],
         }
