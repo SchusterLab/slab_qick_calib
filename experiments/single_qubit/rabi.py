@@ -272,9 +272,13 @@ class RabiExperiment(QickExperiment):
 
         # Configure sweep range based on sweep type
         if params["sweep"] == "amp":
-            # Amplitude sweep: set max gain to cover desired number of oscillations
-            params_def['max_gain'] = params['gain'] * params['num_osc'] * 2 / params['n_pulses']
-            params_def['start'] = 0.003  # Minimum gain value that maintains linearity
+            if params["n_pulses"] == 1:
+                # Amplitude sweep: set max gain to cover desired number of oscillations
+                params_def['max_gain'] = params['gain'] * params['num_osc'] * 2
+                params_def['start'] = 0.003  # Minimum gain value that maintains linearity
+            else:
+                params_def["max_gain"]=params["gain"](1+1/ params["n_pulses"])
+                params_def["start"]=params["gain"](1-1/ params["n_pulses"])
             params_def["max_gain"] = np.min([params_def["max_gain"], self.cfg.device.qubit.max_gain]) # Do not exceed max_gain of RFSoC
         elif params["sweep"] == "length":
             # Length sweep: set max length to cover desired number of oscillations

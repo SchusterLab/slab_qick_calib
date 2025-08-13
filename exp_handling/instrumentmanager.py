@@ -29,13 +29,14 @@ class InstrumentManager(dict):
     :param config_path: Path to configuration file
     """
 
-    def __init__(self, config_path=None, server=False, ns_address=None):
+    def __init__(self, config_path=None, server=False, ns_address=None, port=9090):
         """Initializes InstrumentManager using config_path if available"""
 
         dict.__init__(self)
         self.config_path = config_path
         self.config = None
         self.ns_address = ns_address
+        self.port = port
         # self.instruments={}
         if not server and Pyro4Loaded:
             try:
@@ -125,7 +126,7 @@ class InstrumentManager(dict):
 
     def connect_proxies(self):
 
-        ns = Pyro4.locateNS(self.ns_address)
+        ns = Pyro4.locateNS(self.ns_address, port=self.port)
         for name, uri in list(ns.list().items()):
             self[name] = Pyro4.Proxy(uri)
 
