@@ -46,18 +46,7 @@ class QickProgram(AveragerProgramV2):
         self.cfg.update(self.cfg.expt)
         super().__init__(soccfg, self.cfg.expt.reps, final_delay, cfg=cfg)
 
-    def _initialize(self, cfg, readout="standard"):
-        """
-        Initialize hardware channels and configure pulses for the experiment.
-
-        This method sets up the ADC (analog-to-digital converter) and DAC
-        (digital-to-analog converter) channels for qubit control and readout.
-        It also configures the readout pulse and qubit control channels.
-
-        Args:
-            cfg: Configuration dictionary
-            readout: Readout configuration type (default: "standard")
-        """
+    def save_params(self, readout='standard'):
         cfg = AttrDict(self.cfg)
 
         # Get qubit index from configuration
@@ -102,8 +91,38 @@ class QickProgram(AveragerProgramV2):
             self.lo_nqz = cfg.hw.soc.lo.nyquist[q]
             self.mixer_freq = cfg.hw.soc.lo.mixer_freq[q]
             self.lo_gain = cfg.hw.soc.lo.gain[q]
+        else:
+            self.lo_ch = None  # No LO channel available
 
-            # Declare LO signal generator with offset from mixer frequency
+
+
+
+    def _initialize(self, cfg, readout="standard"):
+        """
+        Initialize hardware channels and configure pulses for the experiment.
+
+        This method sets up the ADC (analog-to-digital converter) and DAC
+        (digital-to-analog converter) channels for qubit control and readout.
+        It also configures the readout pulse and qubit control channels.
+
+        Args:
+            cfg: Configuration dictionary
+            readout: Readout configuration type (default: "standard")
+        """
+        self.save_params(readout)  # Save parameters for the experiment
+        cfg = AttrDict(self.cfg)
+
+        q = self.qubits[0]  # Single qubit index
+
+        
+        # Configure local oscillator (LO) if available
+        if (
+            "lo" in cfg.hw.soc
+            and "ch" in cfg.hw.soc.lo
+            and cfg.hw.soc.lo.ch[q] != "None"
+        ):
+            
+            # Declare LO signal generator with offset from mixer frequency, this assumes it is using int generator
             self.declare_gen(
                 ch=self.lo_ch, nqz=self.lo_nqz, mixer_freq=self.mixer_freq - 500
             )
@@ -118,8 +137,7 @@ class QickProgram(AveragerProgramV2):
                 phase=0,
                 gain=self.lo_gain,
             )
-        else:
-            self.lo_ch = None  # No LO channel available
+
 
         if "aves" in cfg.expt:
             self.add_loop("ave_loop", cfg.expt.aves)
