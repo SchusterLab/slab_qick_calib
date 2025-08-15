@@ -163,7 +163,7 @@ class T1Experiment(QickExperiment):
         max_err=None,
         display=True,
         print=False,
-        check_params=True,
+        check_params=True,                                                                                                
     ):
         """
         Initialize the T1 experiment
@@ -259,12 +259,6 @@ class T1Experiment(QickExperiment):
         self.cfg.expt.wait_time = QickSweep1D(
             "wait_loop", self.cfg.expt.start, self.cfg.expt.start + self.cfg.expt.span
         )
-
-        # Commented out code for readout length sweep
-        # qi = self.cfg.expt.qubit[0]
-        # self.cfg.expt.readout_length = QickSweep1D(
-        #     "wait_loop", self.cfg.expt.start+self.cfg.device.readout.readout_length[qi], self.cfg.expt.start + self.cfg.expt.span+self.cfg.device.readout.readout_length[qi]
-        # )
 
         # Run the T1Program to acquire data
         super().acquire(T1Program, progress=progress)
@@ -431,7 +425,7 @@ class T1_2D(QickExperiment2DSimple):
         if prefix is None:
             prefix = f"t1_2d_qubit{qi}"
 
-        super().__init__(cfg_dict=cfg_dict, prefix=prefix, progress=progress)
+        super().__init__(cfg_dict=cfg_dict, prefix=prefix, progress=progress, check_params=False)
 
         # Define default parameters
         params_def = {
