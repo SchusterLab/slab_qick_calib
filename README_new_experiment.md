@@ -195,3 +195,111 @@ The experiment parameters are determined in the following order of precedence:
 3.  **YAML Configuration File**: The base parameters are loaded from the YAML configuration file specified in your `cfg_dict`.
 
 This hierarchy allows you to have a stable base configuration in your YAML file while still having the flexibility to change parameters for individual experiment runs. For example, you could run a Rabi experiment with a different `max_gain` without changing the `pi_ge` gain in your main config file.
+
+## Analyzing and Displaying Results
+
+The `analyze` and `display` methods in your `QickExperiment` subclass are where you process and visualize your data. Let's look at the `T1Experiment` from `t1.py` as an example.
+
+### The `analyze` Method
+
+The `analyze` method is responsible for fitting the data and extracting key parameters.
+
+```python
+class T1Experiment(QickExperiment):
+    def analyze(self, data=None, **kwargs):
+        if data is None:
+            data = self.data
+
+        # Fit to exponential decay function
+        self.fitfunc = fitter.expfunc
+        self.fitterfunc = fitter.fitexp
+        super().analyze(self.fitfunc, self.fitterfunc, data, **kwargs)
+
+        # Extract T1 time from fit parameters
+        data["new_t1"] = data["best_fit"][2]
+        data["new_t1_i"] = data["fit_avgi"][2]
+        return data
+```
+
+In this example, the `analyze` method:
+1.  Sets the `fitfunc` (the model to fit to) and `fitterfunc` (the fitting algorithm) from the `analysis.fitting` module.
+2.  Calls `super().analyze(...)` to perform the fit.
+3.  Extracts the T1 time from the fit results and adds it to the `data` dictionary.
+
+### The `display` Method
+
+The `display` method is responsible for plotting the data and the fit results.
+
+```python
+class T1Experiment(QickExperiment):
+    def display(self, data=None, fit=True, ...):
+        # ...
+        title = f"$T_1$ Q{qubit}"
+        xlabel = "Wait Time ($\\mu$s)"
+
+        caption_params = [
+            {"index": 2, "format": "$T_1$ fit: {val:.3} $\\pm$ {err:.2} $\\mu$s"},
+        ]
+
+        super().display(
+            data=data,
+            # ...
+            title=title,
+            xlabel=xlabel,
+            fit=fit,
+            fitfunc=self.fitfunc,
+            caption_params=caption_params,
+            # ...
+        )
+```
+
+In this example, the `display` method:
+1.  Sets the plot `title` and `xlabel`.
+2.  Defines `caption_params`, which specifies how to format the fit results for the plot legend.
+3.  Calls `super().display(...)` to create the plot. The parent `display` method handles the actual plotting logic, using the parameters you provide.
+
+## Creating a 2D Experiment with `QickExperiment2DSimple`
+
+For 2D experiments, where you sweep two parameters, you can use the `QickExperiment2DSimple` class. This class is designed for nested experiments, where an "outer" experiment sweeps one parameter (the y-axis) and an "inner" experiment sweeps another parameter (the x-axis).
+
+The `RabiChevronExperiment` in `rabi.py` is a good example. It sweeps the qubit frequency on the y-axis and the pulse amplitude or length on the x-axis.
+
+### Structure of a `QickExperiment2DSimple`
+
+Here's a simplified look at the structure:
+
+```python
+from ..general.qick_experiment import QickExperiment2DSimple
+
+class RabiChevronExperiment(QickExperiment2DSimple):
+    def __init__(self, cfg_dict, qi=0, go=True, params={}, ...):
+        # ...
+        super().__init__(cfg_dict=cfg_dict, prefix=prefix, ...)
+
+        # Create an instance of the inner experiment (but don't run it)
+        self.expt = RabiExperiment(
+            cfg_dict, qi=qi, go=False, params=params, check_params=False...
+        )
+        # ...
+        if go:
+            super().run(...)
+
+    def acquire(self, progress=False, debug=False):
+        # Create the y-axis sweep points (frequency)
+        freqpts = np.linspace(...)
+        ysweep = [{"pts": freqpts, "var": "freq"}]
+
+        # Call the parent acquire method
+        super().acquire(ysweep, progress=progress)
+        return self.data
+```
+
+**Key Points:**
+
+*   **Inheritance**: The outer experiment class inherits from `QickExperiment2DSimple`.
+*   **`__init__`**:
+    *   It creates an instance of the inner experiment (in this case, `RabiExperiment`) with `go=False` to prevent it from running immediately.
+    *   This inner experiment instance is stored as `self.expt`.
+*   **`acquire`**:
+    *   It defines the y-axis sweep points (`ysweep`).
+    *   It then calls `super().acquire(ysweep, ...)` which handles the looping. For each point in the `ysweep`, it updates the `self.expt.cfg.expt` dictionary with the new parameter value (e.g., `freq`) and then calls `self.expt.acquire()`. This is how the parameters of the inner experiment are modified at each step of the outer (y-axis) sweep.

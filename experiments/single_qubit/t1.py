@@ -425,7 +425,7 @@ class T1_2D(QickExperiment2DSimple):
         if prefix is None:
             prefix = f"t1_2d_qubit{qi}"
 
-        super().__init__(cfg_dict=cfg_dict, prefix=prefix, progress=progress, check_params=False)
+        super().__init__(cfg_dict=cfg_dict, prefix=prefix, progress=progress)
 
         # Define default parameters
         params_def = {
@@ -436,8 +436,7 @@ class T1_2D(QickExperiment2DSimple):
         exp_name = T1Experiment
         self.expt = exp_name(cfg_dict, qi, go=False, params=params, check_params=False)
         params = {**params_def, **params}
-        params = {**self.expt.cfg.expt, **params}
-        self.cfg.expt = params
+        self.cfg.expt = {**self.expt.cfg.expt, **params}
 
         # Run the experiment if go=True
         if go:
