@@ -1,4 +1,5 @@
 import matplotlib.pyplot as plt
+import copy
 import numpy as np
 from tqdm import tqdm_notebook as tqdm
 from datetime import datetime
@@ -94,6 +95,8 @@ class QickExperiment(Experiment):
             self.cfg.device.readout.rounds[qi]
             * self.cfg.device.readout.rounds_base
         )
+        self.fitfunc = None
+        self.fitterfunc = None
 
     def acquire(
         self, prog_name, progress=True, get_hist=True, single=True, compact=False
@@ -194,8 +197,6 @@ class QickExperiment(Experiment):
 
     def analyze(
         self,
-        fitfunc=None,
-        fitterfunc=None,
         data=None,
         fit=True,
         use_i=None,
@@ -244,7 +245,7 @@ class QickExperiment(Experiment):
                 data["fit_" + ydata],
                 data["fit_err_" + ydata],
                 data["fit_init_" + ydata],
-            ) = fitterfunc(data["xpts"][1:-1], data[ydata][1:-1], **kwargs)
+            ) = self.fitterfunc(data["xpts"][1:-1], data[ydata][1:-1], **kwargs)
 
         # Determine which fit is best (I, Q, or amplitude)
         if use_i is None:
@@ -256,10 +257,10 @@ class QickExperiment(Experiment):
             fit_err = data["fit_err_avgi"]
         else:
             # Otherwise, determine best fit automatically
-            fit_pars, fit_err, i_best = fitter.get_best_fit(data, fitfunc)
+            fit_pars, fit_err, i_best = fitter.get_best_fit(data, self.fitfunc)
 
         # Calculate goodness-of-fit (R²)
-        r2 = fitter.get_r2(data["xpts"][1:-1], data[i_best][1:-1], fitfunc, fit_pars)
+        r2 = fitter.get_r2(data["xpts"][1:-1], data[i_best][1:-1], self.fitfunc, fit_pars)
         data["r2"] = r2
         data["best_fit"] = fit_pars
         i_best = i_best.encode("ascii", "ignore")
@@ -610,7 +611,7 @@ class QickExperiment(Experiment):
         """
         if self.param["param_type"] == "pulse":
             # Extract pulse parameter (amplitude, frequency, etc.)
-            prog.list_pulse_params(self, self.param['label'])
+            #prog.list_pulse_params(self, self.param['label'])
             xpts = prog.get_pulse_param(
                 self.param["label"], self.param["param"], as_array=True
             )
@@ -642,6 +643,27 @@ class QickExperiment(Experiment):
             * self.cfg.device.readout.readout_length[qi]
             / 0.0032552083333333335
         )
+
+    def run_loop(self, prog, x_sweep, progress=True):
+        # Loop acquisition with custom frequency points
+        cfg_dict = {
+            "soc": self.soccfg,
+            "cfg_file": self.config_file,
+            "im": self.im,
+            "expt_path": "dummy",
+        }
+        exp = QickExperimentLoop(
+            cfg_dict=cfg_dict,
+            prefix="dummy",
+            progress=progress,
+            qi=self.cfg.expt.qubit[0],
+        )
+        exp.cfg.expt = copy.deepcopy(self.cfg.expt)
+        exp.param = self.param
+        exp.cfg.expt.expts = 1
+        # Acquire data
+        data = exp.acquire(prog, x_sweep, progress=progress)
+        return data
 
     def get_freq(self, fit=True):
         """

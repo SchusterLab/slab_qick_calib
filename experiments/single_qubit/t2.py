@@ -443,8 +443,6 @@ class T2Experiment(QickExperiment):
 
             # Perform the fit
             super().analyze(
-                fitfunc=self.fitfunc,
-                fitterfunc=self.fitterfunc,
                 data=data,
                 inds=inds,
                 **kwargs,
@@ -455,8 +453,6 @@ class T2Experiment(QickExperiment):
                 self.fitfunc = fitter.decaysin
                 self.fitterfunc = fitter.fitdecaysin
                 super().analyze(
-                    fitfunc=self.fitfunc,
-                    fitterfunc=self.fitterfunc,
                     data=data,
                     inds=inds,
                     **kwargs,

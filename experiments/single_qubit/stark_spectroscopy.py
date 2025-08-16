@@ -318,7 +318,7 @@ class StarkSpec(QickExperiment2DSweep):
         # Fit the data to a Lorentzian model
         self.fitterfunc = fitter.fitlor
         self.fitfunc = fitter.lorfunc
-        super().analyze(self.fitfunc, self.fitterfunc, use_i=True)
+        super().analyze(use_i=True)
 
         # fit frequency of resonance moving
         f = [self.data["fit_avgi"][i][2] for i in range(len(self.data["fit_avgi"]))]

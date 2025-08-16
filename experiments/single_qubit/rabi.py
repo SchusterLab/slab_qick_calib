@@ -14,7 +14,7 @@ The module includes:
 - Rabi2D: 2D version that sweeps both length and gain
 """
 
-import copy
+
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.optimize import curve_fit
@@ -24,8 +24,7 @@ from qick.asm_v2 import QickSweep1D
 from ...analysis import fitting as fitter
 from ..general.qick_experiment import (
     QickExperiment,
-    QickExperiment2DSimple,
-    QickExperimentLoop,
+    QickExperiment2DSimple
 )
 from ..general.qick_program import QickProgram
 
@@ -371,29 +370,13 @@ class RabiExperiment(QickExperiment):
         # Acquire data using the RabiProgram
         if not self.cfg.expt.loop:
             super().acquire(RabiProgram, progress=progress)
-        else:
-            # Loop acquisition with custom frequency points
-            cfg_dict = {
-                "soc": self.soccfg,
-                "cfg_file": self.config_file,
-                "im": self.im,
-                "expt_path": "dummy",
-            }
-            exp = QickExperimentLoop(
-                cfg_dict=cfg_dict,
-                prefix="dummy",
-                progress=progress,
-                qi=self.cfg.expt.qubit[0],
-            )
-            exp.cfg.expt = copy.deepcopy(self.cfg.expt)
-            exp.param = self.param
-
+        else:           
             len_pts = np.linspace(
                 self.cfg.expt.start, self.cfg.expt.max_length, self.cfg.expt.expts
             )
-            exp.cfg.expt["sigma"] = len_pts
+            #exp.cfg.expt["sigma"] = len_pts # Not sure this is doing anything 
             # Set up experiment with single point per loop
-            exp.cfg.expt.expts = 1
+            
             x_sweep = [
                 {"pts": len_pts, "var": "sigma"},
                 {
@@ -404,12 +387,13 @@ class RabiExperiment(QickExperiment):
                     "var": "length",
                 },
             ]
+            self.data = super().run_loop(RabiProgram, x_sweep, progress=progress)
 
-            # Acquire data
-            data = exp.acquire(RabiProgram, x_sweep, progress=progress)
-            self.data = data
-
+            
         return self.data
+
+
+
 
     def analyze(self, data=None, fit=True, **kwargs):
         """
@@ -432,7 +416,7 @@ class RabiExperiment(QickExperiment):
             self.fitterfunc = fitter.fitsin
             self.fitfunc = fitter.sinfunc
             data = super().analyze(
-                fitfunc=self.fitfunc, fitterfunc=self.fitterfunc, fit=fit, **kwargs
+                fit=fit, **kwargs
             )
 
         # Calculate π-pulse length from the fit for each data type

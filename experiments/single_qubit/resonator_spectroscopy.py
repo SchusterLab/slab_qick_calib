@@ -321,12 +321,7 @@ class ResSpec(QickExperiment):
             )
             super().acquire(ResSpecProgram, progress=progress)
         else:
-            # Loop acquisition with custom frequency points
-            cfg_dict = {'soc': self.soccfg, 'cfg_file': self.config_file, 'im': self.im, 'expt_path': 'dummy'}
-            exp = QickExperimentLoop(cfg_dict=cfg_dict, prefix='dummy', progress=progress, qi=q)
-            exp.cfg.expt = copy.deepcopy(self.cfg.expt)
-            exp.param = self.param
-            
+            # Loop acquisition with custom frequency points            
             # Generate frequency points
             if self.cfg.expt.phase_const:
                 # Use homophase frequency points for constant phase spacing
@@ -337,13 +332,10 @@ class ResSpec(QickExperiment):
                 self.cfg.expt.span = np.round(self.cfg.expt.span/df/(self.cfg.expt.expts-1))*df*(self.cfg.expt.expts-1)
                 freq_pts = np.linspace(self.cfg.expt.start, self.cfg.expt.start + self.cfg.expt.span, self.cfg.expt.expts)
                 
-            # Set up experiment with single point per loop
-            exp.cfg.expt.expts = 1  
             x_sweep = [{"pts": freq_pts, "var": 'frequency'}]
             
-            # Acquire data
-            data = exp.acquire(ResSpecProgram, x_sweep, progress=progress)
-            self.data = data
+            self.data = super().run_loop(ResSpecProgram, x_sweep, progress=progress)
+            
 
         return self.data
 
