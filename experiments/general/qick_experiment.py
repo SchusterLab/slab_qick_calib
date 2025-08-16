@@ -5,6 +5,7 @@ from datetime import datetime
 import time
 from pathlib import Path
 from visdom import Visdom
+from scipy.optimize import curve_fit
 
 from qick import *
 
@@ -609,6 +610,7 @@ class QickExperiment(Experiment):
         """
         if self.param["param_type"] == "pulse":
             # Extract pulse parameter (amplitude, frequency, etc.)
+            prog.list_pulse_params(self, self.param['label'])
             xpts = prog.get_pulse_param(
                 self.param["label"], self.param["param"], as_array=True
             )

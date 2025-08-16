@@ -762,16 +762,8 @@ class RabiChevronExperiment(QickExperiment2DSimple):
             prefix (str): Prefix for data files.
             progress (bool): Whether to show a progress bar.
         """
-        # Determine prefix based on parameters
-        if "type" in params:
-            pre = params["type"]
-        else:
-            pre = "amp"
-        if "checkEF" in params and params["checkEF"]:
-            ef = "ef_"
-        else:
-            ef = ""
-        prefix = f"{pre}_rabi_chevron_{ef}qubit{qi}"
+        if prefix is None:
+            prefix = self._get_prefix(params, qi)
 
         super().__init__(cfg_dict=cfg_dict, prefix=prefix, progress=progress)
 
@@ -780,14 +772,11 @@ class RabiChevronExperiment(QickExperiment2DSimple):
         params = {**params_def, **params}
 
         # Set frequency range based on whether we're checking EF transition
-        if "checkEF" in params and params["checkEF"]:
-            params_def["start_f"] = (
-                self.cfg.device.qubit.f_ef[qi] - params["span_f"] / 2
-            )
+        if params.get("checkEF", False):
+            f_qubit = self.cfg.device.qubit.f_ef[qi]
         else:
-            params_def["start_f"] = (
-                self.cfg.device.qubit.f_ge[qi] - params["span_f"] / 2
-            )
+            f_qubit = self.cfg.device.qubit.f_ge[qi]
+        params_def["start_f"] = f_qubit - params["span_f"] / 2
 
         # Create a RabiExperiment instance but don't run it yet
         self.expt = RabiExperiment(
@@ -799,6 +788,12 @@ class RabiChevronExperiment(QickExperiment2DSimple):
         # Run the experiment if requested
         if go:
             super().run(progress=progress)
+
+    def _get_prefix(self, params, qi):
+        """Generate a prefix for the experiment."""
+        pre = params.get("type", "amp")
+        ef = "ef_" if params.get("checkEF", False) else ""
+        return f"{pre}_rabi_chevron_{ef}qubit{qi}"
 
     def acquire(self, progress=False, debug=False):
         """
@@ -856,18 +851,65 @@ class RabiChevronExperiment(QickExperiment2DSimple):
             data["chevron_freqs"] = freq
             data["chevron_amps"] = amp
 
-            data["best_freq"] = data["freq_pts"][np.argmax(data["chevron_amps"])]
+            data["best_freq"] = data["ypts"][np.argmax(data["chevron_amps"])]
             # Fit the chevron pattern (for length rabi)
             try:
                 p, _ = curve_fit(chevron_freq, data["ypts"] - qubit_freq, freq)
                 p2, _ = curve_fit(chevron_amp, data["ypts"] - qubit_freq, amp)
-                data["chevron_freq"] = p
-                data["chevron_amp"] = p2
-            except:
-                # Silently fail if the fit doesn't converge
-                pass
+                data["chevron_freq_fit"] = p
+                data["chevron_amp_fit"] = p2
+            except RuntimeError:
+                print("Chevron fit failed to converge.")
+                data["chevron_freq_fit"] = None
+                data["chevron_amp_fit"] = None
 
         return data
+
+    def _get_title_and_labels(self):
+        """Get title and labels for the plot."""
+        title_prefix = "EF" if self.cfg.expt.checkEF else ""
+        
+        if self.cfg.expt.sweep == "amp":
+            sweep_type = "Amplitude"
+            unit = 'µs'
+            if self.cfg.expt.type == "gauss":
+                param = "sigma"
+            else: # const or flat_top
+                param = "length"
+            xlabel = "Gain / Max Gain"
+        else:
+            sweep_type = "Length"
+            unit = ''
+            param = "gain"
+            xlabel = "Pulse Length ($\mu$s)"
+
+        title = (
+            f"{title_prefix} {sweep_type} Rabi Q{self.cfg.expt.qubit[0]} "
+            f"(Pulse {param} {self.cfg.expt[param]} {unit})"
+        )
+        ylabel = "Frequency (MHz)"
+        return title, xlabel, ylabel
+
+    def _plot_fit_results(self, data):
+        """Plot the fit results."""
+        fig, ax = plt.subplots(2, 1, figsize=(6, 6))
+        qubit_freq = self.cfg.device.qubit.f_ge[self.cfg.expt.qubit[0]]
+        detuning = data["ypts"] - qubit_freq
+
+        # Plot frequency vs. detuning
+        ax[0].plot(detuning, data["chevron_freqs"], 'o')
+        if data.get("chevron_freq_fit") is not None:
+            ax[0].plot(detuning, chevron_freq(detuning, *data["chevron_freq_fit"]))
+        ax[0].set_ylabel("Frequency (MHz)")
+
+        # Plot amplitude vs. detuning
+        ax[1].plot(detuning, data["chevron_amps"], 'o')
+        if data.get("chevron_amp_fit") is not None:
+            ax[1].plot(detuning, chevron_amp(detuning, *data["chevron_amp_fit"]))
+        ax[1].set_xlabel("$\Delta$ Frequency (MHz)")
+        ax[1].set_ylabel("Amplitude")
+
+        plt.show()
 
     def display(self, data=None, fit=True, plot_both=False, **kwargs):
         """
@@ -882,34 +924,7 @@ class RabiChevronExperiment(QickExperiment2DSimple):
         if data is None:
             data = self.data
 
-        # Set up plot title and labels
-        if self.cfg.expt.checkEF:
-            title = "EF"
-        else:
-            title = ""
-
-        if self.cfg.expt.sweep == "amp":
-            title = "Amplitude"
-            unit='µs'
-            if self.cfg.expt.type == "gauss":
-                param = "sigma"
-            elif self.cfg.expt.type == "const":
-                param = "length"
-            elif self.cfg.expt.type == "flat_top":
-                param = "length"
-            xlabel = "Gain / Max Gain"
-        else:
-            title = "Length"
-            unit = ''
-            param = "gain"
-            xlabel = "Pulse Length ($\mu$s)"
-
-        title += (
-            f" Rabi Q{self.cfg.expt.qubit[0]} (Pulse {param} {self.cfg.expt[param]} {unit})"
-        )
-
-        xlabel = xlabel
-        ylabel = "Frequency (MHz)"
+        title, xlabel, ylabel = self._get_title_and_labels()
 
         # Display the 2D plot
         super().display(
@@ -924,21 +939,7 @@ class RabiChevronExperiment(QickExperiment2DSimple):
 
         # If fit is enabled, also display the frequency and amplitude vs. detuning
         if fit:
-            fig, ax = plt.subplots(2, 1, figsize=(6, 6))
-            qubit_freq = self.cfg.device.qubit.f_ge[self.cfg.expt.qubit[0]]
-            freq = [data["fit_avgi"][i][1] for i in range(len(data["ypts"]))]
-            amp = [data["fit_avgi"][i][0] for i in range(len(data["ypts"]))]
-
-            # Plot frequency vs. detuning
-            ax[0].plot(data["ypts"] - qubit_freq, freq)
-            ax[0].set_ylabel("Frequency (MHz)")
-
-            # Plot amplitude vs. detuning
-            ax[1].plot(data["ypts"] - qubit_freq, amp)
-            ax[1].set_xlabel("$\Delta$ Frequency (MHz)")
-            ax[1].set_ylabel("Amplitude")
-
-            plt.show()
+            self._plot_fit_results(data)
 
 
 class Rabi2D(QickExperiment2DSimple):
