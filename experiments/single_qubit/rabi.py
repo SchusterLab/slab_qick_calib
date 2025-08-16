@@ -768,10 +768,10 @@ class RabiChevronExperiment(QickExperiment2DSimple):
         else:
             pre = "amp"
         if "checkEF" in params and params["checkEF"]:
-            ef = "ef"
+            ef = "ef_"
         else:
             ef = ""
-        prefix = f"{pre}_rabi_chevron_{ef}_qubit{qi}"
+        prefix = f"{pre}_rabi_chevron_{ef}qubit{qi}"
 
         super().__init__(cfg_dict=cfg_dict, prefix=prefix, progress=progress)
 
@@ -794,8 +794,7 @@ class RabiChevronExperiment(QickExperiment2DSimple):
             cfg_dict, qi=qi, go=False, params=params, style=style, check_params=False
         )
         params = {**params_def, **params}
-        params = {**self.expt.cfg.expt, **params}
-        self.cfg.expt = params
+        self.cfg.expt = {**self.expt.cfg.expt, **params}
 
         # Run the experiment if requested
         if go:

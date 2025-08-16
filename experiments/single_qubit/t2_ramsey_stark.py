@@ -194,8 +194,7 @@ class RamseyStarkPowerExperiment(QickExperiment2DSimple):
         exp_name = RamseyStarkExperiment
         self.expt = exp_name(cfg_dict, qi=qi, go=False, params=params, check_params=False)
         params = {**params_def, **params}
-        params = {**self.expt.cfg.expt, **params}
-        self.cfg.expt = params
+        self.cfg.expt = {**self.expt.cfg.expt, **params}
 
         if go:
             super().run(min_r2=min_r2, max_err=max_err, progress=progress)

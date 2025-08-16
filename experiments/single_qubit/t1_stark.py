@@ -129,7 +129,6 @@ class T1StarkExperiment(QickExperiment):
         prefix=None,
         progress=None,
         style="",
-        acStark=True,
         min_r2=None,
         max_err=None,
         check_params=True
@@ -146,7 +145,7 @@ class T1StarkExperiment(QickExperiment):
             "expts": 60,
             "start": 0.05,
             "span": 3.7 * self.cfg.device.qubit.T1[qi],
-            "acStark": acStark,
+            "acStark": True,
             "active_reset": self.cfg.device.readout.active_reset[qi],
             "qubit": [qi],
             "qubit_chan": self.cfg.hw.soc.adcs.readout.ch[qi],
@@ -240,7 +239,6 @@ class T1StarkPowerExperiment(QickExperiment2DSimple):
         progress=False,
         style="",
         min_r2=None,
-        acStark=True,
         max_err=None,
     ):
 
@@ -257,11 +255,10 @@ class T1StarkPowerExperiment(QickExperiment2DSimple):
             "qubit": [qi],
         }
         self.expt = T1StarkExperiment(
-            cfg_dict, qi=qi, go=False, params=params, acStark=acStark, style=style
+            cfg_dict, qi=qi, go=False, params=params, style=style
         )
         params = {**params_def, **params}
-        params = {**self.expt.cfg.expt, **params}
-        self.cfg.expt = params
+        self.cfg.expt = {**self.expt.cfg.expt, **params}
 
         if go:
             super().run(min_r2=min_r2, max_err=max_err)
@@ -365,7 +362,6 @@ class T1StarkFreqExperiment(QickExperiment2DSimple):
         progress=False,
         style="",
         min_r2=None,
-        acStark=True,
         max_err=None,
     ):
 
@@ -383,7 +379,7 @@ class T1StarkFreqExperiment(QickExperiment2DSimple):
         params = {**params_def, **params}
         params["start_f"] = self.cfg.device.qubit.f_ge[qi] + params["start_df"]
         self.expt = T1StarkExperiment(
-            cfg_dict, qi=qi, go=False, params=params, acStark=acStark, style=style, check_params=False
+            cfg_dict, qi=qi, go=False, params=params, style=style, check_params=False
         )
         params = {**params_def, **params}
         params = {**self.expt.cfg.expt, **params}
@@ -482,7 +478,6 @@ class T1StarkPowerSingle(QickExperiment):
         prefix=None,
         progress=None,
         style="",
-        acStark=True,
         min_r2=None,
         max_err=None,
     ):
@@ -498,7 +493,7 @@ class T1StarkPowerSingle(QickExperiment):
             "expts": 200,
             "start": 1,
             "wait_time": self.cfg.device.qubit.T1[qi],
-            "acStark": acStark,
+            "acStark": True,
             "active_reset": False,
             "qubit": [qi],
             "max_gain": 1,
@@ -601,7 +596,6 @@ class T1StarkPowerQuadSingle(QickExperimentLoop):
         progress=True,
         display=True,
         style="",
-        acStark=True,
         min_r2=None,
         max_err=None,
     ):
@@ -617,7 +611,7 @@ class T1StarkPowerQuadSingle(QickExperimentLoop):
             "expts": 200,
             "start": 1,
             "wait_time": self.cfg.device.qubit.T1[qi],
-            "acStark": acStark,
+            "acStark": True,
             "active_reset": False,
             "qubit": [qi],
             "max_gain": 1,
@@ -732,7 +726,6 @@ class T1StarkPowerQuadMulti(QickExperimentLoop):
         prefix=None,
         progress=None,
         style="",
-        acStark=True,
         min_r2=None,
         max_err=None,
     ):
@@ -748,7 +741,7 @@ class T1StarkPowerQuadMulti(QickExperimentLoop):
             "expts": 200,
             "start": 1,
             "t1": self.cfg.device.qubit.T1[qi],
-            "acStark": acStark,
+            "acStark": True,
             "active_reset": False,
             "qubit": [qi],
             "max_gain": 1,
@@ -886,7 +879,6 @@ class T1StarkPowerContTimeExperiment(QickExperiment2DSimple):
         progress=False,
         style="",
         min_r2=None,
-        acStark=True,
         max_err=None,
     ):
 
@@ -907,7 +899,7 @@ class T1StarkPowerContTimeExperiment(QickExperiment2DSimple):
             "df": 70,
             "delay_time": self.cfg.device.qubit.T1[qi],
             "start": 0,
-            "acStark": acStark,
+            "acStark": True,
             "qubit": [qi],
             "qubit_chan": self.cfg.hw.soc.adcs.readout.ch[qi],
         }
@@ -1105,7 +1097,6 @@ class T1StarkPowerContTime(QickExperiment2DSimple):
         progress=False,
         style="",
         min_r2=None,
-        acStark=True,
         max_err=None,
     ):
 
@@ -1128,7 +1119,7 @@ class T1StarkPowerContTime(QickExperiment2DSimple):
             "df_neg": -70,
             "delay_time": self.cfg.device.qubit.T1[qi],
             "start": 0,
-            "acStark": acStark,
+            "acStark": True,
             "qubit": [qi],
             "qubit_chan": self.cfg.hw.soc.adcs.readout.ch[qi],
         }
