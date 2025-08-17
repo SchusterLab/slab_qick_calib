@@ -6,31 +6,20 @@ This guide explains how to set up a distributed quantum control system where the
 
 The system consists of three components:
 1. **Nameserver Computer**: Runs the Pyro4 nameserver (directory service)
-2. **QICK Board Computer**: Hosts the QICK board and serves its instruments
+2. **QICK Board**: QICK board can run python scripts and jupyter notebooks
 3. **Experiment Computer**: Connects remotely to run experiments
-
-```
-┌─────────────────────┐    ┌──────────────────────┐    ┌─────────────────────┐
-│  Nameserver         │    │  QICK Board          │    │  Experiment         │
-│  Computer           │    │  Computer            │    │  Computer           │
-│                     │    │                      │    │                     │
-│  - Pyro4 Nameserver │◄──►│  - QICK Hardware     │    │  - InstrumentManager│
-│  - Port 9090        │    │  - Instrument Server │    │  - Experiment Code  │
-│  - Directory Service│    │  - Pyro4 Client      │◄──►│  - Pyro4 Client     │
-└─────────────────────┘    └──────────────────────┘    └─────────────────────┘
-```
 
 ## Network Requirements
 
 - All computers must be on the same network or have network connectivity
 - Firewall must allow connections on the chosen ports (default 9090)
-- IP addresses must be known for each computer
+- IP addresses must be known for Nameserver and QICK board.
 
 ## Step-by-Step Setup
 
 ### Step 1: Start the Nameserver
 
-The nameserver acts as a directory service that allows instruments and clients to find each other.
+The nameserver acts as a directory service that allows instruments and clients to find each other. This can be the experiment computer or QICK board or a third computer. 
 
 **Option A: Using the provided notebook**
 1. Open `NameServer.ipynb` on the nameserver computer
@@ -42,7 +31,7 @@ The nameserver acts as a directory service that allows instruments and clients t
    # For SLAC network  
    Pyro4.naming.startNSloop(host='192.168.137.1', port=9090)
    ```
-3. Set the host to your nameserver computer's IP address
+3. Set the host to your nameserver computer's IP address. If you have issues with procedure, can try changing port number. 
 4. Run the notebook cell to start the nameserver
 
 **Option B: Command line**
@@ -67,37 +56,14 @@ start_nameserver(host_ip='192.168.1.100', ns_port=9090)
 
 ### Step 2: Connect QICK Board to Nameserver
 
-On the computer connected to the QICK board:
+On QICK board:
 
-1. **Create an instrument configuration file** (`instruments.cfg`):
-   ```
-   # Format: name    instrument_class    address
-   qick_soc    QickSoc    <QICK_BOARD_ADDRESS>
-   ```
-
-2. **Start the instrument server** using InstrumentManager:
-   ```python
-   from exp_handling.instrumentmanager import InstrumentManager
-   
-   # Start server mode - this will register instruments with nameserver
-   im = InstrumentManager(
-       config_path='instruments.cfg',
-       server=True,  # Important: this makes it serve instruments
-       ns_address='<NAMESERVER_IP>',  # IP of nameserver computer
-       port=9090
-   )
-   ```
-
-3. **Alternative: Command line method**:
-   ```bash
-   python -m exp_handling.instrumentmanager -f instruments.cfg -s -n <NAMESERVER_IP>
-   ```
-
-The server will:
-- Connect to the nameserver
-- Register all instruments from the config file
-- Make them available to remote clients
-- Print confirmation messages like: `Registered: qick_soc    PYRO:obj_xyz@192.168.1.101:12345`
+Can go to pyro4 folder to find code start_server. 
+This code reads: 
+```python 
+from qick.pyro import start_server
+a=start_server(ns_host="192.168.137.1", ns_port=9090, proxy_name="Qick105", bitfile='/home/xilinx/jupyter_notebooks/qick_4x2.bit')
+```
 
 ### Step 3: Connect from Experiment Computer
 

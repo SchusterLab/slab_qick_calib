@@ -189,16 +189,35 @@ class RabiExperiment(QickExperiment):
         super().__init__(
             cfg_dict=cfg_dict, prefix=prefix, progress=progress, qi=qi, check_params=check_params
         )
+
+        params_def = {
+            "expts": 60,
+            "reps": self.reps,
+            "rounds": self.rounds,
+            "checkEF": False,
+            "pulse_ge": True,
+            "num_osc": 2.5,
+            "n_pulses": 1,
+            "sweep": "amp",
+            "active_reset": self.cfg.device.readout.active_reset[qi],
+            "qubit": [qi],
+            "qubit_chan": self.cfg.hw.soc.adcs.readout.ch[qi],
+            "loop": False,
+        }
+
+        # Apply style modifications
+        if style == "fine":
+            params_def["rounds"] *= 2
+        elif style == "fast":
+            params_def["expts"] = 25
         
-        # Set up default parameters
-        params_def = self._get_default_params(qi, style)
         params = {**params_def, **params}
         
         # Configure pulse parameters based on transition type
-        self._configure_pulse_params(params, qi)
+        self._configure_pulse_params(params, params_def, qi)
         
         # Configure sweep parameters
-        self._configure_sweep_params(params)
+        self._configure_sweep_params(params, params_def)
         
         # Set final experiment configuration
         self.cfg.expt = {**params_def, **params}
@@ -228,59 +247,35 @@ class RabiExperiment(QickExperiment):
         
         return f"{name}_rabi_{ef}qubit{qi}"
 
-    def _get_default_params(self, qi, style):
-        """Get default parameters for the experiment."""
-        params_def = {
-            "expts": 60,
-            "reps": self.reps,
-            "rounds": self.rounds,
-            "checkEF": False,
-            "pulse_ge": True,
-            "num_osc": 2.5,
-            "n_pulses": 1,
-            "sweep": "amp",
-            "active_reset": self.cfg.device.readout.active_reset[qi],
-            "qubit": [qi],
-            "qubit_chan": self.cfg.hw.soc.adcs.readout.ch[qi],
-            "loop": False,
-        }
 
-        # Apply style modifications
-        if style == "fine":
-            params_def["rounds"] = params_def["rounds"] * 2
-        elif style == "fast":
-            params_def["expts"] = 25
-        
-        return params_def
-
-    def _configure_pulse_params(self, params, qi):
+    def _configure_pulse_params(self, params, params_def, qi):
         """Configure pulse parameters based on transition type."""
         if params["checkEF"]:
             pulse_config = self.cfg.device.qubit.pulses.pi_ef
-            params["freq"] = self.cfg.device.qubit.f_ef[qi]
+            params_def["freq"] = self.cfg.device.qubit.f_ef[qi]
         else:
             pulse_config = self.cfg.device.qubit.pulses.pi_ge
-            params["freq"] = self.cfg.device.qubit.f_ge[qi]
+            params_def["freq"] = self.cfg.device.qubit.f_ge[qi]
         
         # Copy pulse parameters from device config
         for key in pulse_config:
             if key not in params:  # Don't override user-provided parameters
-                params[key] = pulse_config[key][qi]
+                params_def[key] = pulse_config[key][qi]
 
-    def _configure_sweep_params(self, params):
+    def _configure_sweep_params(self, params, params_def):
         """Configure sweep range based on sweep type."""
         min_gain = 2**-15  # Minimum DAC gain for linear operation
         
         if params["sweep"] == "amp":
             if params["n_pulses"] == 1:
                 # Single pulse: sweep from near zero to cover desired oscillations
-                params["start"] = 0.003
-                params["max_gain"] = params["gain"] * params["num_osc"] * 2
+                params_def["start"] = 0.003 # Minimum gain that works for current QICK
+                params_def["max_gain"] = params["gain"] * params["num_osc"] * 2
             else:
                 # Multiple pulses: sweep around nominal gain
                 gain_range = params["gain"] / params["n_pulses"]
-                params["start"] = params["gain"] - gain_range
-                params["max_gain"] = params["gain"] + gain_range
+                params_def["start"] = params["gain"] - gain_range
+                params_def["max_gain"] = params["gain"] + gain_range
             
             # Ensure we don't exceed hardware limits
             params["max_gain"] = min(params["max_gain"], self.cfg.device.qubit.max_gain)
@@ -294,12 +289,13 @@ class RabiExperiment(QickExperiment):
             # Length sweep: set max length to cover desired oscillations
             if params["type"] == "gauss":
                 # For Gaussian pulses, we sweep sigma
-                params["start"] = 3 * self.soccfg.cycles2us(1)  # Minimum length
-                params["max_length"] = 2 * params["num_osc"] * params["sigma"]
+                params_def["start"] = self.soccfg.cycles2us(1)  
+                params_def["max_length"] = 2 * params["num_osc"] * params["sigma"]
             else:
                 # For const and flat_top pulses, sweep length directly
-                params["start"] = 3 * self.soccfg.cycles2us(1)
-                params["max_length"] = 2 * params["num_osc"] * params.get("length", params["sigma"])
+                params_def["start"] = 3 * self.soccfg.cycles2us(1) # Minimum length
+                # If sigma is given but not length, use that for the pulse length
+                params_def["max_length"] = 2 * params["num_osc"] * params.get("length", params["sigma"])
 
     def acquire(self, progress=False, debug=False):
         """
@@ -318,6 +314,8 @@ class RabiExperiment(QickExperiment):
             # Use loop-based acquisition for complex sweeps
             return self._acquire_loop(progress)
         else:
+            if self.cfg.expt.pulse_type == 'gauss' and self.cfg.sweep=='length':
+                error('Cannot use qick sweep for a length sweep with Gaussian pulses.')
             # Use QICK sweep-based acquisition (default)
             return self._acquire_qick_sweep(progress)
 
