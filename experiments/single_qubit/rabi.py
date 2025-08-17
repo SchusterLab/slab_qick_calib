@@ -92,14 +92,14 @@ class RabiProgram(QickProgram):
             "freq": cfg.expt.freq,
             "gain": cfg.expt.gain,
             "phase": 0,
-            "type": cfg.expt.type,
+            "type": cfg.expt.pulse_type,
         }
         
         # Set length/sigma based on pulse type
-        if cfg.expt.type == "gauss":
+        if cfg.expt.pulse_type == "gauss":
             pulse["sigma"] = cfg.expt.sigma
             pulse["length"] = cfg.expt.get("length", cfg.expt.sigma * cfg.expt.sigma_inc)
-        elif cfg.expt.type == "flat_top":
+        elif cfg.expt.pulse_type == "flat_top":
             pulse["length"] = cfg.expt.length
             pulse["ramp_sigma"] = cfg.expt.get("ramp_sigma", 0.02)
             pulse["ramp_sigma_inc"] = cfg.expt.get("ramp_sigma_inc", 3)
@@ -220,8 +220,6 @@ class RabiExperiment(QickExperiment):
             "temp": 40,
         }
 
-        min_gain = 2**-15  # Minimum DAC gain value for linear operation
-
         # Apply style modifications for different experiment modes
         if style == "fine":
             params_def["rounds"] = params_def["rounds"] * 2
@@ -300,7 +298,7 @@ class RabiExperiment(QickExperiment):
                 params_def["start"] = 0.003 # Minimum gain that works for current QICK
                 params_def["max_gain"] = params["gain"] * params["num_osc"] * 2
             else:
-                # Multiple pulses: sweep around nominal gain
+                # Multiple pulses: sweep around nominal gain for pi pulse in small range 
                 gain_range = params["gain"] / params["n_pulses"]
                 params_def["start"] = params["gain"] - gain_range
                 params_def["max_gain"] = params["gain"] + gain_range
@@ -309,13 +307,15 @@ class RabiExperiment(QickExperiment):
             params["max_gain"] = min(params["max_gain"], self.cfg.device.qubit.max_gain)
             
             # Ensure minimum gain spacing to avoid DAC resolution issues
-            gain_spacing = params["max_gain"] / params["expts"]
+            gain_spacing = (params["max_gain"]-params['start']) / params["expts"]
             if gain_spacing < min_gain:
-                params["max_gain"] = min_gain * params["expts"]
+                span = min_gain * params["expts"]
+                params["max_gain"]=params['gain']+span/2
+                params["start"]=params['gain']-span/2
                 
         elif params["sweep"] == "length":
             # Length sweep: set max length to cover desired oscillations
-            if params["type"] == "gauss":
+            if params["pulse_type"] == "gauss":
                 # For Gaussian pulses, we sweep sigma
                 params_def["start"] = self.soccfg.cycles2us(1)  
                 params_def["max_length"] = 2 * params["num_osc"] * params["sigma"]
@@ -337,12 +337,16 @@ class RabiExperiment(QickExperiment):
             Acquired data
         """
         self.qubit = self.cfg.expt.qubit
+        self.param = {
+                    "label": "qubit_pulse",
+                    "param_type": "pulse",
+                }
 
         if self.cfg.expt.loop:
             # Use loop-based acquisition for complex sweeps
             return self._acquire_loop(progress)
         else:
-            if self.cfg.expt.type == 'gauss' and self.cfg.expt.sweep=='length':
+            if self.cfg.expt.pulse_type == 'gauss' and self.cfg.expt.sweep=='length':
                 print('Cannot use qick sweep for a length sweep with Gaussian pulses. Using loop mode instead.')
                 return self._acquire_loop(progress)
             # Use QICK sweep-based acquisition (default)
@@ -350,39 +354,25 @@ class RabiExperiment(QickExperiment):
 
     def _acquire_qick_sweep(self, progress):
         """Acquire data using QICK sweeps."""
+     
         if self.cfg.expt.sweep == "amp":
             # Amplitude sweep
             self.cfg.expt["gain"] = QickSweep1D(
                 "sweep_loop", self.cfg.expt.start, self.cfg.expt.max_gain
             )
-            self.param = {
-                "label": "qubit_pulse",
-                "param": "gain",
-                "param_type": "pulse",
-            }
+            self.param['param'] = "gain"
             
         elif self.cfg.expt.sweep == "length":
             # Length sweep
-            if self.cfg.expt.type == "gauss":
+            sweep = QickSweep1D("sweep_loop", self.cfg.expt.start, self.cfg.expt.max_length)
+            if self.cfg.expt.pulse_type == "gauss":
                 # For Gaussian pulses, sweep sigma
-                self.cfg.expt["sigma"] = QickSweep1D(
-                    "sweep_loop", self.cfg.expt.start, self.cfg.expt.max_length
-                )
-                self.param = {
-                    "label": "qubit_pulse",
-                    "param": "sigma",
-                    "param_type": "pulse",
-                }
+                self.cfg.expt["sigma"] = sweep
+                self.param['param'] = "sigma"
             else:
                 # For other pulse types, sweep length
-                self.cfg.expt["length"] = QickSweep1D(
-                    "sweep_loop", self.cfg.expt.start, self.cfg.expt.max_length
-                )
-                self.param = {
-                    "label": "qubit_pulse",
-                    "param": "total_length",
-                    "param_type": "pulse",
-                }
+                self.cfg.expt["length"] = sweep
+                self.param['param'] = "total_length"
 
         # Acquire data using the RabiProgram
         super().acquire(RabiProgram, progress=progress)
@@ -396,35 +386,27 @@ class RabiExperiment(QickExperiment):
                 self.cfg.expt.start, self.cfg.expt.max_length, self.cfg.expt.expts
             )
             
-            if self.cfg.expt.type == "gauss":
+            if self.cfg.expt.pulse_type == "gauss":
                 # For Gaussian pulses, sweep sigma and adjust length accordingly
                 x_sweep = [
                     {"pts": len_pts, "var": "sigma"},
                     {
-                        "pts": len_pts * self.cfg.expt.sigma_inc,
+                        "pts": len_pts * self.cfg.expt.sigma_inc, # is this needed
                         "var": "length",
                     },
                 ]
+                self.param["param"]="sigma"
             else:
                 # For other pulse types, sweep length directly
                 x_sweep = [{"pts": len_pts, "var": "length"}]
-            
-            self.param = {
-                "label": "qubit_pulse",
-                "param": "total_length",
-                "param_type": "pulse",
-            }
+                self.param["param"]="total_length"
             
         else:  # amplitude sweep
             gain_pts = np.linspace(
                 self.cfg.expt.start, self.cfg.expt.max_gain, self.cfg.expt.expts
             )
             x_sweep = [{"pts": gain_pts, "var": "gain"}]
-            self.param = {
-                "label": "qubit_pulse",
-                "param": "gain",
-                "param_type": "pulse",
-            }
+            self.param["param"]="gain"
 
         # Use loop acquisition method from base class
         self.data = super().run_loop(RabiProgram, x_sweep, progress=progress)
