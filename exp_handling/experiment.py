@@ -67,9 +67,6 @@ class Experiment:
         else:
             self.im = im
 
-        # if liveplot_enabled:
-        #     self.plotter = LivePlotClient()
-        # self.dataserver= dataserver_client()
         if fname is not None:
             self.fname = os.path.join(path, fname)
         else:
