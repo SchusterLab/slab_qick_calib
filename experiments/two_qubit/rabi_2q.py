@@ -33,7 +33,7 @@ class RabiProgram_2Q(QickProgram2Q):
                 "type": cfg.expt.pulse_type,
             }
             super().make_pulse(i, pulse, f"qubit_pulse_{i}")
-            super().make_pi_pulse(q, i, cfg.device.qubit.f_ge, "pi_ge")
+            super().make_cfg_pulse(q, i, cfg.device.qubit.f_ge, "pi_ge")
 
         self.add_loop("sweep_loop", cfg.expt.expts)
         # if cfg.expt.checkEF and cfg.expt.pulse_ge:

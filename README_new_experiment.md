@@ -270,7 +270,7 @@ def _initialize(self, cfg):
     super().make_pulse(pulse, "drive_pulse")
     
     # Method 2: Use pre-configured π pulse
-    super().make_pi_pulse(
+    super().make_cfg_pulse(
         cfg.expt.qubit[0],           # Qubit index
         cfg.device.qubit.f_ge,       # Frequency dict
         "pi_ge"                      # Name
@@ -309,7 +309,7 @@ class T1Program(QickProgram):
         self.add_loop("wait_loop", cfg.expt.expts)
         
         # π pulse to excite qubit
-        super().make_pi_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
+        super().make_cfg_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
     
     def _body(self, cfg):
         # Excite qubit
@@ -871,7 +871,7 @@ def _initialize(self, cfg):
     super()._initialize(cfg, readout="standard")
     self.add_loop("time_loop", cfg.expt.expts)
     # Create excitation pulse
-    super().make_pi_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
+    super().make_cfg_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
 
 def _body(self, cfg):
     # Excite qubit
@@ -923,6 +923,9 @@ def acquire(self, progress=False):
         self.cfg.expt.center_freq + self.cfg.expt.span/2
     )
     self.param = {"label": "probe_pulse", "param": "freq", "param_type": "pulse"}
+    self.param = {"label": "wait", "param": "t", "param_type": "time"}
+    self.param = {"label": "readout_pulse", "param": "freq", "param_type": "pulse"}
+    self.param = {"label": "qubit_pulse", "param": "freq", "param_type": "pulse"}
     super().acquire(SpectroscopyProgram, progress=progress)
 
 # Analysis - fit to Lorentzian

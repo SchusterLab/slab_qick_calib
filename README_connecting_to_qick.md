@@ -1,6 +1,6 @@
 # QICK Board Remote Control Setup with Pyro4
 
-This guide explains how to set up a distributed quantum control system where the QICK board runs on one computer and experiments are controlled remotely from another computer using Pyro4.
+This guide explains how to set up a distributed quantum control system where the QICK board runs on one computer and experiments are controlled remotely from another computer using Pyro4. This is taken from the Schuster Lab wikipage. 
 
 ## System Architecture
 
@@ -39,6 +39,8 @@ The nameserver acts as a directory service that allows instruments and clients t
 python -m Pyro4.naming -n <NAMESERVER_IP> -p 9090
 ```
 
+
+
 **Option C: Python script**
 ```python
 import Pyro4
@@ -54,6 +56,15 @@ def start_nameserver(host_ip, ns_port=9090):
 start_nameserver(host_ip='192.168.1.100', ns_port=9090)
 ```
 
+It should show the following message when configured correctly:
+
+```
+Broadcast server running on 0.0.0.0:9091
+NS running on 10.108.30.63:9090 (10.108.30.63)
+Warning: HMAC key not set. Anyone can connect to this server!
+URI = PYRO:Pyro.NameServer@10.108.30.63:9090
+```
+
 ### Step 2: Connect QICK Board to Nameserver
 
 On QICK board:
@@ -62,8 +73,9 @@ Can go to pyro4 folder to find code start_server.
 This code reads: 
 ```python 
 from qick.pyro import start_server
-a=start_server(ns_host="192.168.137.1", ns_port=9090, proxy_name="Qick105", bitfile='/home/xilinx/jupyter_notebooks/qick_4x2.bit')
+a=start_server(ns_host="192.168.137.1", ns_port=9090, proxy_name="qick_soc", bitfile='/home/xilinx/jupyter_notebooks/qick_4x2.bit')
 ```
+You choose the proxy name, which will be used when you connect to the Qick board through the instrument server. The bit file may be part of the qick library, or you can download one from here and then upload to the jupyter notebook. https://s3df.slac.stanford.edu/people/meeg/qick/tprocv2/
 
 ### Step 3: Connect from Experiment Computer
 
@@ -84,6 +96,7 @@ On the experiment computer where you want to run quantum experiments:
    soc = QickConfig(im['qick_soc'].get_cfg())
    print("Connected to QICK board:", soc)
    ```
+   where you've filled in the name of the qick_soc you chose above. 
 
 2. **Set up experiment configuration**:
    ```python
@@ -116,7 +129,7 @@ On the experiment computer where you want to run quantum experiments:
    rabi = meas.RabiExperiment(cfg_dict, qi=0)
    ```
 
-## Configuration Details
+## Configuration Details [all unchecked cline]
 
 ### Pyro4 Configuration
 The system uses these Pyro4 settings for compatibility:

@@ -106,17 +106,17 @@ class T2Program(QickProgram):
             cfg.device.qubit.pulses.pi_ge.phase = 90 * np.ones(
                 len(cfg.device.qubit.f_ge)
             )
-            super().make_pi_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
+            super().make_cfg_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
         elif (
             cfg.expt.checkEF
             or cfg.expt.experiment_type == "echo"
             or cfg.expt.active_reset
         ):
-            super().make_pi_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
+            super().make_cfg_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
 
         if cfg.expt.checkEF and cfg.expt.experiment_type == "echo":
             # Create π pulse for EF transition check
-            super().make_pi_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ef, "pi_ef")
+            super().make_cfg_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ef, "pi_ef")
 
         for i in range(1000):
             self.nop()

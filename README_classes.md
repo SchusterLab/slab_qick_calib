@@ -23,7 +23,7 @@ The `QickProgram` class is the base for single-qubit experiments. It extends `Av
 - `_body(cfg)`: Defines the main experiment sequence. This method should be overridden in subclasses.
 - `measure(cfg)`: Implements the standard measurement sequence, including readout, LO pulse application, and optional active reset.
 - `make_pulse(pulse, name)`: Creates a pulse (Gaussian, flat-top, or constant) and adds it to the program.
-- `make_pi_pulse(q, freq, name)`: Creates a π pulse for a specified qubit.
+- `make_cfg_pulse(q, freq, name)`: Creates a π pulse for a specified qubit.
 - `collect_shots(offset=0, single=True)`: Retrieves raw I/Q data from the ADC.
 - `reset(i)`: Performs active qubit reset by measuring the qubit state and applying a conditional π pulse.
 
@@ -37,7 +37,7 @@ The `QickProgram2Q` class is the base for two-qubit experiments, extending `Aver
 - `_initialize(cfg, readout="standard")`: Sets up hardware channels for all qubits involved in the experiment.
 - `_body(cfg)`: Defines the main experiment sequence. This method should be overridden in subclasses.
 - `make_pulse(q, pulse, name)`: Creates a pulse for a specified qubit.
-- `make_pi_pulse(q, i, freq, name)`: Creates a π pulse for a specified qubit.
+- `make_cfg_pulse(q, i, freq, name)`: Creates a π pulse for a specified qubit.
 - `collect_shots(offset=[0, 0])`: Retrieves raw I/Q data from all ADCs.
 - `reset(i)`: Performs active qubit reset for multiple qubits in parallel.
 
@@ -140,7 +140,7 @@ class MyExperimentProgram(QickProgram):
         super()._initialize(cfg, readout="standard")
         
         # Create any custom pulses
-        super().make_pi_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
+        super().make_cfg_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
 
     def _body(self, cfg):
         cfg = AttrDict(self.cfg)

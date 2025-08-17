@@ -282,6 +282,7 @@ def init_config(file_name, num_qubits, type="full", t1=50, aliases="Qick001"):
                 "sigma": init_array(0.1),
                 "sigma_inc": init_array(5),
                 "type": init_array("gauss"),
+                "phase": init_array(0),
             }
         )
 

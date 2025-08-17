@@ -20,7 +20,7 @@ import matplotlib.pyplot as plt
 #         self.add_loop("shot_loop", cfg.expt.shots)
 #         super()._initialize(cfg, readout="standard")
 
-#         super().make_pi_pulse(
+#         super().make_cfg_pulse(
 #             cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge"
 #         )
 

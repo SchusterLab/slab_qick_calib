@@ -364,9 +364,9 @@ class QickProgram(AveragerProgramV2):
         pulse_args["style"] = style
         self.add_pulse(**pulse_args)
 
-    def make_pi_pulse(self, q, freq, name):
+    def make_cfg_pulse(self, q, freq, name):
         """
-        Create a π pulse for the specified qubit.
+        Create a pulse for the specified qubit based on definition in cfg file; usually this will be a pi pulse. 
 
         A π pulse rotates the qubit state by 180 degrees around the X-axis,
         flipping the state between |0⟩ and |1⟩.
@@ -775,7 +775,7 @@ class QickProgram2Q(AveragerProgramV2):
         pulse_args["style"] = style
         self.add_pulse(**pulse_args)
 
-    def make_pi_pulse(self, q, i, freq, name):
+    def make_cfg_pulse(self, q, i, freq, name):
         """
         Create a π pulse for the specified qubit.
 

@@ -101,9 +101,9 @@ class HistogramProgram(QickProgram):
         super()._initialize(cfg, readout="")
 
         # Define pi pulses for state preparation
-        super().make_pi_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
+        super().make_cfg_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
         if cfg.expt.pulse_f:
-            super().make_pi_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ef, "pi_ef")
+            super().make_cfg_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ef, "pi_ef")
 
         # Add initial delay for tProc setup
         self.delay(0.5)

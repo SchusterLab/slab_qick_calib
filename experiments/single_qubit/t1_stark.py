@@ -31,7 +31,7 @@ class T1MultiProgram(QickProgram):
 
         super()._initialize(cfg, readout="standard")
 
-        super().make_pi_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
+        super().make_cfg_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
 
         self.add_loop("wait_loop", cfg.expt.expts)
 

@@ -82,7 +82,7 @@ class QubitSpecProgram(QickProgram):
 
         # If checking EF transition, create a pi pulse for |g>-|e> transition
         if cfg.expt.checkEF:
-            super().make_pi_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
+            super().make_cfg_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
 
     def _body(self, cfg):
         """

@@ -129,7 +129,7 @@ class ResSpecProgram(QickProgram):
 
         # Create pi pulse if needed for excited state measurement
         if cfg.expt.pulse_e:
-            super().make_pi_pulse(q, cfg.device.qubit.f_ge, "pi_ge")
+            super().make_cfg_pulse(q, cfg.device.qubit.f_ge, "pi_ge")
 
     def _body(self, cfg):
         """

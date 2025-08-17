@@ -65,7 +65,7 @@ class T1Program(QickProgram):
         super()._initialize(cfg, readout="standard")
 
         # Create a π pulse to excite the qubit from |0⟩ to |1⟩
-        super().make_pi_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
+        super().make_cfg_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
 
         # If AC Stark shift is enabled, create a constant pulse to apply during wait time
         if cfg.expt.acStark:
