@@ -203,6 +203,7 @@ class ResSpec(QickExperiment):
         go=True,
         params={},
         style="fine", 
+        disp_kwargs=None,
         print=False,
         check_params=True,
     ):
@@ -271,7 +272,7 @@ class ResSpec(QickExperiment):
         if params["length"] > 100:  # Can't be set directly to be greater than 100 on dynamic generator; may need to adapt for other generators. 
             params['long_pulse'] = True
 
-        # Handle special case for span
+        # Handle special case for span, using 7 linewidths as span (once have good value of kappa)
         if params["span"] == "kappa":
             params["span"] = float(7 * self.cfg.device.readout.kappa[qi])
         
@@ -294,7 +295,7 @@ class ResSpec(QickExperiment):
                 self.display(fit=False, peaks=True)
             else:
                 # For fine scans, run with standard analysis
-                super().run(display=display, progress=progress, save=save, analyze=analyze)
+                super().run(display=display, progress=progress, save=save, analyze=analyze, disp_kwargs=disp_kwargs)
 
     def acquire(self, progress=False):
         """
@@ -597,7 +598,6 @@ class ResSpec(QickExperiment):
                 self.fname[0 : -len(imname)] + "images\\" + imname[0:-3] + ".png"
             )
         
-
     def update(self, cfg_file, freq=True, fast=False, verbose=True):
         """
         Update the configuration file with the measured resonator parameters.

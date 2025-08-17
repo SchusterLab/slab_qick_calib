@@ -194,16 +194,15 @@ class RamseyStarkPowerExperiment(QickExperiment2DSimple):
         exp_name = RamseyStarkExperiment
         self.expt = exp_name(cfg_dict, qi=qi, go=False, params=params, check_params=False)
         params = {**params_def, **params}
+        params.end_gain = np.min(
+            [self.cfg.device.qubit.max_gain, params.end_gain]
+        )
         self.cfg.expt = {**self.expt.cfg.expt, **params}
 
         if go:
             super().run(min_r2=min_r2, max_err=max_err, progress=progress)
 
     def acquire(self, progress=False):
-
-        self.cfg.expt["end_gain"] = np.min(
-            [self.cfg.device.qubit.max_gain, self.cfg.expt["end_gain"]]
-        )
         gainpts = np.linspace(
             self.cfg.expt["start_gain"],
             self.cfg.expt["end_gain"],
