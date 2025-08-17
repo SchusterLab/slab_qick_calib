@@ -154,14 +154,28 @@ class RabiExperiment(QickExperiment):
     pattern allows determination of the π-pulse parameters needed for qubit control.
 
     Parameters:
-    - 'sweep': Type of sweep, 'amp' or 'length' (default: 'amp')
-    - 'type': Pulse type ('gauss', 'const', 'flat_top') (default: from config)
     - 'expts': Number of experiments to run (default: 60)
+    - 'reps': Number of repetitions, from `self.reps`
+    - 'rounds': Number of software averages, from `self.rounds`
+    - 'gain': Gain value for pi pulse (default: cfg pi pulse gain)
+    - 'max_gain': Maximum gain used in amplitude sweep (if specified, used instead of gain)
+    - 'sigma': Standard deviation of the Gaussian pulse (default: cfg pip pulse sigma)
+    - 'max_length': Maximum length used in length sweep (if specified, used instead of sigma)
+    - 'checkEF': Boolean flag to check EF interaction (default: False)
+    - 'pulse_ge': Boolean flag to indicate if pulse is for ground to excited state transition (default: True)
+    - 'start': Starting point for the experiment, either in time or gain (default: as close to 0 as is linear/allowed)
+    - 'step': Step size for the gain (calculated as int(params['gain']/params['expts']))
+    - 'qubit': List of qubits involved in the experiment (default: [qi])
+    - 'pulse_type': Type of pulse used in the experiment (default: 'gauss')
+    - 'num_pulses': Number of pulses used in the experiment (default: 1)
+    - 'qubit_chan': Channel for the qubit readout (default: self.cfg.hw.soc.adcs.readout.ch[qi])
+    - 'sweep': Type of sweep to perform ('amp' or 'length') (default: 'amp')
+    - 'freq': Frequency of the qubit pulse (default: self.cfg.device.qubit.f_ge[qi])
+    - 'num_osc': Try to set max gain or length for this number of oscillations (default: 2.5)
     - 'n_pulses': Number of Rabi pulses to apply (default: 1)
-    - 'checkEF': Boolean flag to check EF transition (default: False)
-    - 'pulse_ge': Boolean flag for ge pulse before EF Rabi (default: True)
-    - 'num_osc': Number of oscillations for sweep range (default: 2.5)
-    - 'loop': Use loop-based acquisition instead of QICK sweeps (default: False)
+    - 'active_reset': If True, uses active reset (default: from `cfg.device.readout.active_reset[qi]`)
+    - 'loop': If True, uses loop-based acquisition (default: False)
+    - 'temp': Temperature parameter for temperature-dependent measurements (default: 40)
     """
 
     def __init__(
@@ -203,13 +217,23 @@ class RabiExperiment(QickExperiment):
             "qubit": [qi],
             "qubit_chan": self.cfg.hw.soc.adcs.readout.ch[qi],
             "loop": False,
+            "temp": 40,
         }
 
-        # Apply style modifications
+        min_gain = 2**-15  # Minimum DAC gain value for linear operation
+
+        # Apply style modifications for different experiment modes
         if style == "fine":
-            params_def["rounds"] *= 2
+            params_def["rounds"] = params_def["rounds"] * 2
         elif style == "fast":
             params_def["expts"] = 25
+        elif style == "temp":
+            # Special configuration for temperature-dependent measurements
+            params_def["reps"] = int(40 * params_def["reps"])
+            params_def["rounds"] = int(
+                np.ceil(20 * params_def["rounds"] * 1.5 ** (params.get("temp", 40) / 40))
+            )
+            params_def["pulse_ge"] = False
         
         params = {**params_def, **params}
         
@@ -261,6 +285,10 @@ class RabiExperiment(QickExperiment):
         for key in pulse_config:
             if key not in params:  # Don't override user-provided parameters
                 params_def[key] = pulse_config[key][qi]
+
+        # Handle pulse_type parameter as alias for type
+        if "pulse_type" in params:
+            params_def["type"] = params["pulse_type"]
 
     def _configure_sweep_params(self, params, params_def):
         """Configure sweep range based on sweep type."""
@@ -314,8 +342,9 @@ class RabiExperiment(QickExperiment):
             # Use loop-based acquisition for complex sweeps
             return self._acquire_loop(progress)
         else:
-            if self.cfg.expt.pulse_type == 'gauss' and self.cfg.sweep=='length':
-                error('Cannot use qick sweep for a length sweep with Gaussian pulses.')
+            if self.cfg.expt.type == 'gauss' and self.cfg.expt.sweep=='length':
+                print('Cannot use qick sweep for a length sweep with Gaussian pulses. Using loop mode instead.')
+                return self._acquire_loop(progress)
             # Use QICK sweep-based acquisition (default)
             return self._acquire_qick_sweep(progress)
 
@@ -795,6 +824,180 @@ class RabiChevronExperiment(QickExperiment2DSimple):
 
         plt.tight_layout()
         plt.show()
+
+
+class Rabi2D(QickExperiment2DSimple):
+    """
+    2D Rabi experiment that sweeps both length and gain.
+    This experiment performs a 2D sweep of both qubit pulse length and gain
+    to map out the Rabi oscillations.
+
+    Experimental Config:
+    expt = dict(
+        start_gain: qubit gain [dac level]
+        step_gain: gain step [dac level]
+        expts_gain: number steps
+        reps: number averages per expt
+        rounds: number repetitions of experiment sweep
+        sigma: gaussian sigma for pulse length [us] (default: from pi_ge in config)
+        pulse_type: 'gauss' or 'const'
+    )
+    """
+
+    def __init__(
+        self,
+        cfg_dict,
+        qi=0,
+        go=True,
+        params={},
+        style="",
+        prefix=None,
+        progress=False,
+    ):
+        """
+        Initialize the 2D Rabi experiment.
+
+        This experiment performs a 2D sweep of pulse length and gain.
+        Default `params` values:
+        - 'span_y': Span of the y-axis sweep (gain) (default: 1)
+        - 'expts_y': Number of points in the y-axis sweep (default: 30)
+        - 'start_y': Start value for the y-axis sweep (default: 0)
+        - 'sweep': Type of sweep for the inner loop, must be 'length' (default: 'length')
+        - 'loop': If True, uses loop-based acquisition (default: True)
+        - 'yval': The parameter to sweep on the y-axis (default: 'gain')
+
+        Args:
+            cfg_dict (dict): Configuration dictionary.
+            qi (int): Qubit index.
+            go (bool): Whether to run the experiment immediately.
+            params (dict): Additional parameters to override defaults.
+            style (str): Experiment style.
+            prefix (str): Prefix for data files.
+            progress (bool): Whether to show a progress bar.
+        """
+        # Determine prefix based on parameters
+        if "type" in params:
+            pre = params["type"]
+        else:
+            pre = "amp"
+        if "checkEF" in params and params["checkEF"]:
+            ef = "ef"
+        else:
+            ef = ""
+        
+        if prefix is None:
+            prefix = f"{pre}_rabi_2d_{ef}_qubit{qi}"
+
+        super().__init__(cfg_dict=cfg_dict, prefix=prefix, progress=progress)
+
+        # Default parameters
+        params_def = {
+            "span_y": 1,
+            "expts_y": 30,
+            "start_y": 0,
+            "sweep": "length",
+            "loop": True,
+            "yval": "gain",
+        }
+        params = {**params_def, **params}
+
+        # Create a RabiExperiment instance but don't run it yet
+        self.expt = RabiExperiment(
+            cfg_dict, qi=qi, go=False, params=params, style=style, check_params=False
+        )
+        self.cfg.expt = {**self.expt.cfg.expt, **params}
+
+        # Run the experiment if requested
+        if go:
+            super().run(progress=progress)
+
+    def acquire(self, progress=False, debug=False):
+        """
+        Acquire data for the 2D Rabi experiment.
+
+        Args:
+            progress: Whether to show progress bar
+            debug: Whether to print debug information
+
+        Returns:
+            Acquired data
+        """
+        # Create y-axis points for the sweep
+        ypts = np.linspace(
+            self.cfg.expt["start_y"],
+            self.cfg.expt["start_y"] + self.cfg.expt["span_y"],
+            self.cfg.expt["expts_y"],
+        )
+
+        # Set up the y-sweep (gain sweep)
+        ysweep = [{"pts": ypts, "var": self.cfg.expt["yval"]}]
+
+        # Acquire data
+        super().acquire(ysweep, progress=progress)
+
+        return self.data
+
+    def analyze(self, data=None, fit=True, **kwargs):
+        """
+        Analyze the acquired data.
+
+        Args:
+            data: Data to analyze (if None, use self.data)
+            fit: Whether to fit the data
+            **kwargs: Additional arguments for the fit
+
+        Returns:
+            Analyzed data with fit parameters
+        """
+        if data is None:
+            data = self.data
+
+        if fit:
+            # Fit the data to a sinusoidal function for each y value
+            data = super().analyze(
+                fitfunc=fitter.sinfunc, fitterfunc=fitter.fitsin, fit=fit, **kwargs
+            )
+
+        return data
+
+    def display(self, data=None, fit=True, plot_both=False, **kwargs):
+        """
+        Display the results of the 2D Rabi experiment.
+
+        Args:
+            data: Data to display (if None, use self.data)
+            fit: Whether to show the fit
+            plot_both: Whether to plot both amplitude and phase
+            **kwargs: Additional arguments for the display
+        """
+        if data is None:
+            data = self.data
+
+        # Set up plot title and labels
+        title = "2D Rabi"
+        if self.cfg.expt.checkEF:
+            title = "EF " + title
+        
+        if self.cfg.expt.sweep == "length":
+            xlabel = "Pulse Length ($\mu$s)"
+            param = "gain"
+        else:
+            xlabel = "Gain / Max Gain"
+            param = "sigma" if self.cfg.expt.type == "gauss" else "length"
+
+        title += f" Q{self.cfg.expt.qubit[0]} (Pulse {param} {self.cfg.expt[param]})"
+        ylabel = f"{self.cfg.expt['yval'].title()}"
+
+        # Display the 2D plot
+        super().display(
+            title=title,
+            xlabel=xlabel,
+            ylabel=ylabel,
+            data=data,
+            fit=fit,
+            plot_both=plot_both,
+            **kwargs,
+        )
 
 
 # Helper functions for fitting the chevron pattern
