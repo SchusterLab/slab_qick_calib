@@ -10,8 +10,6 @@ Taken from the slab repository
 
 __author__ = "David Schuster"
 
-# from liveplot import LivePlotClient
-# from dataserver import dataserver_client
 import os.path
 import json
 import yaml

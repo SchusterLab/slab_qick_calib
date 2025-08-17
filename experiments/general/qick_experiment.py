@@ -95,8 +95,6 @@ class QickExperiment(Experiment):
             self.cfg.device.readout.rounds[qi]
             * self.cfg.device.readout.rounds_base
         )
-        self.fitfunc = None
-        self.fitterfunc = None
 
     def acquire(
         self, prog_name, progress=True, get_hist=True, single=True, compact=False
@@ -638,10 +636,11 @@ class QickExperiment(Experiment):
         )
         self.cfg.expt = {**params_def, **self.cfg.expt}
         # this number should be changed to be grabbed from soc
+        adc = self.cfg.hw.socs.adcs[qi]
         self.cfg.expt["threshold"] = int(
             self.cfg.expt["threshold_v"]
             * self.cfg.device.readout.readout_length[qi]
-            / 0.0032552083333333335
+            * self.soccfg._get_ch_cfg(ro_ch=adc)['f_fabric']
         )
 
     def run_loop(self, prog, x_sweep, progress=True):
