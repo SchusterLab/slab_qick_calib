@@ -1,7 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-Created on Sat Jul 30 14:04:03 2011
+Data analysis utilities for quantum control experiments.
 
+This module provides functions for data analysis, plotting, file handling,
+and signal processing commonly used in quantum control experiments.
+
+Original code by David Schuster
+Taken from the slab repository
+
+Created on Sat Jul 30 14:04:03 2011
 @author: Dave
 """
 
@@ -35,27 +42,53 @@ from .datamanagement import get_script
 
 ###################################################
 
-#### General
+#### General utility functions for unit conversions ####
 
 
 def dBm_to_W(dBm):
-    """convert dBm to Watts"""
+    """
+    Convert power from dBm to Watts.
+    
+    Args:
+        dBm (float): Power in dBm
+        
+    Returns:
+        float: Power in Watts
+    """
     return 10.0 ** (dBm / 10.0) * 1e-3
 
 
+# Create alias for backward compatibility
 dBmtoW = dBm_to_W
 
 
 def W_to_dBm(W):
-    """convert dBm to Watts"""
+    """
+    Convert power from Watts to dBm.
+    
+    Args:
+        W (float): Power in Watts
+        
+    Returns:
+        float: Power in dBm
+    """
     return np.log(W * 1e3) / np.log(10) * 10.0
 
 
 def dBm_to_V(dBm):
-    """convert dBm to V"""
+    """
+    Convert power from dBm to RMS voltage (assuming 50 ohm impedance).
+    
+    Args:
+        dBm (float): Power in dBm
+        
+    Returns:
+        float: RMS voltage in Volts
+    """
     return sqrt(dBm_to_W(dBm) * 50) * sqrt(2)
 
 
+# Create alias for backward compatibility
 dBmtoV = dBm_to_V
 
 ######################## Plotting helpers
