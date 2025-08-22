@@ -420,12 +420,28 @@ class QickExperiment(Experiment):
 
         # Save figure if created in this method
         if save_fig:
-            imname = self.fname.split("\\")[-1]
-            fig.tight_layout()
-            fig.savefig(
-                self.fname[0 : -len(imname)] + "images\\" + imname[0:-3] + ".png"
-            )
+            self.save_fig(fig)
+            # imname = self.fname.split("\\")[-1]
+            # fig.tight_layout()
+            # fig.savefig(
+            #     self.fname[0 : -len(imname)] + "images\\" + imname[0:-3] + ".png"
+            # )
             plt.show()
+
+    def save_fig(self, fig, suffix=''):
+        fig.tight_layout()
+
+        file_path = Path(self.fname)
+        # Get the parent directory
+        parent_dir = file_path.parent
+
+        # Get the filename and change its extension to .png
+        new_filename = file_path.name.rsplit(".", 1)[0] + suffix + ".png"
+        # Create the full output path and save the figure
+        output_path = parent_dir / "images" / new_filename
+
+        fig.savefig(output_path)
+        plt.show()
 
     def make_hist(self, prog, single=True):
         """
@@ -1185,19 +1201,7 @@ class QickExperiment2D(QickExperimentLoop):
 
         # Save figure if created in this method
         if savefig:
-            fig.tight_layout()
-
-            file_path = Path(self.fname)
-
-            # Get the parent directory
-            parent_dir = file_path.parent
-
-            # Get the filename and change its extension to .png
-            new_filename = file_path.name.rsplit(".", 1)[0] + ".png"
-            # Create the full output path and save the figure
-            output_path = parent_dir / "images" / new_filename
-
-            fig.savefig(output_path)
+            super().save_fig(fig)
             plt.show()
 
 
@@ -1454,10 +1458,7 @@ class QickExperiment2DSweep(QickExperiment):
         y_sweep = data["ypts"]
 
         # Determine whether to save the figure
-        if ax is None:
-            savefig = True
-        else:
-            savefig = False
+        savefig = ax is None
 
         # Configure plot layout based on what to display
         if plot_both:
@@ -1499,17 +1500,6 @@ class QickExperiment2DSweep(QickExperiment):
 
         # Save figure if created in this method
         if savefig:
-            fig.tight_layout()
+            self.save_fig()
+            
 
-            file_path = Path(self.fname)
-
-            # Get the parent directory
-            parent_dir = file_path.parent
-
-            # Get the filename and change its extension to .png
-            new_filename = file_path.name.rsplit(".", 1)[0] + ".png"
-            # Create the full output path and save the figure
-            output_path = parent_dir / "images" / new_filename
-
-            fig.savefig(output_path)
-            plt.show()

@@ -257,9 +257,8 @@ class T1StarkPowerExperiment(QickExperiment2DSimple):
         self.expt = T1StarkExperiment(
             cfg_dict, qi=qi, go=False, params=params, style=style
         )
-        params = {**params_def, **params}
-        self.cfg.expt = {**self.expt.cfg.expt, **params}
-
+        self.cfg.expt = {**params_def, **params}
+        
         if go:
             super().run(min_r2=min_r2, max_err=max_err)
 
@@ -306,19 +305,18 @@ class T1StarkPowerExperiment(QickExperiment2DSimple):
         ylabel = "Gain (DAC units)"
         xlabel = "Wait Time ($\mu$s)"
         super().display(plot_both=plot_both, title=title, xlabel=xlabel, ylabel=ylabel)
-
-        fig, ax = plt.subplots(3, 1, figsize=(6, 8))
-
+        xval = data["stark_gain_pts"]
         if fit:
-            ax[0].plot(data["stark_gain_pts"], data["offset"])
-            ax[1].plot(data["stark_gain_pts"], data["amp"])
-            ax[2].plot(data["stark_gain_pts"], data["t1"])
+            fig, ax = plt.subplots(3, 1, figsize=(6, 8))
+            ax[0].plot(xval, data["offset"])
+            ax[1].plot(xval, data["amp"])
+            ax[2].plot(xval, data["t1"])
 
-            ax[2].set_xlabel("Gain [DAC units]")
             ax[0].set_ylabel("Offset")
             ax[1].set_ylabel("Amplitude")
             ax[2].set_ylabel("T1")
             ax[0].set_title(f"T1 Stark Power Q{qubit} Freq: {df}")
+            ax[2].set_xlabel("Gain (DAC units)")
             # print(f'Quadratic Fit: {data['quad_fit'][0]:.3g}x^2 + {data['quad_fit'][1]:.3g}x + {data['quad_fit'][2]:.3g}')
         sns.set_palette("coolwarm", len(data["stark_gain_pts"]))
         fig, ax = plt.subplots(1, 1, figsize=(6, 6))
@@ -327,10 +325,7 @@ class T1StarkPowerExperiment(QickExperiment2DSimple):
                 data["xpts"], data["avgi"][i], linewidth=0.5
             )  # , label=f'Gain {data['stark_gain_pts'][i]}')
 
-        imname = self.fname.split("\\")[-1]
-        fig.savefig(
-            self.fname[0 : -len(imname)] + "images\\" + imname[0:-3] + "quad_fit.png"
-        )
+        super().save_fig(fig, 'quad_fit')
         plt.show()
 
 
@@ -616,8 +611,8 @@ class T1StarkPowerQuadSingle(QickExperimentLoop):
             "qubit": [qi],
             "max_gain": 1,
             "qubit_chan": self.cfg.hw.soc.adcs.readout.ch[qi],
-            "df_pos": 70,
-            "df_neg": -70,
+            "df_pos": self.cfg.stark.f[qi],
+            "df_neg": self.cfg.stark.fneg[qi],
             "stop_f": 20,
         }
 
@@ -642,24 +637,39 @@ class T1StarkPowerQuadSingle(QickExperimentLoop):
                 display=display, progress=progress, min_r2=min_r2, max_err=max_err
             )
 
-    def acquire(self, progress=False):
-        qi = self.cfg.expt.qubit[0]
-        self.param = {"label": "stark_pulse", "param": "gain", "param_type": "pulse"}
-
-        f_pts_pos = np.linspace(0, self.cfg.expt.stop_f, int(self.cfg.expt.expts / 2))
-        gain_pos = find_inverse_quad_fit(f_pts_pos, *self.cfg.expt.quad_fit_pos)
-        f_pts_neg = np.linspace(-self.cfg.expt.stop_f, 0, int(self.cfg.expt.expts / 2))
-        gain_neg = find_inverse_quad_fit(-f_pts_neg, *self.cfg.expt.quad_fit_neg)
-        gain_pts = np.concatenate((gain_neg[0:-1], gain_pos))
-        f_pts = np.concatenate((f_pts_neg[0:-1], f_pts_pos))
-        m = len(f_pts_pos)  # Replace with the desired value of n
-        n = len(f_pts_neg) - 1  # Replace with the desired value of m
-        stark_freq = np.concatenate(
-            (
-                np.full(n, self.cfg.expt.stark_freq_neg),
-                np.full(m, self.cfg.expt.stark_freq_pos),
+    def get_gain_pts(self, pos=True, neg=True): 
+        if pos:
+            f_pts_pos = np.linspace(0, self.cfg.expt.stop_f, int(self.cfg.expt.expts / 2))
+            gain_pos = find_inverse_quad_fit(f_pts_pos, *self.cfg.expt.quad_fit_pos)
+        if neg:
+            f_pts_neg = np.linspace(-self.cfg.expt.stop_f, 0, int(self.cfg.expt.expts / 2))
+            gain_neg = find_inverse_quad_fit(-f_pts_neg, *self.cfg.expt.quad_fit_neg)
+        if pos and neg:
+            gain_pts = np.concatenate((gain_neg[0:-1], gain_pos))
+            f_pts = np.concatenate((f_pts_neg[0:-1], f_pts_pos))
+            m = len(f_pts_pos)  # Replace with the desired value of n
+            n = len(f_pts_neg) - 1  # Replace with the desired value of m
+            stark_freq = np.concatenate(
+                (
+                    np.full(n, self.cfg.expt.stark_freq_neg),
+                    np.full(m, self.cfg.expt.stark_freq_pos),
+                )
             )
-        )
+        elif pos:
+            gain_pts = gain_pos
+            f_pts = f_pts_pos
+            stark_freq = np.full(len(f_pts_pos), self.cfg.expt.stark_freq_pos)    
+        elif neg:
+            gain_pts = gain_neg
+            f_pts = f_pts_neg
+            stark_freq = np.full(len(f_pts_neg), self.cfg.expt.stark_freq_neg)
+
+        return gain_pts, stark_freq, f_pts
+
+    def acquire(self, progress=False):
+        self.param = {"label": "stark_pulse", "param": "gain", "param_type": "pulse"}
+        gain_pts, stark_freq, f_pts = self.get_gain_pts()
+
         x_sweep = [
             {"var": "stark_gain", "pts": gain_pts},
             {"var": "stark_freq", "pts": stark_freq},
@@ -679,7 +689,7 @@ class T1StarkPowerQuadSingle(QickExperimentLoop):
 
         q = self.cfg.expt.qubit[0]
         df = self.cfg.expt.stark_freq - self.cfg.device.qubit.f_ge[q]
-        xlabel = "Gain / Max Gain"
+        xlabel = "Frequency (MHz)"
         title = (
             f"$T_1$ Stark Q{q} Freq: {df}, Delay Time: {self.cfg.expt.wait_time} $\mu$s"
         )
