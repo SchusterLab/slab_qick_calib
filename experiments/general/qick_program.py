@@ -1,7 +1,6 @@
 from qick.asm_v2 import AveragerProgramV2
 from ...exp_handling.datamanagement import AttrDict
 from qick import *
-import numpy as np
 
 """
 QICK Program Module
