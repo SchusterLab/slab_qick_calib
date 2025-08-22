@@ -317,7 +317,7 @@ class T1StarkPowerExperiment(QickExperiment2DSimple):
             ax[2].set_ylabel("T1")
             ax[0].set_title(f"T1 Stark Power Q{qubit} Freq: {df}")
             ax[2].set_xlabel("Gain (DAC units)")
-            # print(f'Quadratic Fit: {data['quad_fit'][0]:.3g}x^2 + {data['quad_fit'][1]:.3g}x + {data['quad_fit'][2]:.3g}')
+
         sns.set_palette("coolwarm", len(data["stark_gain_pts"]))
         fig, ax = plt.subplots(1, 1, figsize=(6, 6))
         for i in range(len(data["stark_gain_pts"])):
@@ -695,28 +695,97 @@ class T1StarkPowerQuadSingle(QickExperimentLoop):
         )
 
         fig, ax = plt.subplots(1, 1, figsize=(6, 3))
-        # ax = ax.flatten()
+        ax.set_title(title)
         ax.plot(data["f_pts"], data["avgi"])
-        # ax[1].plot(data["xpts"], data["avgi_e"])
-        # ax[2].plot(data["xpts"], data["avgi_g"])
-        # ax[3].set_xlabel(xlabel)
+        ax.set_xlabel(xlabel)
         ax.set_ylabel("I (ADC Units)")
 
-        # ax[3].plot(data["xpts"], data['t1'])
-        # ax[3].set_ylabel("$T_1$ / $T_{1,ave}$")
         fig.tight_layout()
         plt.show()
 
         if show_hist:  # Plot histogram of shots if show_hist is True
             fig2, ax = plt.subplots(1, 1, figsize=(3, 3))
             ax.plot(data["bin_centers"], data["hist"] / np.sum(data["hist"]), "o-")
-            ax.set_xlabel("I [ADC units]")
+            ax.set_xlabel("I (ADC units)")
             ax.set_ylabel("Probability")
 
 
+class T1StarkPowerQuad2D(QickExperiment2DSimple):
+    """
+    Stark Power Rabi Experiment
+    Experimental Config:
+    expt = dict(
+        start_f: start qubit frequency (MHz),
+        step_f: frequency step (MHz),
+        expts_f: number of experiments in frequency,
+        start_gain: qubit gain [dac level]
+        step_gain: gain step [dac level]
+        expts_gain: number steps
+        reps: number averages per expt
+        rounds: number repetitions of experiment sweep
+        sigma_test: gaussian sigma for pulse length [us] (default: from pi_ge in config)
+        pulse_type: 'gauss' or 'const'
+    )
+    """
+
+    def __init__(
+        self,
+        cfg_dict,
+        qi=0,
+        go=True,
+        params={},
+        prefix="",
+        progress=False,
+        style="",
+        min_r2=None,
+        max_err=None,
+    ):
+
+        if prefix == "":
+            prefix = f"t1_stark_power_quad_2d{qi}"
+
+        super().__init__(cfg_dict=cfg_dict, qi=qi, prefix=prefix, progress=progress)
+
+        params_def = {
+            "sweep_pts":200
+        }
+
+        self.expt = T1StarkPowerQuadSingle(
+            cfg_dict, qi=qi, go=False, params=params, style=style, check_params=False
+        )
+        self.cfg.expt = {**params_def, **params}
+        
+        if go:
+            super().run(min_r2=min_r2, max_err=max_err)
+
+    def acquire(self, progress=False):
+
+        sweep_pts = np.arange(self.cfg.expt["sweep_pts"])
+        y_sweep = [{"pts": sweep_pts, "var": "count"}]
+
+        # Run the T1Program for each point in the 2D sweep
+        super().acquire(y_sweep, progress=progress)
+
+        return self.data
+
+    def analyze(self, data=None, fit=True, **kwargs):
+        pass
+
+    def display(self, data=None, fit=True, plot_both=False, **kwargs):
+        if data is None:
+            data = self.data
+        qubit = self.cfg.expt.qubit[0]
+        df = self.cfg.expt.stark_freq - self.cfg.device.qubit.f_ge[qubit]
+
+        title = f"T1 Stark Power Q{qubit} Freq: {df}"
+        ylabel = "Time (s)"
+        xlabel = "Frequency (MHz)"
+        super().display(plot_both=plot_both, title=title, xlabel=xlabel, ylabel=ylabel)
+        
+
 class T1StarkPowerQuadMulti(QickExperimentLoop):
     """
-    T1 Experiment
+    This runs the normal T1 program, but does multiple wait times across different experiments. 
     Experimental Config:
     expt = dict(
         start: wait time sweep start [us]
@@ -789,27 +858,11 @@ class T1StarkPowerQuadMulti(QickExperimentLoop):
     def acquire(self, progress=False):
         qi = self.cfg.expt.qubit[0]
         self.param = {"label": "stark_pulse", "param": "gain", "param_type": "pulse"}
-
-        f_pts_pos = np.linspace(0, self.cfg.expt.stop_f, int(self.cfg.expt.expts / 2))
-        gain_pos = find_inverse_quad_fit(f_pts_pos, *self.cfg.expt.quad_fit_pos)
-        print(f"gain_pos: {gain_pos}, shape: {np.shape(gain_pos)}")
-        f_pts_neg = np.linspace(
-            -self.cfg.expt.stop_f, 0, int(self.cfg.expt.expts / 2)
-        )
-        gain_neg = find_inverse_quad_fit(-f_pts_neg, *self.cfg.expt.quad_fit_neg)
-        gain_pts = np.concatenate((gain_neg[0:-1], gain_pos))
-        f_pts = np.concatenate((f_pts_neg[0:-1], f_pts_pos))
-        m = len(f_pts_pos)  # Replace with the desired value of n
-        n = len(f_pts_neg) - 1  # Replace with the desired value of m
-        stark_freq = np.concatenate(
-            (
-                np.full(n, self.cfg.expt.stark_freq_neg),
-                np.full(m, self.cfg.expt.stark_freq_pos),
-            )
-        )
+        gain_pts, stark_freq_pts, f_pts = self.get_gain_pts()
+        
         x_sweep = [
-            {"var": "stark_gain", "pts": gain_pts},
-            {"var": "stark_freq", "pts": stark_freq},
+            {"var": "stark_gain", "pts": gain_pts },
+            {"var": "stark_freq", "pts": stark_freq_pts},
         ]
         self.cfg.expt.expts = 1
         labs = ["avgi", "avgq"]
@@ -863,6 +916,7 @@ class T1StarkPowerQuadMulti(QickExperimentLoop):
 
 class T1StarkPowerContTimeExperiment(QickExperiment2DSimple):
     """
+    # Currently defunct, if we bring it up to date, we'll copy t1_cont
     Stark Power Rabi Experiment
     Experimental Config:
     expt = dict(

@@ -269,7 +269,6 @@ class RabiExperiment(QickExperiment):
         
         return f"{name}_rabi_{ef}qubit{qi}"
 
-
     def _configure_pulse_params(self, params, params_def, qi):
         """Configure pulse parameters based on transition type."""
         if params["checkEF"]:
@@ -337,10 +336,7 @@ class RabiExperiment(QickExperiment):
             Acquired data
         """
         self.qubit = self.cfg.expt.qubit
-        self.param = {
-                    "label": "qubit_pulse",
-                    "param_type": "pulse",
-                }
+        self.param = {"label": "qubit_pulse", "param_type": "pulse"}
 
         if self.cfg.expt.loop:
             # Use loop-based acquisition for complex sweeps
@@ -473,7 +469,6 @@ class RabiExperiment(QickExperiment):
             data = self.data
 
         # Set up plot title and labels
-        q = self.cfg.expt.qubit[0]
         title, xlabel = self._get_plot_labels()
         caption_params = [{"index": "pi_length", "format": "$\pi$ length: {val:.3f}"}]
 

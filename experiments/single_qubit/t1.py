@@ -435,8 +435,7 @@ class T1_2D(QickExperiment2DSimple):
         # Merge default parameters with user-provided parameters
         exp_name = T1Experiment
         self.expt = exp_name(cfg_dict, qi, go=False, params=params, check_params=False)
-        params = {**params_def, **params}
-        self.cfg.expt = {**self.expt.cfg.expt, **params}
+        self.cfg.expt = {**params_def, **params}
 
         # Run the experiment if go=True
         if go:
