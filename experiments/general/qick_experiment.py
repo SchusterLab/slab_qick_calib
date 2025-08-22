@@ -97,7 +97,7 @@ class QickExperiment(Experiment):
         )
 
     def acquire(
-        self, prog_name, progress=True, get_hist=True, single=True, compact=False
+        self, prog_name, progress=True, get_hist=True, single=True, compact=False, shots=False
     ):
         """
         Acquire measurement data by running the specified quantum program.
@@ -165,6 +165,8 @@ class QickExperiment(Experiment):
         avgq = np.squeeze(iq[..., 1])
 
         # Generate histogram if requested
+        if shots: 
+            self.data["shots"]=prog.collect_shots()
         if get_hist:
             v, hist = self.make_hist(prog, single=single)
 
@@ -441,6 +443,7 @@ class QickExperiment(Experiment):
             Tuple of (bin_centers, hist) containing histogram data
         """
         # Get I/Q offset from configuration
+        # I think this is implemented incorrectly
         offset = self.soccfg._cfg["readouts"][self.cfg.expt.qubit_chan]["iq_offset"]
 
         # Collect individual measurement shots
@@ -1219,6 +1222,7 @@ class QickExperiment2DSimple(QickExperiment2D):
             prefix: Prefix for saved data files
             progress: Whether to show progress bars
             qi: Qubit index to use for the experiment
+            live_plot: Whether to enable live plotting with Visdom during acquisition
         """
         super().__init__(cfg_dict=cfg_dict, prefix=prefix, progress=progress, qi=qi)
 
@@ -1336,7 +1340,7 @@ class QickExperiment2DSimple(QickExperiment2D):
                     img = PIL.Image.open(buf).convert("RGB")
                     img = np.array(img).transpose(2, 0, 1)  # Visdom expects CHW
 
-                    self.viz.image(img, win=self.viz_window, opts={"title": "Live Resonator Channels"})
+                    self.viz.image(img, win=self.viz_window, opts={"title": "Live Channels"})
 
                 except Exception as e:
                     print(f"[Visdom] Quad plot failed at step {i}: {e}")
