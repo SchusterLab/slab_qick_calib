@@ -442,18 +442,29 @@ class QickExperiment(Experiment):
         offset = self.soccfg._cfg["readouts"][self.cfg.expt.qubit_chan]["iq_offset"]
 
         # Collect individual measurement shots
-        shots_i, shots_q = prog.collect_shots(offset=offset, single=single)
+        i_shots_vec, q_shots_vec = prog.collect_shots(offset=offset)
+        # Process each readout channel
+        if not single:
+            i_shots = []
+            q_shots = []
+        if single:
+                i_shots = i_shots_vec.flatten()  # Flatten to 1D array
+                q_shots = q_shots_vec.flatten()  # Flatten to 1D array
+        else:
+            for j in range(i_shots_vec.shape[1]):
+                i_shots.append(i_shots_vec[0][:, j, :])
+                q_shots.append(q_shots_vec[0][:, j, :])
 
         # Create histogram with 60 bins
         # sturges_bins = int(np.ceil(np.log2(len(shots_i)) + 1))
         if single:
-            hist, bin_edges = np.histogram(shots_i, bins=60, density=True)
+            hist, bin_edges = np.histogram(i_shots, bins=60, density=True)
             bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
         else:
             hist = []
             bin_centers = []
-            for i in range(len(shots_i)):
-                hist0, bin_edges0 = np.histogram(shots_i[i], bins=60, density=True)
+            for i in range(len(i_shots)):
+                hist0, bin_edges0 = np.histogram(i_shots[i], bins=60, density=True)
                 hist.append(hist0)
                 bin_centers.append((bin_edges0[:-1] + bin_edges0[1:]) / 2)
         return bin_centers, hist
@@ -599,7 +610,7 @@ class QickExperiment(Experiment):
         self.param needs to have fields set:
         - param_type: "pulse" or "time"
         - label: Label of the parameter to extract [listed in the program]
-        - param: Name of the parameter to extract (freq, gain, total_length, t)
+        - param: Name of the parameter to extract (freq, gain, total_length, t, sigma)
 
         Args:
             prog: QickProgram instance to get parameters from
@@ -635,7 +646,7 @@ class QickExperiment(Experiment):
             extra_delay=0.2,
         )
         self.cfg.expt = {**params_def, **self.cfg.expt}
-        # this number should be changed to be grabbed from soc
+
         adc = self.cfg.hw.socs.adcs[qi]
         self.cfg.expt["threshold"] = int(
             self.cfg.expt["threshold_v"]

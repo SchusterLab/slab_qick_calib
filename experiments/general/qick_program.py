@@ -403,29 +403,22 @@ class QickProgram(AveragerProgramV2):
         Returns:
             Tuple of (i_shots, q_shots) containing the I and Q quadrature data
         """
-        # Process each readout channel
-        if not single:
-            i_shots = []
-            q_shots = []
+        # Should we get multiple offsets for multiple channels?
+        iq_raw = self.get_raw()  # Get raw ADC data for all channels
+        i_shots_list = []
+        q_shots_list = []
         for i, (ch, rocfg) in enumerate(self.ro_chs.items()):
             nsamp = rocfg["length"]  # Number of samples
-            iq_raw = self.get_raw()  # Get raw ADC data
 
-            # Extract and normalize I quadrature data
-            # indices are : channel, # reps, expts,readout # in pulse, i/q
-
+            # Extract and normalize I quadrature data for this channel
             i_shots_vec = iq_raw[i][:, :, :, 0] / nsamp - offset
-            # Extract and normalize Q quadrature data
+            # Extract and normalize Q quadrature data for this channel
             q_shots_vec = iq_raw[i][:, :, :, 1] / nsamp - offset
-            if single:
-                i_shots = i_shots_vec.flatten()  # Flatten to 1D array
-                q_shots = q_shots_vec.flatten()  # Flatten to 1D array
-            else:
-                for j in range(i_shots_vec.shape[1]):
-                    i_shots.append(i_shots_vec[:, j, :])
-                    q_shots.append(q_shots_vec[:, j, :])
 
-        return i_shots, q_shots
+            i_shots_list.append(i_shots_vec)
+            q_shots_list.append(q_shots_vec)
+
+        return i_shots_list, q_shots_list
 
     def reset(self, i):
         """
