@@ -112,6 +112,8 @@ class QickExperiment(Experiment):
             prog_name: Class reference to the QickProgram to run
             progress: Whether to show progress bar during acquisition
             get_hist: Whether to generate histogram of measurement results
+            single: Whether to collect shots for the entire experiment together, or separately for each point in the sweep
+            compact: Whether to return a compact data dictionary with fewer fields
 
         Returns:
             Dictionary containing measurement data including:
@@ -213,12 +215,12 @@ class QickExperiment(Experiment):
         4. Optionally scales data based on histogram analysis
 
         Args:
-            fitfunc: Function to fit data to (e.g., exponential decay)
-            fitterfunc: Function that performs the fitting
             data: Data dictionary to analyze (uses self.data if None)
             fit: Whether to perform fitting
             use_i: Whether to use I quadrature for fitting (auto-determined if None)
             get_hist: Whether to generate histogram and scale data
+            verbose: Whether to print fit quality metrics
+            inds: Indices of fit parameters to include in error calculation (uses all if None)
             **kwargs: Additional arguments passed to the fitter
 
         Returns:
@@ -482,6 +484,25 @@ class QickExperiment(Experiment):
         disp_kwargs=None,
         **kwargs,
     ):
+        """
+        Run the quantum experiment with qubit-specific configuration.
+
+        This method configures experiment settings based on the qubit index,
+        including active reset setup and display options, then executes
+        the complete experiment workflow.
+
+        Args:
+            qi: Qubit index to use for the experiment
+            progress: Whether to show progress bar during acquisition
+            analyze: Whether to perform data analysis
+            display: Whether to display results
+            save: Whether to save data to disk
+            print: Whether to print experiment configuration instead of running
+            min_r2: Minimum R² value for acceptable fit
+            max_err: Maximum error for acceptable fit
+            disp_kwargs: Display options dictionary (e.g., plot_all, rescale)
+            **kwargs: Additional arguments passed to the run method
+        """
         # Configure active reset if enabled
         if self.cfg.expt.active_reset:
             self.configure_reset()
@@ -585,6 +606,17 @@ class QickExperiment(Experiment):
             print(f"{key}: {value}")
 
     def get_status(self, max_err=1, min_r2=0.1):
+        """
+        Determine if experiment was successful based on fit quality metrics.
+
+        This method evaluates the quality of the fit by checking the R² value
+        and fit error against specified thresholds, setting the experiment
+        status accordingly.
+
+        Args:
+            max_err: Maximum acceptable fit error threshold
+            min_r2: Minimum acceptable R² value threshold
+        """
         # Determine if experiment was successful based on fit quality
         if (
             "fit_err" in self.data
@@ -632,12 +664,29 @@ class QickExperiment(Experiment):
         return xpts
 
     def check_params(self, params_def):
+        """
+        Check for unexpected parameters in the experiment configuration.
+
+        This method compares the current experiment parameters against a 
+        dictionary of expected parameters and prints a warning if any 
+        unexpected parameters are found.
+
+        Args:
+            params_def: Dictionary of expected parameter names and their definitions
+        """
         if self._check_params:
             unexpected_params = set(self.cfg.expt.keys()) - set(params_def.keys())
             if unexpected_params:
                 print(f"Unexpected parameters found in params: {unexpected_params}")
 
     def configure_reset(self):
+        """
+        Configure active reset parameters for the experiment.
+
+        This method sets up the necessary parameters for active reset functionality,
+        including voltage thresholds, wait times, and delays. It calculates the
+        digital threshold value based on the readout configuration.
+        """
         qi = self.cfg.expt.qubit[0]
         # we may want to put these params in the config.
         params_def = dict(
@@ -655,6 +704,22 @@ class QickExperiment(Experiment):
         )
 
     def run_loop(self, prog, x_sweep, progress=True):
+        """
+        Run a loop-based acquisition with custom parameter sweep points.
+
+        This method creates a QickExperimentLoop instance to perform parameter 
+        sweeps with custom frequency or parameter points, rather than using the
+        program's built-in sweep functionality.
+
+        Args:
+            prog: QickProgram class to run for each sweep point
+            x_sweep: List of dictionaries defining the parameter sweep
+                     Each dict contains 'var' (parameter name) and 'pts' (values)
+            progress: Whether to show progress bar during acquisition
+
+        Returns:
+            Dictionary containing measurement data for all sweep points
+        """
         # Loop acquisition with custom frequency points
         cfg_dict = {
             "soc": self.soccfg,
@@ -677,7 +742,14 @@ class QickExperiment(Experiment):
 
     def get_freq(self, fit=True):
         """
-        Provide correct frequency if mixers are in use, for LO coming from QICK or external source
+        Calculate the correct frequency accounting for mixer and LO offsets.
+
+        This method computes the actual frequency by adding frequency offsets from
+        mixers and local oscillators (LO) to the swept parameter values. It handles
+        both QICK internal and external LO configurations.
+
+        Args:
+            fit: Whether to apply frequency corrections to fit results (currently unused)
         """
         freq_offset = 0
         q = self.cfg.expt.qubit[0]
