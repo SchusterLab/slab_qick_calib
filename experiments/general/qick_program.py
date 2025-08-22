@@ -94,9 +94,6 @@ class QickProgram(AveragerProgramV2):
         else:
             self.lo_ch = None  # No LO channel available
 
-
-
-
     def _initialize(self, cfg, readout="standard"):
         """
         Initialize hardware channels and configure pulses for the experiment.
@@ -390,7 +387,7 @@ class QickProgram(AveragerProgramV2):
         self.make_pulse(pulse, name)
         return pulse
 
-    def collect_shots(self, offset=0, single=True):
+    def collect_shots(self, offset=0):
         """
         Collect raw measurement data from the ADC.
 

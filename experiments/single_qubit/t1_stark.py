@@ -1,9 +1,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
 from qick import *
-import time
-from tqdm import tqdm_notebook as tqdm
-import copy
 import seaborn as sns
 from copy import deepcopy
 
@@ -14,10 +11,6 @@ from ..general.qick_experiment import (
     QickExperiment2DSimple,
     QickExperimentLoop,
 )
-
-from ..general.qick_program import QickProgram
-
-from ...exp_handling.datamanagement import AttrDict
 
 from .t1 import T1Program
 
@@ -696,7 +689,8 @@ class T1StarkPowerQuad2D(QickExperiment2DSimple):
         ylabel = "Time (s)"
         xlabel = "Frequency (MHz)"
         super().display(plot_both=plot_both, title=title, xlabel=xlabel, ylabel=ylabel)
-        
+
+
 def find_inverse_quad_fit(y, a, b, c):
     rt = []
     for yt in y:

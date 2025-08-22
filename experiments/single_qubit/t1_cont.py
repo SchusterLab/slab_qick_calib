@@ -531,9 +531,9 @@ class T1ContExperiment(QickExperiment):
         
         return smoothed, times
     
-    def _calculate_normalized_t1(self, smoothed_data: Dict[str, np.ndarray]) -> np.ndarray:
+    def _calculate_t1(self, smoothed_data: Dict[str, np.ndarray]) -> np.ndarray:
         """
-        Calculate normalized T1 decay signal.
+        Calculate T1 decay signal.
         
         Args:
             smoothed_data: Dictionary of smoothed data arrays
@@ -542,7 +542,12 @@ class T1ContExperiment(QickExperiment):
             Normalized T1 signal array
         """
         signal_difference = smoothed_data['e'] - smoothed_data['g']
-        return (smoothed_data['t1'] - smoothed_data['g']) / signal_difference
+        norm_data = (smoothed_data['t1'] - smoothed_data['g']) / signal_difference
+        # Calculate T1 from normalized decay with error handling
+        with np.errstate(divide='ignore', invalid='ignore'):
+            t1_estimates = -1 / np.log(norm_data) * self.cfg.expt.wait_time
+
+        return norm_data, t1_estimates
     
     def _plot_histogram(self, data: Dict[str, Any], qubit: int) -> None:
         """
@@ -643,7 +648,7 @@ class T1ContExperiment(QickExperiment):
         
         return fig
     
-    def _plot_t1_estimates(self, normalized_t1: np.ndarray, times: np.ndarray,
+    def _plot_t1_estimates(self, t1_estimates: np.ndarray, times: np.ndarray,
                           qubit: int, plot_config: PlotConfig) -> None:
         """
         Plot calculated T1 values over time.
@@ -656,11 +661,7 @@ class T1ContExperiment(QickExperiment):
         """
         fig, ax = plt.subplots(1, 1, figsize=plot_config.figure_size_t1)
         fig.suptitle(f"Qubit {qubit} Continuous T1 Estimate")
-        
-        # Calculate T1 from normalized decay with error handling
-        with np.errstate(divide='ignore', invalid='ignore'):
-            t1_estimates = -1 / np.log(normalized_t1) * self.cfg.expt.wait_time
-        
+
         ax.plot(times, t1_estimates, "k.-", linewidth=0.1, 
                 markersize=plot_config.marker_size, label="T1 Data")
         ax.set_xlabel("Time (s)")
@@ -770,7 +771,7 @@ class T1ContExperiment(QickExperiment):
         # Prepare and process data
         flattened_data = self._prepare_data_for_plotting(data)
         smoothed_data, times = self._smooth_data(flattened_data, plot_config)
-        normalized_t1 = self._calculate_normalized_t1(smoothed_data)
+        normalized_t1, t1_estimates = self._calculate_normalized_t1(smoothed_data)
         
         # Generate plots
         if show_hist:
@@ -782,7 +783,7 @@ class T1ContExperiment(QickExperiment):
             smoothed_data, times, normalized_t1, qubit, plot_config
         )
         
-        self._plot_t1_estimates(normalized_t1, times, qubit, plot_config)
+        self._plot_t1_estimates(t1_estimates, times, qubit, plot_config)
         self._plot_combined_data(smoothed_data, times, qubit, plot_config)
         
         # Save main figure if requested
