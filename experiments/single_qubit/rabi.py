@@ -706,6 +706,7 @@ class RabiChevronExperiment(QickExperiment2DSimple):
         ysweep = [{"pts": freqpts, "var": "freq"}]
 
         # Acquire data
+        self._get_title_and_labels()
         super().acquire(ysweep, progress=progress)
         return self.data
 
@@ -746,13 +747,13 @@ class RabiChevronExperiment(QickExperiment2DSimple):
         if data is None:
             data = self.data
 
-        title, xlabel, ylabel = self._get_title_and_labels()
+        
 
         # Display the 2D plot
         super().display(
-            title=title,
-            xlabel=xlabel,
-            ylabel=ylabel,
+            title=self.title,
+            xlabel=self.xlabel,
+            ylabel=self.ylabel,
             data=data,
             fit=fit,
             plot_both=plot_both,
@@ -769,22 +770,22 @@ class RabiChevronExperiment(QickExperiment2DSimple):
         
         if self.cfg.expt.sweep == "amp":
             sweep_type = "Amplitude"
-            xlabel = "Gain / Max Gain"
+            self.xlabel = "Gain / Max Gain"
             if self.cfg.expt.type == "gauss":
                 param = "sigma"
             else:  # const or flat_top
                 param = "length"
         else:
             sweep_type = "Length"
-            xlabel = "Pulse Length ($\mu$s)"
+            self.xlabel = "Pulse Length ($\mu$s)"
             param = "gain"
 
-        title = (
+        self.title = (
             f"{title_prefix}{sweep_type} Rabi Q{self.cfg.expt.qubit[0]} "
             f"(Pulse {param} {self.cfg.expt[param]})"
         )
-        ylabel = "Frequency (MHz)"
-        return title, xlabel, ylabel
+        self.ylabel = "Frequency (MHz)"
+        
 
     def _plot_chevron_fits(self, data):
         """Plot the chevron fit results."""

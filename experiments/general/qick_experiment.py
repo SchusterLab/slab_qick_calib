@@ -1338,7 +1338,7 @@ class QickExperiment2DSimple(QickExperiment2D):
                 # Step 2: Get axis values after we know amps_so_far is valid
                 xvals = data["xpts"][0]  # X values
                 yvals = np.array(y_sweep[0]["pts"][:amps_so_far.shape[0]])  # gain or time values
-                ylabel = "Time [hr]" if any(s["var"] == "count" for s in y_sweep) else "Gain [DAC level]"
+                
 
                 # Step 3: Plot 4 subplots
                 fig, axs = plt.subplots(2, 2, figsize=(10, 8), dpi=100)
@@ -1366,8 +1366,12 @@ class QickExperiment2DSimple(QickExperiment2D):
                 plt.colorbar(im4, ax=axs[1, 1])
 
                 for ax in axs.flat:
-                    ax.set_xlabel("Readout Frequency [MHz]")
-                    ax.set_ylabel(ylabel)
+                    if hasattr(self, "ylabel"):
+                        ax.set_ylabel(self.ylabel)
+                    
+                    if hasattr(self,'xlabel'):
+                        ax.set_xlabel(self.xlabel)
+                    
 
                 plt.tight_layout()
 

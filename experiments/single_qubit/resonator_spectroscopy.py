@@ -26,11 +26,12 @@ from qick.asm_v2 import QickSweep1D
 from scipy.signal import find_peaks
 from scipy.ndimage import gaussian_filter1d
 
+
+XLABEL = "Readout Frequency (MHz)"
 from ...exp_handling.datamanagement import AttrDict
 from ..general.qick_experiment import (
     QickExperiment,
-    QickExperiment2DSimple,
-    QickExperimentLoop,
+    QickExperiment2DSimple
 )
 from ..general.qick_program import QickProgram
 
@@ -401,19 +402,6 @@ class ResSpec(QickExperiment):
                
                 # Calculate resonator linewidth (kappa)
                 data["kappa"] = f0 * (1 / Qi + 1 / Qe) * 1e-4
-                
-                # Print detailed information if requested
-                if verbose:
-                    print(
-                        f"\nFreq with minimum transmission: {xdata[np.argmin(ydata)]}"
-                    )
-                    print("From fit:")
-                    print(f"\tf0: {f0}")
-                    print(f"\tQi: {Qi}")
-                    print(f"\tQe: {Qe}")
-                    print(f"\tQ0: {1/(1/Qi+1/Qe)}")
-                    print(f"\tkappa [MHz]: {f0*(1/Qi+1/Qe)}")
-                    print(f"\tphi (radians): {phi}")
                     
                 # Store fit results
                 data["freq_fit"] = copy.deepcopy(data["fit"])
@@ -433,9 +421,6 @@ class ResSpec(QickExperiment):
                 ]
                 data['freq_init'] = copy.deepcopy(fitparams)
                 data["fit"] = fitter.fitlor(xdata, ydata, fitparams=fitparams)
-                print("From Fit:")
-                print(f'\tf0: {data["lorentz_fit"][2]}')
-                print(f'\tkappa[MHz]: {data["lorentz_fit"][3]*2}')
                 
             # Update experiment status
             self.get_status()
@@ -447,7 +432,13 @@ class ResSpec(QickExperiment):
         data["phase_fix"] = np.unwrap(phs_fix)
         
         if peaks:
-            # Find peaks in the data (useful for coarse scans)
+            data=self.find_resonator(data, prom=prom, debug=debug)
+            
+        return data
+
+
+    def find_resonator(self, data, prom=0.1, debug=False): 
+        # Find peaks in the data (useful for coarse scans)
             xdata = data["xpts"][1:-1]
             ydata = data["amps"][1:-1]
             
@@ -490,8 +481,9 @@ class ResSpec(QickExperiment):
                 peak = coarse_peaks[i]
                 ax[0].axvline(data["freq"][peak], linestyle="--", color="0.2", linewidth=0.5)
                 ax[1].axvline(data["freq"][peak], linestyle="--", color="0.2", linewidth=0.5)
-            
-        return data
+
+            return data
+
 
     def display(
         self,
@@ -521,10 +513,7 @@ class ResSpec(QickExperiment):
             data = self.data
 
         # Determine whether to save the figure
-        if ax is not None:
-            savefig = False
-        else:
-            savefig = True
+        savefig = ax is None
 
         # Set up plot title
         qubit = self.cfg.expt.qubit[0]
@@ -540,6 +529,7 @@ class ResSpec(QickExperiment):
         # Plot amplitude data
         ax[0].set_ylabel("Amps (ADC units)")
         ax[0].plot(data["freq"][1:-1], data["amps"][1:-1], ".-")
+        ax[0].set_xlim(data["freq"][1], data["freq"][-1])
         
         # Plot fit if requested
         if fit:
@@ -586,17 +576,14 @@ class ResSpec(QickExperiment):
         # Complete the figure and save if needed
         if savefig:
             # Plot phase data
-            ax[1].set_xlabel("Readout Frequency (MHz)")
+            ax[1].set_xlabel(XLABEL)
             ax[1].set_ylabel("Phase (radians)")
             ax[1].plot(data["freq"][1:-1], data["phase_fix"], ".-")
             
             # Finalize and save
             fig.tight_layout()
             plt.show()
-            imname = self.fname.split("\\")[-1]
-            fig.savefig(
-                self.fname[0 : -len(imname)] + "images\\" + imname[0:-3] + ".png"
-            )
+            super().save_fig(fig)
         
     def update(self, cfg_file, freq=True, fast=False, verbose=True):
         """
@@ -760,6 +747,8 @@ class ResSpecPower(QickExperiment2DSimple):
         )
 
         # Acquire data
+        self.xlabel= XLABEL
+        self.ylabel = "Resonator Gain (DAC level)"
         super().acquire(y_sweep, progress=progress)
 
         return self.data
@@ -872,8 +861,8 @@ class ResSpecPower(QickExperiment2DSimple):
 
         # Set plot labels and title
         plt.title(f"Resonator Spectroscopy Power Sweep Q{qubit}")
-        plt.xlabel("Resonator Frequency [MHz]")
-        plt.ylabel("Resonator Gain [DAC level]")
+        plt.xlabel(self.xlabel)
+        plt.ylabel(self.ylabel)
         plt.colorbar(label="Normalized Amplitude")
         
         # Configure tick parameters and show plot
@@ -882,8 +871,7 @@ class ResSpecPower(QickExperiment2DSimple):
         plt.show()
         
         # Save figure
-        imname = self.fname.split("\\")[-1]
-        fig.savefig(self.fname[0 : -len(imname)] + "images\\" + imname[0:-3] + ".png")
+        super().save_fig(fig)
 
 class ResSpec2D(QickExperiment2DSimple):
     """
@@ -959,6 +947,8 @@ class ResSpec2D(QickExperiment2DSimple):
         y_sweep = [{"var": "npts", "pts": pts}]
         
         # Acquire data
+        self.xlabel = XLABEL
+        self.ylabel = "Repetition"
         super().acquire(y_sweep=y_sweep, progress=progress)
 
         # Store full data before averaging
@@ -1023,7 +1013,7 @@ class ResSpec2D(QickExperiment2DSimple):
         
         # Set title and labels
         fig.suptitle(f"Resonator Spectroscopy 2D Q{qubit}")
-        axes[0].set_xlabel("Readout Frequency (MHz)")
+        axes[0].set_xlabel(self.xlabel)
         axes[0].set_ylabel("Amplitude (ADC units)")
         
         # Plot amplitude data
@@ -1032,7 +1022,7 @@ class ResSpec2D(QickExperiment2DSimple):
         
         # Plot phase data if requested
         if plot_both:
-            axes[1].set_xlabel("Readout Frequency (MHz)")
+            axes[1].set_xlabel(self.xlabel)
             axes[1].set_ylabel("Phase (radians)")
             axes[1].plot(data["xpts"][1:-1], data["phases"][1:-1], ".-")
         
