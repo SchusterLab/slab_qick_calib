@@ -27,7 +27,8 @@ from ..general.qick_experiment import (
 from ..general.qick_program import QickProgram
 
 from ...exp_handling.datamanagement import AttrDict
-
+FITTER_FUNC = fitter.fitsin
+FIT_FUNC = fitter.sinfunc
 # ====================================================== #
 
 
@@ -237,6 +238,7 @@ class RabiExperiment(QickExperiment):
         
         # Configure pulse parameters based on transition type
         self._configure_pulse_params(params, params_def, qi)
+        params = {**params_def, **params}
         
         # Configure sweep parameters
         self._configure_sweep_params(params, params_def)
@@ -284,8 +286,9 @@ class RabiExperiment(QickExperiment):
                 params_def[key] = pulse_config[key][qi]
 
         # Handle pulse_type parameter as alias for type
-        if "pulse_type" in params:
-            params_def["type"] = params["pulse_type"]
+        
+        params_def["pulse_type"] = params_def["type"]
+        
 
     def _configure_sweep_params(self, params, params_def):
         """Configure sweep range based on sweep type."""
@@ -303,6 +306,7 @@ class RabiExperiment(QickExperiment):
                 params_def["max_gain"] = params["gain"] + gain_range
             
             # Ensure we don't exceed hardware limits
+            params = {**params_def, **params}
             params["max_gain"] = min(params["max_gain"], self.cfg.device.qubit.max_gain)
             
             # Ensure minimum gain spacing to avoid DAC resolution issues
@@ -322,7 +326,10 @@ class RabiExperiment(QickExperiment):
                 # For const and flat_top pulses, sweep length directly
                 params_def["start"] = 3 * self.soccfg.cycles2us(1) # Minimum length
                 # If sigma is given but not length, use that for the pulse length
+                params_def['length']=params_def.get('length', params_def['sigma'])
+                params = {**params_def, **params}
                 params_def["max_length"] = 2 * params["num_osc"] * params.get("length", params["sigma"])
+
 
     def acquire(self, progress=False, debug=False):
         """
@@ -425,8 +432,8 @@ class RabiExperiment(QickExperiment):
 
         if fit:
             # Fit the data to a sinusoidal function
-            self.fitterfunc = fitter.fitsin
-            self.fitfunc = fitter.sinfunc
+            self.fitterfunc = FITTER_FUNC
+            self.fitfunc = FIT_FUNC
             data = super().analyze(fit=fit, **kwargs)
 
         # Calculate π-pulse length from the fit for each data type
@@ -649,13 +656,14 @@ class RabiChevronExperiment(QickExperiment2DSimple):
         style="",
         prefix=None,
         progress=False,
+        live_plot=False,
     ):
         """Initialize the RabiChevronExperiment."""
         
         if prefix is None:
             prefix = self._get_prefix(params, qi)
 
-        super().__init__(cfg_dict=cfg_dict, prefix=prefix, progress=progress)
+        super().__init__(cfg_dict=cfg_dict, prefix=prefix, progress=progress, live_plot=live_plot)
 
         # Default parameters
         params_def = {"span_f": 20, "expts_f": 30, "sweep": "amp"}
@@ -709,7 +717,7 @@ class RabiChevronExperiment(QickExperiment2DSimple):
         if fit:
             # Fit the data to a sinusoidal function for each frequency
             data = super().analyze(
-                fitfunc=fitter.sinfunc, fitterfunc=fitter.fitsin, fit=fit, **kwargs
+                fitfunc=FIT_FUNC, fitterfunc=FITTER_FUNC, fit=fit, **kwargs
             )
 
             # Extract Rabi frequency and amplitude vs detuning

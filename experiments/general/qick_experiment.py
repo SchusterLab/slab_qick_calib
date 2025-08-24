@@ -469,8 +469,8 @@ class QickExperiment(Experiment):
             i_shots = []
             q_shots = []
         if single:
-                i_shots = i_shots_vec.flatten()  # Flatten to 1D array
-                q_shots = q_shots_vec.flatten()  # Flatten to 1D array
+                i_shots = i_shots_vec[0].flatten()  # Flatten to 1D array
+                q_shots = q_shots_vec[0].flatten()  # Flatten to 1D array
         else:
             for j in range(i_shots_vec.shape[1]):
                 i_shots.append(i_shots_vec[0][:, j, :])
@@ -1289,65 +1289,7 @@ class QickExperiment2DSimple(QickExperiment2D):
             
             # 👉 Live update heatmap plot using Visdom
             if self.live_plot:
-                try:
-                    import matplotlib.pyplot as plt
-                    from io import BytesIO
-                    import PIL.Image
-
-                    # Step 1: Safely extract data arrays
-                    amps_so_far = np.array(data.get("amps", []))
-                    phases_so_far = np.array(data.get("phases", []))
-                    avgi_so_far = np.array(data.get("avgi", []))
-                    avgq_so_far = np.array(data.get("avgq", []))
-
-                    if amps_so_far.size == 0:
-                        continue  # wait for at least one sweep to populate
-
-                    # Step 2: Get axis values after we know amps_so_far is valid
-                    xvals = data_new["xpts"]  # frequency values
-                    yvals = np.array(y_sweep[0]["pts"][:amps_so_far.shape[0]])  # gain or time values
-                    ylabel = "Time [hr]" if any(s["var"] == "count" for s in y_sweep) else "Gain [DAC level]"
-
-                    # Step 3: Plot 4 subplots
-                    fig, axs = plt.subplots(2, 2, figsize=(10, 8), dpi=100)
-
-                    im1 = axs[0, 0].imshow(amps_so_far, aspect='auto', cmap='viridis',
-                                        extent=[xvals[0], xvals[-1], yvals[-1], yvals[0]])
-                    axs[0, 0].set_title("Amps")
-                    plt.colorbar(im1, ax=axs[0, 0])
-
-                    im2 = axs[0, 1].imshow(phases_so_far, aspect='auto', cmap='twilight',
-                                        extent=[xvals[0], xvals[-1], yvals[-1], yvals[0]])
-                    axs[0, 1].set_title("Phases")
-                    plt.colorbar(im2, ax=axs[0, 1])
-
-                    im3 = axs[1, 0].imshow(avgi_so_far, aspect='auto', cmap='plasma',
-                                        extent=[xvals[0], xvals[-1], yvals[-1], yvals[0]])
-                    axs[1, 0].set_title("AvgI")
-                    plt.colorbar(im3, ax=axs[1, 0])
-
-                    im4 = axs[1, 1].imshow(avgq_so_far, aspect='auto', cmap='cividis',
-                                        extent=[xvals[0], xvals[-1], yvals[-1], yvals[0]])
-                    axs[1, 1].set_title("AvgQ")
-                    plt.colorbar(im4, ax=axs[1, 1])
-
-                    for ax in axs.flat:
-                        ax.set_xlabel("Readout Frequency [MHz]")
-                        ax.set_ylabel(ylabel)
-
-                    plt.tight_layout()
-
-                    buf = BytesIO()
-                    plt.savefig(buf, format='png')
-                    plt.close(fig)
-                    buf.seek(0)
-                    img = PIL.Image.open(buf).convert("RGB")
-                    img = np.array(img).transpose(2, 0, 1)  # Visdom expects CHW
-
-                    self.viz.image(img, win=self.viz_window, opts={"title": "Live Channels"})
-
-                except Exception as e:
-                    print(f"[Visdom] Quad plot failed at step {i}: {e}")
+                self.plot_new(data, y_sweep)
 
 
         # Set y-axis values (either time in hours or the swept parameter)
@@ -1369,6 +1311,78 @@ class QickExperiment2DSimple(QickExperiment2D):
         self.data = data
 
         return data
+    
+    def plot_new(self, data, y_sweep):
+        """
+        Update the live plot with the latest data.
+
+        This method creates a 2x2 grid of subplots showing Amps, Phases, AvgI, and AvgQ.
+        It uses Visdom to display the updated plot in real-time during acquisition.
+
+        Args:
+            data: Current data dictionary containing measurement results
+        """
+        
+        try:
+            from io import BytesIO
+            import PIL.Image
+
+            # Step 1: Safely extract data arrays
+            amps_so_far = np.array(data.get("amps", []))
+            phases_so_far = np.array(data.get("phases", []))
+            avgi_so_far = np.array(data.get("avgi", []))
+            avgq_so_far = np.array(data.get("avgq", []))
+
+            if amps_so_far.size >= 0:
+
+                # Step 2: Get axis values after we know amps_so_far is valid
+                xvals = data["xpts"][0]  # X values
+                yvals = np.array(y_sweep[0]["pts"][:amps_so_far.shape[0]])  # gain or time values
+                ylabel = "Time [hr]" if any(s["var"] == "count" for s in y_sweep) else "Gain [DAC level]"
+
+                # Step 3: Plot 4 subplots
+                fig, axs = plt.subplots(2, 2, figsize=(10, 8), dpi=100)
+
+                imshow_kwargs = dict(
+                    aspect='auto',
+                    cmap='viridis',
+                    extent=[xvals[0], xvals[-1], yvals[-1], yvals[0]]
+                )
+
+                im1 = axs[0, 0].imshow(amps_so_far, **imshow_kwargs)
+                axs[0, 0].set_title("Amps")
+                plt.colorbar(im1, ax=axs[0, 0])
+
+                im2 = axs[0, 1].imshow(phases_so_far, **imshow_kwargs)
+                axs[0, 1].set_title("Phases")
+                plt.colorbar(im2, ax=axs[0, 1])
+
+                im3 = axs[1, 0].imshow(avgi_so_far, **imshow_kwargs)
+                axs[1, 0].set_title("AvgI")
+                plt.colorbar(im3, ax=axs[1, 0])
+
+                im4 = axs[1, 1].imshow(avgq_so_far, **imshow_kwargs)
+                axs[1, 1].set_title("AvgQ")
+                plt.colorbar(im4, ax=axs[1, 1])
+
+                for ax in axs.flat:
+                    ax.set_xlabel("Readout Frequency [MHz]")
+                    ax.set_ylabel(ylabel)
+
+                plt.tight_layout()
+
+                buf = BytesIO()
+                plt.savefig(buf, format='png')
+                plt.close(fig)
+                buf.seek(0)
+                img = PIL.Image.open(buf).convert("RGB")
+                img = np.array(img).transpose(2, 0, 1)  # Visdom expects CHW
+
+                self.viz.image(img, win=self.viz_window, opts={"title": "Live Channels"})
+
+        except Exception as e:
+            print(f"[Visdom] Quad plot failed at step {i}: {e}")
+
 
 
 class QickExperiment2DSweep(QickExperiment):

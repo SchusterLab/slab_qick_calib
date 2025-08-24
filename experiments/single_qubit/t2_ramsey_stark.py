@@ -208,11 +208,11 @@ class RamseyStarkExperiment(QickExperiment):
             data = self.data
             
         # Define fitting functions for exponentially decaying oscillation
-        fitterfunc = fitter.fitdecaysin  # Fitting routine
-        fitfunc = fitter.decaysin       # Model function
+        self.fitfunc = fitter.decaysin
+        self.fitterfunc = fitter.fitdecaysin
         
         if fit:
-            super().analyze(fitfunc=fitfunc, fitterfunc=fitterfunc, data=data)
+            super().analyze(data=data)
 
         return self.data
 
@@ -312,6 +312,7 @@ class RamseyStarkPowerExperiment(QickExperiment2DSimple):
         style: str = "",
         min_r2: Optional[float] = None,
         max_err: Optional[float] = None,
+        live_plot: bool = False
     ) -> None:
         """
         Initialize 2D Ramsey Stark power experiment.
@@ -337,7 +338,8 @@ class RamseyStarkPowerExperiment(QickExperiment2DSimple):
             cfg_dict=cfg_dict, 
             qi=qi, 
             prefix=prefix, 
-            progress=progress
+            progress=progress, 
+            live_plot=live_plot
         )
 
         # Define amplitude sweep parameters
@@ -360,7 +362,7 @@ class RamseyStarkPowerExperiment(QickExperiment2DSimple):
         
         # Merge parameters and ensure gain limits are respected
         params = {**params_def, **params}
-        params.end_gain = np.min([self.cfg.device.qubit.max_gain, params.end_gain])
+        params['end_gain'] = np.min([self.cfg.device.qubit.max_gain, params['end_gain']])
         self.cfg.expt = {**self.expt.cfg.expt, **params}
 
         if go:

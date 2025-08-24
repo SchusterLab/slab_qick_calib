@@ -24,7 +24,8 @@ dependencies = [
     "h5py",
     "Pyro4",
     "python-dateutil",
-    "ipywidgets",
+    "ipywidgets==7.7.2",
+    visdom,
 ]
 classifiers = [
     "Programming Language :: Python :: 3",

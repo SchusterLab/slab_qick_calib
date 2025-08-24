@@ -771,7 +771,7 @@ class T1ContExperiment(QickExperiment):
         # Prepare and process data
         flattened_data = self._prepare_data_for_plotting(data)
         smoothed_data, times = self._smooth_data(flattened_data, plot_config)
-        normalized_t1, t1_estimates = self._calculate_normalized_t1(smoothed_data)
+        normalized_t1, t1_estimates = self._calculate_t1(smoothed_data)
         
         # Generate plots
         if show_hist:
