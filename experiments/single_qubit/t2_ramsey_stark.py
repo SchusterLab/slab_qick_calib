@@ -19,7 +19,7 @@ from qick.asm_v2 import QickSweep1D
 from ..general.qick_experiment import QickExperiment2DSimple, QickExperiment
 from .t2 import T2Program
 from ...analysis import fitting as fitter
-
+XLABEL ="Wait Time ($\\mu$s)"
 
 class RamseyStarkExperiment(QickExperiment):
     """
@@ -61,6 +61,9 @@ class RamseyStarkExperiment(QickExperiment):
         params: Dict[str, Any] = None,
         prefix: Optional[str] = None,
         progress: Optional[Any] = None,
+        display: bool = True,
+        print: bool = False, 
+        disp_kwargs: Optional[Dict[str, Any]] = None,
         style: str = "",
         min_r2: Optional[float] = None,
         max_err: Optional[float] = None,
@@ -129,10 +132,6 @@ class RamseyStarkExperiment(QickExperiment):
         for key in cfg_qub:
             params_def[key] = cfg_qub[key][qi]
             
-        # Auto-calculate optimal Ramsey frequency based on T2*
-        if params["ramsey_freq"] == "smart":
-            # Set to 1/(4*T2*) for good oscillation visibility
-            params["ramsey_freq"] = np.pi / (2 * self.cfg.device.qubit.T2r[qi])
 
         # Apply style-specific parameter modifications
         if style == "fine":
@@ -145,14 +144,20 @@ class RamseyStarkExperiment(QickExperiment):
         params["stark_freq"] = self.cfg.device.qubit.f_ge[qi] + params["df"]
         self.cfg.expt = params
 
-        # Validate parameters and configure active reset if needed
+        # Validate parameters 
         super().check_params(params_def)
-        if self.cfg.expt.active_reset:
-            super().configure_reset()
 
         # Run experiment immediately if requested
         if go:
-            super().run(min_r2=min_r2, max_err=max_err)
+            super().qubit_run(
+                qi=qi,
+                display=display,
+                progress=progress,
+                min_r2=min_r2,
+                max_err=max_err,
+                print=print,
+                disp_kwargs=disp_kwargs,
+            )
 
     def acquire(self, progress: bool = False) -> Dict[str, Any]:
         """
@@ -252,7 +257,6 @@ class RamseyStarkExperiment(QickExperiment):
             f"$T_2^*$ Ramsey Stark Q{qubit} "
             f"Freq: {df:.1f} MHz, Amp: {self.cfg.expt.stark_gain:.3f}"
         )
-        xlabel = "Wait Time ($\\mu$s)"
 
         # Define fit function for display
         fitfunc = fitter.decaysin
@@ -275,7 +279,7 @@ class RamseyStarkExperiment(QickExperiment):
             ax=ax,
             plot_all=plot_all,
             title=title,
-            xlabel=xlabel,
+            xlabel=XLABEL,
             fit=fit,
             show_hist=show_hist,
             fitfunc=fitfunc,
@@ -390,6 +394,8 @@ class RamseyStarkPowerExperiment(QickExperiment2DSimple):
 
         # Configure 2D sweep with gain as the Y-axis parameter
         y_sweep = [{"var": "stark_gain", "pts": gainpts}]
+        self.xlabel = XLABEL
+        self.ylabel = "Gain (DAC units)"
         super().acquire(y_sweep=y_sweep, progress=progress)
 
         return self.data
@@ -457,20 +463,18 @@ class RamseyStarkPowerExperiment(QickExperiment2DSimple):
 
         # Display main 2D plot
         title = f"Stark Power Ramsey Q{qubit} Freq: {df:.1f} MHz"
-        ylabel = "Gain [DAC units]"
-        xlabel = "Wait Time ($\\mu$s)"
+        
         super().display(
             plot_both=False, 
             title=title, 
-            xlabel=xlabel, 
-            ylabel=ylabel
+            xlabel=self.xlabel, 
+            ylabel=self.ylabel
         )
 
-        # Create derived analysis plot showing frequency vs. gain
-        fig, ax = plt.subplots(1, 1, figsize=(6, 4))
-        ax = [ax]
-        
         if fit:
+            # Create derived analysis plot showing frequency vs. gain
+            fig, ax = plt.subplots(1, 1, figsize=(6, 4))
+            ax = [ax]
             freq = [data["fit_avgi"][i][1] for i in range(len(data["stark_gain_pts"]))]
             ax[0].plot(data["stark_gain_pts"], freq, "o", label="Data")
 
@@ -484,7 +488,9 @@ class RamseyStarkPowerExperiment(QickExperiment2DSimple):
             ax[0].set_ylabel("Frequency [MHz]")
             ax[0].legend()
             ax[0].set_title(f"Stark Power Ramsey Q{qubit} Freq: {df:.1f} MHz")
-
+            fig.tight_layout()
+            # Save quadratic fit plot
+            super().save_fig(fig, "quad_fit")
         # Create waterfall plot of raw data traces
         fig3, ax3 = plt.subplots(1, 1, figsize=(6, 8))
         offset = 0
@@ -497,20 +503,14 @@ class RamseyStarkPowerExperiment(QickExperiment2DSimple):
             # Offset each trace for clarity
             offset += 2 * data["fit_avgi"][i][0] if fit else 0.1
 
-        ax3.set_xlabel("Wait Time ($\\mu$s)")
+        ax3.set_xlabel(self.xlabel)
         ax3.set_ylabel("Signal + Offset")
         ax3.set_title("Raw Ramsey Traces vs. Stark Gain")
         ax3.legend()
+        fig.tight_layout()
 
-        # Save quadratic fit plot
-        try:
-            imname = self.fname.split("\\")[-1]
-            fig.savefig(
-                self.fname[0:-len(imname)] + "images\\" + imname[0:-3] + "quad_fit.png"
-            )
-        except (AttributeError, IndexError):
-            pass  # Graceful handling if filename path parsing fails
-
+        super().save_fig(fig3, "raw_data_fit")
+ 
         plt.show()
 
 
@@ -613,6 +613,8 @@ class RamseyStarkFreqExperiment(QickExperiment2DSimple):
 
         # Configure 2D sweep with stark_freq as Y parameter
         y_sweep = [{"var": "stark_freq", "pts": freq_pts}]
+        self.xlabel = XLABEL
+        self.ylabel = "Frequency (MHz)"
         super().acquire(y_sweep=y_sweep, progress=progress)
 
         return self.data
@@ -677,13 +679,13 @@ class RamseyStarkFreqExperiment(QickExperiment2DSimple):
 
         # Main 2D display
         title = f"Stark Freq Ramsey Q{qubit} Gain: {gain:.3f}"
-        ylabel = "Frequency (MHz)"
-        xlabel = "Wait Time ($\\mu$s)"
+        
+        
         super().display(
             plot_both=False, 
             title=title, 
-            xlabel=xlabel, 
-            ylabel=ylabel
+            xlabel=self.xlabel, 
+            ylabel=self.ylabel
         )
 
         # Analysis plot showing frequency dependence

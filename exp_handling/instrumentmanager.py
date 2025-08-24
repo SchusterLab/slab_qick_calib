@@ -333,7 +333,10 @@ class InstrumentManager(dict):
                 ns.remove(name)
 
 
-def main(args):
+def main(args=None):
+    if args is None:
+        args = sys.argv[1:]
+    
     parser = OptionParser()
     parser.add_option(
         "-f", "--file", dest="filename", help="Config file to load", metavar="FILE"

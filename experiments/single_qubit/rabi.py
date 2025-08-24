@@ -237,11 +237,11 @@ class RabiExperiment(QickExperiment):
         params = {**params_def, **params}
         
         # Configure pulse parameters based on transition type
-        self._configure_pulse_params(params, params_def, qi)
+        params=self._configure_pulse_params(params, params_def, qi)
         params = {**params_def, **params}
         
         # Configure sweep parameters
-        self._configure_sweep_params(params, params_def)
+        params=self._configure_sweep_params(params, params_def)
         
         # Set final experiment configuration
         self.cfg.expt = {**params_def, **params}
@@ -288,6 +288,8 @@ class RabiExperiment(QickExperiment):
         # Handle pulse_type parameter as alias for type
         
         params_def["pulse_type"] = params_def["type"]
+        params = {**params_def, **params}
+        return params
         
 
     def _configure_sweep_params(self, params, params_def):
@@ -330,6 +332,8 @@ class RabiExperiment(QickExperiment):
                 params = {**params_def, **params}
                 params_def["max_length"] = 2 * params["num_osc"] * params.get("length", params["sigma"])
 
+            params = {**params_def, **params}
+        return params
 
     def acquire(self, progress=False, debug=False):
         """

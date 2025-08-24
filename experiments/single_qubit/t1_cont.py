@@ -39,10 +39,10 @@ class PlotConfig:
     """Configuration parameters for plotting continuous T1 data."""
     navg: int = 100  # Number of points to average
     marker_size: float = 0.2  # Size of plot markers
-    figure_size_raw: Tuple[float, float] = (12, 6)  # Raw data plot size
+    figure_size_raw: Tuple[float, float] = (15, 6)  # Raw data plot size
     figure_size_smoothed: Tuple[float, float] = (15, 12)  # Smoothed data plot size
     figure_size_t1: Tuple[float, float] = (15, 4)  # T1 estimate plot size
-    figure_size_combined: Tuple[float, float] = (14, 4)  # Combined plot size
+    figure_size_combined: Tuple[float, float] = (15, 4)  # Combined plot size
     figure_size_hist: Tuple[float, float] = (3, 3)  # Histogram plot size
     
     @property
@@ -567,6 +567,8 @@ class T1ContExperiment(QickExperiment):
         ax.set_ylabel("Probability")
         ax.legend()
         ax.set_title(f"Qubit {qubit} State Histogram")
+        fig.tight_layout()
+        super().save_fig(fig, "_hist")
     
     def _plot_raw_data(self, data: Dict[str, Any], qubit: int, 
                        plot_config: PlotConfig) -> None:
@@ -596,6 +598,8 @@ class T1ContExperiment(QickExperiment):
         axes[0].set_ylabel("I (ADC units)")
         axes[1].set_ylabel("Q (ADC units)")
         axes[1].set_xlabel("Shot number")
+        fig.tight_layout()
+        super().save_fig(fig, "_raw_data")
     
     def _plot_smoothed_data(self, smoothed_data: Dict[str, np.ndarray], times: np.ndarray,
                            normalized_t1: np.ndarray, qubit: int, 
@@ -645,6 +649,8 @@ class T1ContExperiment(QickExperiment):
                        alpha=0.7, label="$e^{-1}$")
         axes[3].legend()
         axes[3].set_xlabel("Time (s)")
+        fig.tight_layout()
+        super().save_fig(fig, "_smoothed_data")
         
         return fig
     
@@ -666,6 +672,8 @@ class T1ContExperiment(QickExperiment):
                 markersize=plot_config.marker_size, label="T1 Data")
         ax.set_xlabel("Time (s)")
         ax.set_ylabel("$T_1$ (μs)")
+        fig.tight_layout()
+        super().save_fig(fig, "_t1")
     
     def _plot_combined_data(self, smoothed_data: Dict[str, np.ndarray], times: np.ndarray,
                            qubit: int, plot_config: PlotConfig) -> None:
@@ -700,6 +708,8 @@ class T1ContExperiment(QickExperiment):
         ax3.plot(times, smoothed_data['g'], color='red',
                  label="Smoothed g Data", **plot_params)
         ax3.set_ylabel("Ground State (ADC units)", color='red')
+        fig.tight_layout()
+        super().save_fig(fig, "_combo")
     
     def _get_save_path(self) -> Optional[Path]:
         """
@@ -776,6 +786,7 @@ class T1ContExperiment(QickExperiment):
         # Generate plots
         if show_hist:
             self._plot_histogram(data, qubit)
+            
         
         self._plot_raw_data(data, qubit, plot_config)
         
@@ -787,8 +798,8 @@ class T1ContExperiment(QickExperiment):
         self._plot_combined_data(smoothed_data, times, qubit, plot_config)
         
         # Save main figure if requested
-        if savefig:
-            self._save_figure(main_fig)
+        # if savefig:
+        #     self._save_figure(main_fig)
         
         plt.show()
         
