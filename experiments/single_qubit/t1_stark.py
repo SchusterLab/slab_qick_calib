@@ -912,9 +912,10 @@ class T1StarkPowerQuad2D(QickExperiment2DSimple):
         if data is None:
             data = self.data
         qubit = self.cfg.expt.qubit[0]
-        df = self.cfg.expt.stark_freq - self.cfg.device.qubit.f_ge[qubit]
+        df1 = self.cfg.expt.stark_freq_pos - self.cfg.device.qubit.f_ge[qubit]
+        df2 = self.cfg.expt.stark_freq_neg - self.cfg.device.qubit.f_ge[qubit]
 
-        title = f"T1 Stark Power Q{qubit} Freq: {df}"
+        title = f"T1 Stark Power Q{qubit} Freqs: {df1}, {df2}"
         ylabel = "Time (s)"
         
         super().display(plot_both=plot_both, title=title, xlabel=self.xlabel, ylabel=ylabel)
