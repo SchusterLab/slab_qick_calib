@@ -14,6 +14,19 @@ from ...exp_handling.experiment import Experiment
 from ...analysis import fitting as fitter
 from ...calib import readout_helpers as helpers
 
+
+def get_current_time_string():
+    """
+    Get the current time as a formatted string.
+    
+    Returns:
+        bytes: Current time formatted as "YYYY-MM-DD HH:MM:SS" and encoded as ASCII bytes
+    """
+    now = datetime.now()
+    current_time = now.strftime("%Y-%m-%d %H:%M:%S")
+    current_time = current_time.encode("ascii", "replace")
+    return current_time
+
 """
 QICK Experiment Module
 
@@ -140,9 +153,7 @@ class QickExperiment(Experiment):
         # print(prog)
 
         # Record start time
-        now = datetime.now()
-        current_time = now.strftime("%Y-%m-%d %H:%M:%S")
-        current_time = current_time.encode("ascii", "replace")
+        current_time = get_current_time_string()
 
         # Run the program and acquire data
         iq_list = prog.acquire(
@@ -887,9 +898,7 @@ class QickExperimentLoop(QickExperiment):
         shots_i = []
 
         # Record start time
-        now = datetime.now()
-        current_time = now.strftime("%Y-%m-%d %H:%M:%S")
-        current_time = current_time.encode("ascii", "replace")
+        current_time = get_current_time_string()
 
         # Iterate through each point in the parameter sweep
         xvals = np.arange(len(x_sweep[0]["pts"]))
@@ -1027,9 +1036,7 @@ class QickExperiment2D(QickExperimentLoop):
         data["time"] = []
 
         # Record start time
-        now = datetime.now()
-        current_time = now.strftime("%Y-%m-%d %H:%M:%S")
-        current_time = current_time.encode("ascii", "replace")
+        current_time = get_current_time_string()
 
         # Iterate through each point in the y-axis parameter sweep
         for i in tqdm(yvals):
@@ -1265,10 +1272,7 @@ class QickExperiment2DSimple(QickExperiment2D):
 
         # Prepare for y-axis sweep
         yvals = np.arange(len(y_sweep[0]["pts"]))
-        data["time"] = []
-        now = datetime.now()
-        current_time = now.strftime("%Y-%m-%d %H:%M:%S")
-        current_time = current_time.encode("ascii", "replace")
+        data['time'] = []
 
         # Iterate through each point in the y-axis parameter sweep
         for i in tqdm(yvals):
@@ -1286,6 +1290,7 @@ class QickExperiment2DSimple(QickExperiment2D):
                     data[key] = []
                 data[key].append(data_new[key])
             
+            data["time"].append(time.time())
             # 👉 Live update heatmap plot using Visdom
             if self.live_plot:
                 self.plot_new(data, y_sweep)
@@ -1520,5 +1525,3 @@ class QickExperiment2DSweep(QickExperiment):
         # Save figure if created in this method
         if savefig:
             self.save_fig()
-            
-
