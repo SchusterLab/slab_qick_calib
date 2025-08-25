@@ -368,7 +368,7 @@ class ResSpec(QickExperiment):
         Returns:
             Analyzed data with fit parameters
         """
-        # Get frequency information
+        # Get frequency, correcting for LO
         super().get_freq(fit)
         
         if data is None:
@@ -585,7 +585,7 @@ class ResSpec(QickExperiment):
             plt.show()
             super().save_fig(fig)
         
-    def update(self, cfg_file, freq=True, fast=False, verbose=True):
+    def update(self, freq=True, fast=False, verbose=True):
         """
         Update the configuration file with the measured resonator parameters.
         
@@ -596,6 +596,7 @@ class ResSpec(QickExperiment):
             verbose: Whether to print update information
         """
         qi = self.cfg.expt.qubit[0]
+        cfg_file=self.config_file
         
         # Only update if experiment was successful
         if self.status: 

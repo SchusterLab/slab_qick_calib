@@ -64,7 +64,7 @@ def measure_params(
             cfg_dict, qi=qi, params={"span": "kappa"}, display=display, progress=False
         )
         if update:
-            rspec.update(cfg_path, freq=readout, fast=True, verbose=False)
+            rspec.update(freq=readout, fast=True, verbose=False)
 
         if not rspec.status:
             # Handle failed resonator spectroscopy
@@ -78,7 +78,7 @@ def measure_params(
             cfg_dict, qi=qi, params={"shots": 10000}, display=display, progress=False
         )
         if update:
-            shot.update(cfg_path, fast=True, verbose=False)
+            shot.update(fast=True, verbose=False)
     if not fast:
         # Step 3: Amplitude Rabi
         amp_rabi = meas.RabiExperiment(
@@ -133,7 +133,7 @@ def measure_params(
         cfg_dict, qi=qi, display=display, progress=False, params={"span": 300}
     )
     if update:
-        t1.update(cfg_path, rng_vals=[1, max_t1], verbose=False)
+        t1.update(rng_vals=[1, max_t1], verbose=False)
 
     if not t1.status:
         t1.data["new_t1_i"] = np.nan
@@ -282,7 +282,7 @@ def measure_cohere(qi, cfg_dict, update=True, display=False, max_t1=MAX_T1):
     )
     # t1 = meas.T1Experiment(cfg_dict, qi=qi, display=display, progress=False, params={'span':300})
     if update:
-        t1.update(cfg_path, rng_vals=[1, max_t1], verbose=False)
+        t1.update(rng_vals=[1, max_t1], verbose=False)
 
     if not t1.status:
         t1.data["new_t1_i"] = np.nan

@@ -564,7 +564,7 @@ class HistogramExperiment(QickExperiment):
                 self.fname[0 : -len(imname)] + "images\\" + imname[0:-3] + ".png"
             )
 
-    def update(self, cfg_file, freq=True, fast=False, verbose=True):
+    def update(self, freq=True, fast=False, verbose=True):
         """
         Update configuration file with the results of the experiment.
 
@@ -587,6 +587,7 @@ class HistogramExperiment(QickExperiment):
         None
         """
         qi = self.cfg.expt.qubit[0]
+        cfg_file=self.config_file
 
         # Update readout parameters
         config.update_readout(

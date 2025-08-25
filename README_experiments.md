@@ -716,7 +716,7 @@ t1_2q_cont = meas.T1Cont2QExperiment(cfg_dict, qi=[0, 1], params={'shots': 50000
    rspec = meas.ResSpec(cfg_dict, qi=0, params={'span': 5})
    
    # Update configuration with resonator frequency
-   rspec.update(cfg_dict['cfg_file'])
+   rspec.update()
    ```
 
 3. **Resonator Power Spectroscopy**:
@@ -750,7 +750,7 @@ t1_2q_cont = meas.T1Cont2QExperiment(cfg_dict, qi=[0, 1], params={'shots': 50000
    t1 = meas.T1Experiment(cfg_dict, qi=0)
    
    # Update T1 value
-   t1.update(cfg_path)
+   t1.update()
    ```
 
 3. **T2 Ramsey Measurement**:
@@ -779,7 +779,7 @@ t1_2q_cont = meas.T1Cont2QExperiment(cfg_dict, qi=[0, 1], params={'shots': 50000
    shot = meas.HistogramExperiment(cfg_dict, qi=0, params={'shots': 20000})
    
    # Update readout parameters
-   shot.update(cfg_path)
+   shot.update()
    ```
 
 2. **Single Shot Optimization**:
@@ -787,7 +787,7 @@ t1_2q_cont = meas.T1Cont2QExperiment(cfg_dict, qi=[0, 1], params={'shots': 50000
    shotopt = meas.SingleShotOptExperiment(cfg_dict, qi=0, params={'expts_f': 5, 'expts_gain': 7, 'expts_len': 5})
    
    # Update optimized readout parameters
-   shotopt.update(cfg_dict['cfg_file'])
+   shotopt.update()
    ```
 
 ## Parameter Reference
@@ -843,10 +843,10 @@ Many experiments provide an `update()` method to automatically update the config
 
 ```python
 # Example: Update resonator frequency after measurement
-rspec.update(cfg_path, freq=True)
+rspec.update(freq=True)
 
 # Example: Update T1 time and related parameters
-t1.update(cfg_path, rng_vals=[1, 500], first_time=True)
+t1.update(rng_vals=[1, 500], first_time=True)
 
 # Example: Update qubit frequency after Ramsey measurement
 if t2r.status:

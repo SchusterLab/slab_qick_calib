@@ -844,7 +844,7 @@ class QickExperimentLoop(QickExperiment):
 
     """
 
-    def __init__(self, cfg_dict=None, prefix="QickExp", progress=False, qi=0):
+    def __init__(self, cfg_dict=None, prefix="QickExp", progress=False, qi=0, check_params=True):
         """
         Initialize the QickExperimentLoop.
 
@@ -854,7 +854,7 @@ class QickExperimentLoop(QickExperiment):
             progress: Whether to show progress bars
             qi: Qubit index to use for the experiment
         """
-        super().__init__(cfg_dict=cfg_dict, prefix=prefix, progress=progress, qi=qi)
+        super().__init__(cfg_dict=cfg_dict, prefix=prefix, progress=progress, qi=qi, check_params=check_params)
 
     def acquire(self, prog_name, x_sweep, progress=True, hist=False):
         """

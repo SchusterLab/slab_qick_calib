@@ -20,6 +20,7 @@ These experiments are useful for:
 - Calibrating Stark shift parameters for advanced control protocols
 """
 
+from operator import neg, pos
 import matplotlib.pyplot as plt
 import numpy as np
 from qick import *
@@ -702,7 +703,7 @@ class T1StarkPowerQuadSingle(QickExperimentLoop):
         go=True,
         params={},
         prefix=None,
-        progress=True,
+        progress=False,
         display=True,
         analyze=True,
         disp_kwargs={},
@@ -710,12 +711,13 @@ class T1StarkPowerQuadSingle(QickExperimentLoop):
         style="",
         min_r2=None,
         max_err=None,
+        check_params=True,
     ):
 
         if prefix is None:
             prefix = f"t1_stark_quad_power_qubit{qi}"
 
-        super().__init__(cfg_dict=cfg_dict, prefix=prefix, progress=progress, qi=qi)
+        super().__init__(cfg_dict=cfg_dict, prefix=prefix, progress=progress, qi=qi, check_params=check_params)
 
         params_def = {
             "reps": 10 * self.reps,
@@ -730,20 +732,27 @@ class T1StarkPowerQuadSingle(QickExperimentLoop):
             "df_pos": self.cfg.stark.f[qi],
             "df_neg": self.cfg.stark.fneg[qi],
             "stop_f": 20,
+            'end_wait': 0.5,
+            'pos': True,
+            'neg': True,
         }
 
         conf = self.cfg.stark
-        params_def["quad_fit_pos"] = [conf.q[qi], conf.l[qi], conf.o[qi]]
-        params_def["quad_fit_neg"] = [conf.qneg[qi], conf.lneg[qi], conf.oneg[qi]]
+        params = {**params_def, **params}
+        if pos:
+            params_def["quad_fit_pos"] = [conf.q[qi], conf.l[qi], conf.o[qi]]
+            params_def["stark_freq_pos"] = self.cfg.device.qubit.f_ge[qi] + params["df_pos"]
+        if neg:
+            params_def["quad_fit_neg"] = [conf.qneg[qi], conf.lneg[qi], conf.oneg[qi]]
+            params_def["stark_freq_neg"] = self.cfg.device.qubit.f_ge[qi] + params["df_neg"]
+        
         params = {**params_def, **params}
         if style == "fine":
             params_def["rounds"] = params_def["rounds"] * 2
         elif style == "fast":
             params_def["expts"] = 30
 
-        params_def["stark_freq_pos"] = self.cfg.device.qubit.f_ge[qi] + params["df_pos"]
-        params_def["stark_freq_neg"] = self.cfg.device.qubit.f_ge[qi] + params["df_neg"]
-
+        params['expts2']=params["expts"]
         self.cfg.expt = {**params_def, **params}
         super().check_params(params_def)
         
@@ -762,10 +771,10 @@ class T1StarkPowerQuadSingle(QickExperimentLoop):
 
     def get_gain_pts(self, pos=True, neg=True): 
         if pos:
-            f_pts_pos = np.linspace(0, self.cfg.expt.stop_f, int(self.cfg.expt.expts / 2))
+            f_pts_pos = np.linspace(0, self.cfg.expt.stop_f, int(self.cfg.expt.expts2 / 2))
             gain_pos = find_inverse_quad_fit(f_pts_pos, *self.cfg.expt.quad_fit_pos)
         if neg:
-            f_pts_neg = np.linspace(-self.cfg.expt.stop_f, 0, int(self.cfg.expt.expts / 2))
+            f_pts_neg = np.linspace(-self.cfg.expt.stop_f, 0, int(self.cfg.expt.expts2 / 2))
             gain_neg = find_inverse_quad_fit(-f_pts_neg, *self.cfg.expt.quad_fit_neg)
         if pos and neg:
             gain_pts = np.concatenate((gain_neg[0:-1], gain_pos))
@@ -791,7 +800,7 @@ class T1StarkPowerQuadSingle(QickExperimentLoop):
 
     def acquire(self, progress=False):
         self.param = {"label": "stark_pulse", "param": "gain", "param_type": "pulse"}
-        gain_pts, stark_freq, f_pts = self.get_gain_pts()
+        gain_pts, stark_freq, f_pts = self.get_gain_pts(pos=self.cfg.expt.pos, neg=self.cfg.expt.neg)
 
         x_sweep = [
             {"var": "stark_gain", "pts": gain_pts},
@@ -882,7 +891,7 @@ class T1StarkPowerQuad2D(QickExperiment2DSimple):
         self.cfg.expt = {**params_def, **params}
         
         if go:
-            super().run(min_r2=min_r2, max_err=max_err)
+            super().run(min_r2=min_r2, max_err=max_err, progress=progress)
 
     def acquire(self, progress=False):
 

@@ -594,8 +594,9 @@ class SingleShotOptExperiment(QickExperiment):
             print("Not all elements in fid_expts are odd.")
         return do_more
 
-    def update(self, cfg_file, verbose=True):
+    def update(self, verbose=True):
         qi = self.cfg.expt.qubit[0]
+        cfg_file= self.config_file
         config.update_readout(cfg_file, "gain", self.data["gain"], qi, verbose=verbose)
         config.update_readout(
             cfg_file, "readout_length", self.data["length"], qi, verbose=verbose

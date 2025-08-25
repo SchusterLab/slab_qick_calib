@@ -8,7 +8,9 @@ from ...exp_handling.datamanagement import AttrDict
 from ..general.qick_experiment import QickExperiment, QickExperiment2DSimple
 from ..general.qick_program import QickProgram
 
-
+FIT_FUNC = fitter.expfunc
+FITTER_FUNC = fitter.fitexp
+XLABEL = "Wait Time ($\mu$s)"
 """
 T1 Experiment Module
 
@@ -281,8 +283,8 @@ class T1Experiment(QickExperiment):
 
         # Fit to exponential decay function
         # fitparams=[y-offset, amp, x-offset, decay rate]
-        self.fitfunc = fitter.expfunc  # Exponential decay function
-        self.fitterfunc = fitter.fitexp  # Fitting function for exponential decay
+        self.fitfunc = FIT_FUNC  # Exponential decay function
+        self.fitterfunc = FITTER_FUNC  # Fitting function for exponential decay
         super().analyze(data, **kwargs)
 
         # Extract T1 time from fit parameters
@@ -317,7 +319,6 @@ class T1Experiment(QickExperiment):
         # Get qubit index for plot title
         qubit = self.cfg.expt.qubit[0]
         title = f"$T_1$ Q{qubit}"
-        xlabel = "Wait Time ($\mu$s)"
 
         # Define caption parameters to display T1 fit result
         caption_params = [
@@ -330,7 +331,7 @@ class T1Experiment(QickExperiment):
             ax=ax,
             plot_all=plot_all,
             title=title,
-            xlabel=xlabel,
+            xlabel=XLABEL,
             fit=fit,
             show_hist=show_hist,
             fitfunc=self.fitfunc,
