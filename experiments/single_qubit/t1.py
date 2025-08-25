@@ -338,11 +338,11 @@ class T1Experiment(QickExperiment):
             rescale=rescale,
         )
 
-    def update(self, cfg_file, rng_vals=[1, 500], first_time=False, verbose=True):
+    def update(self, rng_vals=[1, 500], first_time=False, verbose=True):
         qi = self.cfg.expt.qubit[0]
         if self.status:
             config.update_qubit(
-                cfg_file,
+                self.config_file,
                 "T1",
                 self.data["new_t1_i"],
                 qi,
@@ -351,7 +351,7 @@ class T1Experiment(QickExperiment):
                 verbose=verbose,
             )
             config.update_readout(
-                cfg_file,
+                self.config_file,
                 "final_delay",
                 6 * self.data["new_t1_i"],
                 qi,
@@ -361,7 +361,7 @@ class T1Experiment(QickExperiment):
             )
             if first_time:
                 config.update_qubit(
-                    cfg_file,
+                    self.config_file,
                     "T2r",
                     self.data["new_t1_i"],
                     qi,
@@ -370,7 +370,7 @@ class T1Experiment(QickExperiment):
                     verbose=verbose,
                 )
                 config.update_qubit(
-                    cfg_file,
+                    self.config_file,
                     "T2e",
                     2 * self.data["new_t1_i"],
                     qi,
@@ -435,6 +435,7 @@ class T1_2D(QickExperiment2DSimple):
         # Merge default parameters with user-provided parameters
         exp_name = T1Experiment
         self.expt = exp_name(cfg_dict, qi, go=False, params=params, check_params=False)
+        params = {**self.expt.cfg.expt, **params}
         self.cfg.expt = {**params_def, **params}
 
         # Run the experiment if go=True

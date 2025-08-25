@@ -599,6 +599,8 @@ class QickExperiment(Experiment):
         if save:
             self.save_data(data)
         if display:
+            if not analyze: # If not analyzed, can't display fit
+                disp_kwargs["fit"] = False
             self.display(data, **disp_kwargs)
 
     def save_data(self, data=None, verbose=False):
@@ -1156,10 +1158,7 @@ class QickExperiment2D(QickExperimentLoop):
         y_sweep = data["ypts"]
 
         # Determine whether to save the figure
-        if ax is None:
-            savefig = True
-        else:
-            savefig = False
+        savefig = ax is None
 
         # Configure plot layout based on what to display
         if plot_both:
@@ -1346,24 +1345,26 @@ class QickExperiment2DSimple(QickExperiment2D):
                 imshow_kwargs = dict(
                     aspect='auto',
                     cmap='viridis',
-                    extent=[xvals[0], xvals[-1], yvals[-1], yvals[0]]
+                    origin='lower'  # Flip y-direction so y increases upward
                 )
-
-                im1 = axs[0, 0].imshow(amps_so_far, **imshow_kwargs)
+                # extent=[xvals[0], xvals[-1], yvals[-1], yvals[0]],
+                #im1 = axs[0, 0].imshow(amps_so_far, **imshow_kwargs)
+                im1 = axs[0,0].pcolormesh(xvals, yvals, amps_so_far, cmap="viridis", shading="auto")
                 axs[0, 0].set_title("Amps")
                 plt.colorbar(im1, ax=axs[0, 0])
 
-                im2 = axs[0, 1].imshow(phases_so_far, **imshow_kwargs)
+                im2 = axs[0, 1].pcolormesh(xvals, yvals, phases_so_far, cmap="viridis", shading="auto")
                 axs[0, 1].set_title("Phases")
                 plt.colorbar(im2, ax=axs[0, 1])
 
-                im3 = axs[1, 0].imshow(avgi_so_far, **imshow_kwargs)
+                im3 = axs[1, 0].pcolormesh(xvals, yvals, avgi_so_far, cmap="viridis", shading="auto")
                 axs[1, 0].set_title("AvgI")
                 plt.colorbar(im3, ax=axs[1, 0])
 
-                im4 = axs[1, 1].imshow(avgq_so_far, **imshow_kwargs)
+                im4 = axs[1, 1].pcolormesh(xvals, yvals, avgq_so_far, cmap="viridis", shading="auto")
                 axs[1, 1].set_title("AvgQ")
                 plt.colorbar(im4, ax=axs[1, 1])
+                fig.tight_layout()
 
                 for ax in axs.flat:
                     if hasattr(self, "ylabel"):

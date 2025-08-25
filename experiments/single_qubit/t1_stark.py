@@ -27,12 +27,16 @@ import seaborn as sns
 from copy import deepcopy
 
 from qick.asm_v2 import QickSweep1D
+
 from ...analysis import fitting as fitter
 from ..general.qick_experiment import (
     QickExperiment,
     QickExperiment2DSimple,
     QickExperimentLoop,
 )
+FIT_FUNC = fitter.expfunc
+FITTER_FUNC = fitter.fitexp
+XLABEL = "Wait Time ($\mu$s)"
 
 from .t1 import T1Program
 
@@ -66,6 +70,10 @@ class T1StarkExperiment(QickExperiment):
         params={},
         prefix=None,
         progress=None,
+        display=True,
+        analyze=True,
+        disp_kwargs={},
+        print=False,
         style="",
         min_r2=None,
         max_err=None,
@@ -124,13 +132,19 @@ class T1StarkExperiment(QickExperiment):
         self.cfg.expt = {**params_def, **params}
         super().check_params(params_def)
         
-        # Configure active reset if enabled
-        if self.cfg.expt.active_reset:
-            super().configure_reset()
             
-        # Run experiment if requested
+        # Run experiment immediately if requested
         if go:
-            super().run(min_r2=min_r2, max_err=max_err)
+            super().qubit_run(
+                qi=qi,
+                display=display,
+                progress=progress,
+                analyze=analyze,
+                min_r2=min_r2,
+                max_err=max_err,
+                print=print,
+                disp_kwargs=disp_kwargs,
+            )
 
     def acquire(self, progress=False):
         """
@@ -176,11 +190,11 @@ class T1StarkExperiment(QickExperiment):
             data = self.data
 
         # Use exponential decay function for fitting
-        fitfunc = fitter.expfunc
-        fitterfunc = fitter.fitexp
-        
+        self.fitfunc = FIT_FUNC
+        self.fitterfunc = FITTER_FUNC
+
         # Perform fitting analysis
-        super().analyze(fitfunc, fitterfunc, data)
+        super().analyze(data)
 
         return self.data
 
@@ -203,11 +217,9 @@ class T1StarkExperiment(QickExperiment):
         df = self.cfg.expt.stark_freq - self.cfg.device.qubit.f_ge[q]
         
         # Configure plot labels and title
-        xlabel = "Wait Time ($\mu$s)"
         title = f"$T_1$ Stark Q{q} Freq: {df}, Amp: {self.cfg.expt.stark_gain}"
         
         # Configure fit display parameters
-        fitfunc = fitter.expfunc
         caption_params = [
             {"index": 2, "format": "$T_1$ fit: {val:.3} $\pm$ {err:.2} $\mu$s"},
         ]
@@ -218,10 +230,10 @@ class T1StarkExperiment(QickExperiment):
             ax=ax,
             plot_all=plot_all,
             title=title,
-            xlabel=xlabel,
+            xlabel=XLABEL,
             fit=fit,
             show_hist=show_hist,
-            fitfunc=fitfunc,
+            fitfunc=self.fitfunc,
             caption_params=caption_params,
         )
 
@@ -254,6 +266,7 @@ class T1StarkPowerExperiment(QickExperiment2DSimple):
         style="",
         min_r2=None,
         max_err=None,
+        live_plot=False,
     ):
         """
         Initialize 2D T1 Stark power sweep experiment.
@@ -273,28 +286,28 @@ class T1StarkPowerExperiment(QickExperiment2DSimple):
         if prefix == "":
             prefix = f"t1_stark_amp_qubit{qi}"
 
-        super().__init__(cfg_dict=cfg_dict, qi=qi, prefix=prefix, progress=progress)
+        super().__init__(cfg_dict=cfg_dict, qi=qi, prefix=prefix, progress=progress, live_plot=live_plot)
 
         # Define default parameters for power sweep
         params_def = {
             "end_gain": self.cfg.device.qubit.max_gain,  # Maximum safe gain for device
             "expts_gain": 20,  # Number of gain points to measure
             "start_gain": 0.15,  # Starting gain (15% of max)
-            "end_wait": 0.5,  # Wait time after measurement [μs]
-            "qubit": [qi],  # Qubit index as list
         }
         
         # Create inner T1StarkExperiment without running it
         self.expt = T1StarkExperiment(
-            cfg_dict, qi=qi, go=False, params=params, style=style
+            cfg_dict, qi=qi, go=False, params=params, style=style, 
+            check_params=False
         )
         
         # Merge all parameter configurations
+        params = {**self.expt.cfg.expt, **params}
         self.cfg.expt = {**params_def, **params}
         
         # Run experiment if requested
         if go:
-            super().run(min_r2=min_r2, max_err=max_err)
+            super().run(min_r2=min_r2, max_err=max_err, progress=progress)
 
     def acquire(self, progress=False):
         """
@@ -323,6 +336,8 @@ class T1StarkPowerExperiment(QickExperiment2DSimple):
 
         # Configure 2D sweep with gain as the outer loop variable
         y_sweep = [{"var": "stark_gain", "pts": gainpts}]
+        self.ylabel = "Gain (DAC units)"
+        self.xlabel = XLABEL
         super().acquire(y_sweep=y_sweep, progress=progress)
 
         return self.data
@@ -345,8 +360,7 @@ class T1StarkPowerExperiment(QickExperiment2DSimple):
             data = self.data
 
         # Use exponential decay fitting for each gain point
-        fitterfunc = fitter.fitexp
-        super().analyze(fitfunc=fitter.expfunc, fitterfunc=fitterfunc, data=data)
+        super().analyze(fitfunc=FIT_FUNC, fitterfunc=FITTER_FUNC, data=data)
 
         # Extract fit parameters for each gain point
         num_gains = len(data["stark_gain_pts"])
@@ -390,12 +404,11 @@ class T1StarkPowerExperiment(QickExperiment2DSimple):
 
         # Configure plot titles and labels
         title = f"T1 Stark Power Q{qubit} Freq: {df}"
-        ylabel = "Gain (DAC units)"
-        xlabel = "Wait Time ($\mu$s)"
+        
         
         # Display main 2D plot using parent class method
-        super().display(plot_both=plot_both, title=title, xlabel=xlabel, ylabel=ylabel)
-        
+        super().display(plot_both=plot_both, title=title, xlabel=self.xlabel, ylabel=self.ylabel)
+
         # Plot fit parameter trends if fitting was performed
         xval = data["stark_gain_pts"]
         if fit:
@@ -421,12 +434,13 @@ class T1StarkPowerExperiment(QickExperiment2DSimple):
         for i in range(len(data["stark_gain_pts"])):
             ax.plot(data["xpts"], data["avgi"][i], linewidth=0.5)
             
-        ax.set_xlabel(xlabel)
+        ax.set_xlabel(self.xlabel)
         ax.set_ylabel("Signal (ADC units)")
         ax.set_title(f"T1 Decay Curves - {title}")
+        fig.tight_layout()
 
         # Save additional figure and display
-        super().save_fig(fig, 'individual_curves')
+        super().save_fig(fig, '_individual_curves')
         plt.show()
 
 
@@ -459,12 +473,13 @@ class T1StarkFreqExperiment(QickExperiment2DSimple):
         style="",
         min_r2=None,
         max_err=None,
+        live_plot=False,
     ):
 
         if prefix == "":
             prefix = f"t1_stark_freq_qubit{qi}"
 
-        super().__init__(cfg_dict=cfg_dict, qi=qi, prefix=prefix, progress=progress)
+        super().__init__(cfg_dict=cfg_dict, qi=qi, prefix=prefix, progress=progress, live_plot=live_plot)
 
         params_def = {
             "span_f": 200,
@@ -501,8 +516,7 @@ class T1StarkFreqExperiment(QickExperiment2DSimple):
         if data is None:
             data = self.data
 
-        fitterfunc = fitter.fitexp
-        super().analyze(fitfunc=fitter.expfunc, fitterfunc=fitterfunc, data=data)
+        super().analyze(fitfunc=FIT_FUNC, fitterfunc=FITTER_FUNC, data=data)
 
         data["offset"] = [
             data["fit_avgi"][i][0] for i in range(len(data["stark_freq_pts"]))
@@ -522,8 +536,7 @@ class T1StarkFreqExperiment(QickExperiment2DSimple):
 
         title = f"T1 Stark Freq Q{qubit} Gain: {gain}"
         ylabel = "Frequency [MHz]"
-        xlabel = "Wait Time ($\mu$s)"
-        super().display(plot_both=False, title=title, xlabel=xlabel, ylabel=ylabel)
+        super().display(plot_both=False, title=title, xlabel=XLABEL, ylabel=ylabel)
 
         fig, ax = plt.subplots(3, 1, figsize=(6, 8))
 
@@ -691,13 +704,16 @@ class T1StarkPowerQuadSingle(QickExperimentLoop):
         prefix=None,
         progress=True,
         display=True,
+        analyze=True,
+        disp_kwargs={},
+        print=False,
         style="",
         min_r2=None,
         max_err=None,
     ):
 
         if prefix is None:
-            prefix = f"t1_stark_qubit{qi}"
+            prefix = f"t1_stark_quad_power_qubit{qi}"
 
         super().__init__(cfg_dict=cfg_dict, prefix=prefix, progress=progress, qi=qi)
 
@@ -710,7 +726,6 @@ class T1StarkPowerQuadSingle(QickExperimentLoop):
             "acStark": True,
             "active_reset": False,
             "qubit": [qi],
-            "max_gain": 1,
             "qubit_chan": self.cfg.hw.soc.adcs.readout.ch[qi],
             "df_pos": self.cfg.stark.f[qi],
             "df_neg": self.cfg.stark.fneg[qi],
@@ -731,11 +746,18 @@ class T1StarkPowerQuadSingle(QickExperimentLoop):
 
         self.cfg.expt = {**params_def, **params}
         super().check_params(params_def)
-        if self.cfg.expt.active_reset:
-            super().configure_reset()
+        
+        # Run experiment immediately if requested
         if go:
-            super().run(
-                display=display, progress=progress, min_r2=min_r2, max_err=max_err
+            super().qubit_run(
+                qi=qi,
+                display=display,
+                progress=progress,
+                analyze=analyze,
+                min_r2=min_r2,
+                max_err=max_err,
+                print=print,
+                disp_kwargs=disp_kwargs,
             )
 
     def get_gain_pts(self, pos=True, neg=True): 
@@ -785,6 +807,7 @@ class T1StarkPowerQuadSingle(QickExperimentLoop):
         pass
 
     def display(self, data=None, fit=True, plot_all=False, ax=None, show_hist=False):
+        
         if data is None:
             data = self.data
 
@@ -840,12 +863,13 @@ class T1StarkPowerQuad2D(QickExperiment2DSimple):
         style="",
         min_r2=None,
         max_err=None,
+        live_plot=False,
     ):
 
         if prefix == "":
             prefix = f"t1_stark_power_quad_2d{qi}"
 
-        super().__init__(cfg_dict=cfg_dict, qi=qi, prefix=prefix, progress=progress)
+        super().__init__(cfg_dict=cfg_dict, qi=qi, prefix=prefix, progress=progress, live_plot=live_plot)
 
         params_def = {
             "sweep_pts":200
@@ -854,6 +878,7 @@ class T1StarkPowerQuad2D(QickExperiment2DSimple):
         self.expt = T1StarkPowerQuadSingle(
             cfg_dict, qi=qi, go=False, params=params, style=style, check_params=False
         )
+        params = {**self.expt.cfg.expt, **params}
         self.cfg.expt = {**params_def, **params}
         
         if go:
@@ -865,6 +890,7 @@ class T1StarkPowerQuad2D(QickExperiment2DSimple):
         y_sweep = [{"pts": sweep_pts, "var": "count"}]
 
         # Run the T1Program for each point in the 2D sweep
+        self.xlabel = "Frequency (MHz)"
         super().acquire(y_sweep, progress=progress)
 
         return self.data
@@ -873,6 +899,7 @@ class T1StarkPowerQuad2D(QickExperiment2DSimple):
         pass
 
     def display(self, data=None, fit=True, plot_both=False, **kwargs):
+        
         if data is None:
             data = self.data
         qubit = self.cfg.expt.qubit[0]
@@ -880,8 +907,8 @@ class T1StarkPowerQuad2D(QickExperiment2DSimple):
 
         title = f"T1 Stark Power Q{qubit} Freq: {df}"
         ylabel = "Time (s)"
-        xlabel = "Frequency (MHz)"
-        super().display(plot_both=plot_both, title=title, xlabel=xlabel, ylabel=ylabel)
+        
+        super().display(plot_both=plot_both, title=title, xlabel=self.xlabel, ylabel=ylabel)
 
 
 def find_inverse_quad_fit(y, a, b, c):

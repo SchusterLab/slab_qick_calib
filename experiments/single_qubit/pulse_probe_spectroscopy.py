@@ -550,6 +550,8 @@ class QubitSpecPower(QickExperiment2DSimple):
         # )
 
         # Acquire data
+        self.xlabel = XLABEL
+        self.ylabel = YLABEL
         super().acquire(ysweep, progress=progress)
 
         return self.data

@@ -18,9 +18,12 @@ from qick.asm_v2 import QickSweep1D
 
 from ..general.qick_experiment import QickExperiment2DSimple, QickExperiment
 from .t2 import T2Program
+from ...helpers import config
 from ...analysis import fitting as fitter
-XLABEL ="Wait Time ($\\mu$s)"
 
+XLABEL ="Wait Time ($\\mu$s)"
+FITTER_FUNC = fitter.fitsin
+FIT_FUNC = fitter.sinfunc
 class RamseyStarkExperiment(QickExperiment):
     """
     Ramsey interferometry experiment with AC Stark effect characterization.
@@ -62,6 +65,7 @@ class RamseyStarkExperiment(QickExperiment):
         prefix: Optional[str] = None,
         progress: Optional[Any] = None,
         display: bool = True,
+        analyze: bool = True,
         print: bool = False, 
         disp_kwargs: Optional[Dict[str, Any]] = None,
         style: str = "",
@@ -94,8 +98,7 @@ class RamseyStarkExperiment(QickExperiment):
             cfg_dict=cfg_dict, 
             prefix=prefix, 
             progress=progress, 
-            qi=qi, 
-            check_params=check_params
+            qi=qi
         )
 
         # Define default experimental parameters
@@ -104,9 +107,9 @@ class RamseyStarkExperiment(QickExperiment):
             "reps": 2 * self.reps,
             "rounds": 2 * self.rounds,
             "start": 0.1,  # Initial wait time in μs
-            "ramsey_freq": "smart",  # Will be auto-calculated if "smart"
+            "ramsey_freq": 0,  # Will be auto-calculated if "smart"
             "stark_gain": 0.5,  # Stark drive amplitude
-            "step": cfg_dict['soc'].cycles2us(1) + 0.001,  # Minimum time step
+            "step": self.soccfg.cycles2us(1),  # Minimum time step
             "df": 70,  # Frequency offset from qubit frequency in MHz
             "acStark": True,  # Enable AC Stark drive
             "checkEF": False,  # Use GE transition by default
@@ -153,6 +156,7 @@ class RamseyStarkExperiment(QickExperiment):
                 qi=qi,
                 display=display,
                 progress=progress,
+                analyze=analyze,
                 min_r2=min_r2,
                 max_err=max_err,
                 print=print,
@@ -213,8 +217,8 @@ class RamseyStarkExperiment(QickExperiment):
             data = self.data
             
         # Define fitting functions for exponentially decaying oscillation
-        self.fitfunc = fitter.decaysin
-        self.fitterfunc = fitter.fitdecaysin
+        self.fitfunc = FIT_FUNC
+        self.fitterfunc = FITTER_FUNC
         
         if fit:
             super().analyze(data=data)
@@ -259,7 +263,7 @@ class RamseyStarkExperiment(QickExperiment):
         )
 
         # Define fit function for display
-        fitfunc = fitter.decaysin
+        fitfunc = FIT_FUNC
 
         # Configure parameter display in plot caption
         caption_params = [
@@ -396,6 +400,8 @@ class RamseyStarkPowerExperiment(QickExperiment2DSimple):
         y_sweep = [{"var": "stark_gain", "pts": gainpts}]
         self.xlabel = XLABEL
         self.ylabel = "Gain (DAC units)"
+        self.fitterfunc = FITTER_FUNC
+        self.fitfunc = FIT_FUNC
         super().acquire(y_sweep=y_sweep, progress=progress)
 
         return self.data
@@ -422,10 +428,9 @@ class RamseyStarkPowerExperiment(QickExperiment2DSimple):
             data = self.data
 
         # Fit each time trace to extract oscillation parameters
-        fitterfunc = fitter.fitsin
         super().analyze(
-            fitfunc=fitter.decaysin, 
-            fitterfunc=fitterfunc, 
+            fitfunc=self.fitfunc, 
+            fitterfunc=self.fitterfunc, 
             data=data
         )
 
@@ -512,6 +517,19 @@ class RamseyStarkPowerExperiment(QickExperiment2DSimple):
         super().save_fig(fig3, "raw_data_fit")
  
         plt.show()
+
+    def update(self, neg=False, verbose=True):
+        qi = self.cfg.expt.qubit[0]
+        if neg: 
+            suffix='neg'
+        else:
+            suffix=''
+
+        config.update_stark(self.config_file, f'q{suffix}', self.data['quad_fit'][0], qi, verbose=verbose)
+        config.update_stark(self.config_file, f'l{suffix}', self.data['quad_fit'][1], qi, verbose=verbose)
+        config.update_stark(self.config_file, f'o{suffix}', self.data['quad_fit'][2], qi, verbose=verbose)
+        config.update_stark(self.config_file, f'f{suffix}', self.cfg.expt['df'], qi, verbose=verbose)
+
 
 
 class RamseyStarkFreqExperiment(QickExperiment2DSimple):

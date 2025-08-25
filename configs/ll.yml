@@ -1,7 +1,7 @@
 aliases: {soc: bf3_soc}
 device:
   qubit:
-    T1: [115.45, 150, 150, 150, 150, 150]
+    T1: [121.79, 150, 150, 150, 150, 150]
     T2e: [106.83, 300, 300, 300, 300, 300]
     T2r: [15.58, 150, 150, 150, 150, 150]
     f_ef: [3437.1538, 3800, 3800, 3800, 3800, 3800]
@@ -18,7 +18,7 @@ device:
         sigma_inc: [4, 5, 5, 5, 5, 5]
         type: [gauss, gauss, gauss, gauss, gauss, gauss]
       pi_ge:
-        gain: [0.1736, 0.15, 0.15, 0.15, 0.15, 0.15]
+        gain: [0.1715, 0.15, 0.15, 0.15, 0.15, 0.15]
         phase: [0, 0, 0, 0, 0, 0]
         sigma: [0.06, 0.1, 0.1, 0.1, 0.1, 0.1]
         sigma_inc: [4, 4, 4, 4, 5, 5]
@@ -30,7 +30,7 @@ device:
     active_reset: [false, false, false, false, false, false]
     chi: [4.1854, 0, 0, 0, 0, 0]
     fidelity: [0.5617, 0, 0, 0, 0, 0]
-    final_delay: [692.69, 900, 900, 900, 900, 900]
+    final_delay: [730.73, 900, 900, 900, 900, 900]
     frequency: [7144.7277, 7174.3805, 7000, 7246.6119, 7247.044, 7000]
     gain: [0.2851, 0.3, 0.05, 0.05, 0.05, 0.05]
     kappa: [0.1396, 2.9889, 0.5, 98.7024, 10.9174, 0.5]
@@ -67,11 +67,11 @@ hw:
         nyquist: [2, 2, 2, 2, 2, 2]
         type: [full, full, full, full, full, full]
 stark:
-  f: [null, null, null, null, null, null]
+  f: [40, null, null, null, null, null]
   fneg: [null, null, null, null, null, null]
-  l: [null, null, null, null, null, null]
+  l: [1.1213, null, null, null, null, null]
   lneg: [null, null, null, null, null, null]
-  o: [null, null, null, null, null, null]
+  o: [-0.0599, null, null, null, null, null]
   oneg: [null, null, null, null, null, null]
-  q: [null, null, null, null, null, null]
+  q: [2.4735, null, null, null, null, null]
   qneg: [null, null, null, null, null, null]
