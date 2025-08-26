@@ -41,7 +41,23 @@ class SingleShotOptExperiment(QickExperiment):
     Otherwise, it is calculated to center the sweep around the config value.
     """
 
-    def __init__(self, cfg_dict, prefix=None, progress=None, qi=0, go=True, params={}, print=False, style=''):
+    def __init__(
+        self,
+        cfg_dict,
+        qi=0,
+        go=True,
+        params={},
+        prefix=None,
+        fname=None,
+        progress=True,
+        style="",
+        disp_kwargs=None,
+        min_r2=None,
+        max_err=None,
+        display=True,
+        print=False,
+        check_params=True,
+    ):
 
         if prefix is None:
             prefix = f"single_shot_opt_qubit_{qi}"
@@ -135,7 +151,7 @@ class SingleShotOptExperiment(QickExperiment):
             self.analyze()
             self.display()
 
-    def acquire(self, progress=True):
+    def acquire(self, progress=False, debug=False):
         fpts = self.cfg.expt["start_f"] + self.cfg.expt["step_f"] * np.arange(
             self.cfg.expt["expts_f"]
         )
@@ -287,7 +303,7 @@ class SingleShotOptExperiment(QickExperiment):
             self.data[key] = np.array(self.data[key])
         return self.data
 
-    def analyze(self, data=None, low_gain=True, **kwargs):
+    def analyze(self, data=None, fit=True, low_gain=True, **kwargs):
         if data == None:
             data = self.data
         fid = data["fid"]

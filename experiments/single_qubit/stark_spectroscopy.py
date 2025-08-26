@@ -343,7 +343,7 @@ class StarkSpec(QickExperiment2DSweep):
 
         return self.data
 
-    def display(self, fit=True, ax=None, plot_all=True, **kwargs):
+    def display(self, data=None, fit=True, ax=None, plot_all=True, **kwargs):
         """
         Display the results of the Stark spectroscopy experiment.
 

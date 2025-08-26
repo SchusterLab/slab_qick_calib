@@ -315,7 +315,7 @@ class Experiment:
         """
         pass
 
-    def save_data(self, data=None):
+    def save_data(self, data=None, overwrite=True):
         """
         Save experimental data to file.
         
@@ -326,17 +326,31 @@ class Experiment:
             data (dict, optional): Dictionary containing data to save.
                                  Keys become dataset names, values are converted to numpy arrays.
                                  If None, uses self.data
+            overwrite (bool): If True, allows overwriting existing datasets.
+                            If False, appends to existing file without overwriting.
         
         Note:
             All data values are converted to numpy arrays before saving.
             This provides a general-purpose save function for dictionary-based data.
+            When overwrite=True, opens file in write mode to allow dataset deletion.
         """
         if data is None:
             data = self.data
 
-        with self.datafile() as f:
-            for k, d in data.items():
-                f.add(k, np.array(d))
+        # Use write mode if overwrite is True to allow dataset deletion/recreation
+        if overwrite:
+            with self.datafile(swmr=True) as f:  # swmr=True uses write mode
+                for k, d in data.items():
+                    f.add(k, np.array(d))
+        else:
+            # Use append mode for non-overwrite case
+            with self.datafile() as f:
+                for k, d in data.items():
+                    # Check if dataset exists and handle accordingly
+                    if k in f:
+                        print(f"Warning: Dataset '{k}' already exists. Skipping to avoid overwrite.")
+                        continue
+                    f.add(k, np.array(d))
 
     def load_data(self, f):
         """

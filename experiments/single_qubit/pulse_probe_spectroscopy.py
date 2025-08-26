@@ -556,7 +556,7 @@ class QubitSpecPower(QickExperiment2DSimple):
 
         return self.data
 
-    def analyze(self, fit=True, **kwargs):
+    def analyze(self, data=None, fit=True, **kwargs):
         """
         Analyze the acquired data.
 

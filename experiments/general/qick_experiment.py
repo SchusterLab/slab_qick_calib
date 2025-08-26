@@ -815,7 +815,7 @@ class QickExperiment(Experiment):
         )
         self.cfg.expt = {**params_def, **self.cfg.expt}
 
-        adc = self.cfg.hw.socs.adcs[qi]
+        adc = self.cfg.hw.soc.adcs.readout.ch[qi]
         self.cfg.expt["threshold"] = int(
             self.cfg.expt["threshold_v"]
             * self.cfg.device.readout.readout_length[qi]
@@ -1231,6 +1231,7 @@ class QickExperiment2DSimple(QickExperiment2DBase):
         super().__init__(cfg_dict=cfg_dict, prefix=prefix, progress=progress, qi=qi)
 
         self.live_plot = live_plot
+        self.save_interim=True
         self.viz = None
         self.viz_window = None
 
@@ -1279,6 +1280,8 @@ class QickExperiment2DSimple(QickExperiment2DBase):
             # Live update heatmap plot using Visdom
             if self.live_plot:
                 self._plot_live_update(data, y_sweep)
+            if self.save_interim: 
+                super().save_data(data=data)
 
         # Set y-axis values
         self._determine_y_axis_values(data, y_sweep)

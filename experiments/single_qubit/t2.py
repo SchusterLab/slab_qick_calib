@@ -228,6 +228,7 @@ class T2Experiment(QickExperiment):
         max_err=None,
         display=True,
         print=False,
+        check_params=True,
     ):
         """
         Initialize the T2 experiment.

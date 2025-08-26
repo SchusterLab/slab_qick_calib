@@ -746,7 +746,7 @@ class RabiChevronExperiment(QickExperiment2DSimple):
 
         return data
 
-    def display(self, data=None, fit=True, plot_both=False, **kwargs):
+    def display(self, data=None, fit=True, plot_all=False, **kwargs):
         """Display the results of the RabiChevronExperiment."""
         if data is None:
             data = self.data
@@ -760,7 +760,7 @@ class RabiChevronExperiment(QickExperiment2DSimple):
             ylabel=self.ylabel,
             data=data,
             fit=fit,
-            plot_both=plot_both,
+            plot_all=plot_all,
             **kwargs,
         )
 
