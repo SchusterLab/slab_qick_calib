@@ -248,16 +248,16 @@ class RabiExperiment(QickExperiment):
         
         # Check parameters and run if requested
         super().check_params(params_def)
-        if go:
-            super().qubit_run(
-                qi=qi,
-                display=display,
-                progress=progress,
-                min_r2=min_r2,
-                max_err=max_err,
-                print=print,
-                disp_kwargs=disp_kwargs,
-            )
+        super().qubit_run(
+            qi=qi,
+            go=go,
+            display=display,
+            progress=progress,
+            min_r2=min_r2,
+            max_err=max_err,
+            print=print,
+            disp_kwargs=disp_kwargs,
+        )
 
     def _generate_prefix(self, params, qi):
         """Generate experiment prefix based on parameters."""

@@ -151,17 +151,18 @@ class RamseyStarkExperiment(QickExperiment):
         super().check_params(params_def)
 
         # Run experiment immediately if requested
-        if go:
-            super().qubit_run(
-                qi=qi,
-                display=display,
-                progress=progress,
-                analyze=analyze,
-                min_r2=min_r2,
-                max_err=max_err,
-                print=print,
-                disp_kwargs=disp_kwargs,
-            )
+        
+        super().qubit_run(
+            qi=qi,
+            go=go,
+            display=display,
+            progress=progress,
+            analyze=analyze,
+            min_r2=min_r2,
+            max_err=max_err,
+            print=print,
+            disp_kwargs=disp_kwargs,
+        )
 
     def acquire(self, progress: bool = False) -> Dict[str, Any]:
         """
@@ -367,11 +368,13 @@ class RamseyStarkPowerExperiment(QickExperiment2DSimple):
             params=params, 
             check_params=False
         )
+
         
         # Merge parameters and ensure gain limits are respected
         params = {**params_def, **params}
         params['end_gain'] = np.min([self.cfg.device.qubit.max_gain, params['end_gain']])
         self.cfg.expt = {**self.expt.cfg.expt, **params}
+        
 
         if go:
             super().run(min_r2=min_r2, max_err=max_err, progress=progress)

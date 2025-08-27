@@ -91,7 +91,7 @@ class HistogramProgram(QickProgram):
         self.frequency = cfg.expt.frequency
         self.gain = cfg.expt.gain
         # Set phase based on whether active reset is enabled
-        if cfg.expt.active_reset:
+        if cfg.expt.active_reset or cfg.expt.remeas:
             self.phase = cfg.device.readout.phase[cfg.expt.qubit[0]]
         else:
             self.phase = 0
@@ -143,7 +143,9 @@ class HistogramProgram(QickProgram):
 
         # Perform active reset if enabled
         if cfg.expt.active_reset:
-            self.reset(7)
+            self.reset(self.cfg.expt.reset)
+        if cfg.expt.remeas:
+            self.repeated_measurement(5)
 
     def reset(self, i):
         """
@@ -155,6 +157,26 @@ class HistogramProgram(QickProgram):
             Reset index
         """
         super().reset(i)
+
+    def repeated_measurement(self, i):
+        """
+        Perform repeated measurement.
+
+        Parameters
+        ----------
+        i : int
+            Number of repetitions
+        """
+        cfg = AttrDict(self.cfg)
+        for n in range(i):
+            self.wait_auto(0.1)
+            self.delay_auto(0.3)
+            
+            self.trigger(ros=[self.adc_ch], pins=[0], t=self.trig_offset)
+            self.pulse(ch=self.res_ch, name="readout_pulse", t=0)
+            if self.lo_ch is not None:
+                self.pulse(ch=self.lo_ch, name="mix_pulse", t=0.0)
+            self.delay_auto(0.01)
 
     def collect_shots(self, offset=0):
         """
@@ -254,11 +276,13 @@ class HistogramExperiment(QickExperiment):
             frequency=self.cfg.device.readout.frequency[qi],  # Readout frequency
             gain=self.cfg.device.readout.gain[qi],  # Readout gain
             active_reset=False,  # Whether to use active reset
+            reset=7,  # Reset index
             check_e=True,  # Whether to measure excited state
             check_f=check_f,  # Whether to measure second excited state
             qubit=[qi],  # Qubit index list
             qubit_chan=self.cfg.hw.soc.adcs.readout.ch[qi],  # Readout channel
             ddr4=False,  # Whether to use DDR4 memory
+            remeas=False,  # Whether to do repeated measurement
         )
 
         # Merge default and user-provided parameters
@@ -338,8 +362,9 @@ class HistogramExperiment(QickExperiment):
         data["Qg"] = iq_list[0][0][:, 1]
 
         # Store reset data if active reset is enabled
-        if self.cfg.expt.active_reset:
+        if self.cfg.expt.active_reset or self.cfg.expt.remeas:
             data["Igr"] = iq_list[0][1:, :, 0]
+            data["Qgr"] = iq_list[0][1:, :, 1]
 
         # Get DDR4 data if enabled
         if self.cfg.expt.ddr4:
@@ -393,8 +418,9 @@ class HistogramExperiment(QickExperiment):
             irawe, qraw = histpro.collect_shots()
 
             # Store reset data if active reset is enabled
-            if self.cfg.expt.active_reset:
+            if self.cfg.expt.active_reset or self.cfg.expt.remeas:
                 data["Ier"] = iq_list[0][1:, :, 0]
+                data["Qer"] = iq_list[0][1:, :, 1]
 
         # ----------------------------------------------------------------------
         # Second excited state measurements
@@ -636,25 +662,33 @@ class HistogramExperiment(QickExperiment):
 
         # Create ground state histogram
         vg, histg = helpers.make_hist(self.data["Ig"], nbins=nbins)
-        ax[0].semilogy(vg, histg, color=BLUE, linewidth=2)
-        ax[1].semilogy(vg, histg, color=BLUE, linewidth=2)
+        max_g = np.max(histg)
+        ax[0].semilogy(vg, histg/max_g, color=BLUE, linewidth=2)
+        ax[1].semilogy(vg, histg/max_g, color=BLUE, linewidth=2)
 
         # Create color palette for reset histograms
         b = sns.color_palette("ch:s=-.2,r=.6", n_colors=len(self.data["Igr"]))
 
         # Create excited state histogram
         ve, histe = helpers.make_hist(self.data["Ie"], nbins=nbins)
-        ax[1].semilogy(ve, histe, color=RED, linewidth=2)
-
+        max_e = np.max(histe)
+        ax[1].semilogy(ve, histe/max_e, color=RED, linewidth=2)
+        fig2, ax2 = plt.subplots(2, 6, figsize=(17, 7), sharex=True, sharey=True)
         # Plot reset histograms for ground state
+        ax2[0,0].plot(self.data['Ig'], self.data['Qg'], '.', markersize=1)
+        ax2[1,0].plot(self.data['Ie'], self.data['Qe'], '.', markersize=1)
         for i in range(len(self.data["Igr"])):
+            ax2[0,i+1].plot(self.data['Igr'][i], self.data['Qgr'][i], '.', markersize=1)
+            ax2[1,i+1].plot(self.data['Ier'][i], self.data['Qer'][i], '.', markersize=1)
             v, hist = helpers.make_hist(self.data["Igr"][i], nbins=nbins)
-            ax[0].semilogy(v, hist, color=b[i], linewidth=1, label=f"{i+1}")
+            ax[0].semilogy(v, hist/max_g, color=b[i], linewidth=1, label=f"{i+1}")
 
             # Plot reset histograms for excited state
             v, hist = helpers.make_hist(self.data["Ier"][i], nbins=nbins)
-            ax[1].semilogy(v, hist, color=b[i], linewidth=1, label=f"{i+1}")
+            ax[1].semilogy(v, hist/max_e, color=b[i], linewidth=1, label=f"{i+1}")
 
+        ax[0].axhline(0.5, color="gray", linestyle="--", linewidth=1)
+        ax[1].axhline(0.5, color="gray", linestyle="--", linewidth=1)
         # Helper function to find bin index closest to a value
         def find_bin_closest_to_value(bins, value):
             return np.argmin(np.abs(bins - value))
@@ -683,6 +717,7 @@ class HistogramExperiment(QickExperiment):
         ax[0].set_title("Ground state")
         ax[1].set_title("Excited state")
         plt.show()
+        self.save_fig(fig, "_reset_performance")
 
 
 # ====================================================== #

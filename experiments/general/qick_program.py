@@ -263,7 +263,7 @@ class QickProgram(AveragerProgramV2):
         )
         # Perform active reset if enabled
         if cfg.expt.active_reset:
-            self.reset(3)  # Reset qubit state 2 times
+            self.reset(3)  # Reset qubit state 3 times
 
     def make_pulse(self, pulse, name):
         """
@@ -444,9 +444,10 @@ class QickProgram(AveragerProgramV2):
                 ro_ch=self.adc_ch,
                 component="I",  # Use I quadrature for state discrimination
                 threshold=cfg.expt.threshold,  # Threshold for state discrimination
-                test="<",  # Apply pulse if I < threshold
+                test="<",  # Skip to end of no pulse if I < threshold
                 label=f"NOPULSE{n}",  # Jump to this label if I >= threshold
             )
+            #print(cfg.expt.threshold)
 
             # Apply π pulse to flip qubit from |1⟩ to |0⟩
             self.pulse(ch=self.qubit_ch, name="pi_ge", t=0)
@@ -457,10 +458,11 @@ class QickProgram(AveragerProgramV2):
 
             # For all but the last iteration, perform another measurement
             if n < i - 1:
-                # Trigger readout
-                self.trigger(ros=[self.adc_ch], pins=[0], t=self.trig_offset)
+                
                 # Apply readout pulse
                 self.pulse(ch=self.res_ch, name="readout_pulse", t=0)
+                # Trigger readout
+                self.trigger(ros=[self.adc_ch], pins=[0], t=self.trig_offset)
                 # Apply LO pulse if available
                 if self.lo_ch is not None:
                     self.pulse(ch=self.lo_ch, name="mix_pulse", t=0.0)

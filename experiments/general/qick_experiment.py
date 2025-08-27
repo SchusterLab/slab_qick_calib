@@ -417,6 +417,7 @@ class QickExperiment(Experiment):
         """Get appropriate final delay based on active reset configuration."""
         if "active_reset" in self.cfg.expt and self.cfg.expt.active_reset:
             return self.cfg.device.readout.readout_length[self.cfg.expt.qubit[0]]
+            #return 6.6
         else:
             return self.cfg.device.readout.final_delay[self.cfg.expt.qubit[0]]
 
@@ -635,6 +636,7 @@ class QickExperiment(Experiment):
     def qubit_run(
         self,
         qi=0,
+        go=True,
         progress=True,
         analyze=True,
         display=True,
@@ -674,7 +676,7 @@ class QickExperiment(Experiment):
         # Run the experiment
         if print:
             self.print()
-        else:
+        elif go:
             self.run(
                 analyze=analyze,
                 display=display,
@@ -1362,6 +1364,53 @@ class QickExperiment2DSweep(QickExperiment2DBase):
     This class implements experiments where two parameters are swept, similar to QickExperiment2D,
     but uses a different analysis method for fitting the 2D data.
     """
+    def acquire(
+        self, prog_name, progress=True, get_hist=True, single=True, compact=False, shots=False
+    ):
+                # Set appropriate final delay based on whether active reset is enabled
+        final_delay = self._get_final_delay()
+
+        # Create program instance
+        prog = prog_name(
+            soccfg=self.soccfg,
+            final_delay=final_delay,
+            cfg=self.cfg,
+        )
+
+        # Record start time
+        current_time = get_current_time_string()
+
+        # Run the program and acquire data
+        iq_list = prog.acquire(
+            self.im[self.cfg.aliases.soc],
+            rounds=self.cfg.expt.rounds,
+            threshold=None,
+            progress=progress,
+        )
+
+        # Get swept parameter values
+        xpts = self.get_params(prog)
+
+        # Process I/Q data
+        processed_data = DataProcessor.process_iq_data(iq_list)
+
+        # Generate histogram if requested
+        hist_data = None
+        if get_hist:
+            hist_data = self.make_hist(prog, single=single)
+
+        # Collect shots if requested
+        shots_data = None
+        if shots:
+            shots_data = prog.collect_shots()
+
+        # Compile data dictionary
+        data = DataProcessor.create_data_dict(
+            xpts, processed_data, current_time, compact, hist_data, shots_data
+        )
+
+        self.data = data
+        return data
     
     def display(
         self,

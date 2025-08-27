@@ -160,7 +160,7 @@ def update_config(
     cfg = load(file_name)
 
     # Skip if value is NaN
-    if np.isnan(value):
+    if value is None or np.isnan(value):
         return cfg
 
     # Format the value

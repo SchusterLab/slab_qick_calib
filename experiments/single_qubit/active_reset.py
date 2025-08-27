@@ -112,11 +112,10 @@ class RepMeasProgram(QickProgram):
         self.gain = cfg.expt.gain
         self.phase = cfg.device.readout.phase[cfg.expt.qubit[0]]
         self.readout_length = cfg.expt.readout_length
-        super()._initialize(cfg, readout="")
+        super()._initialize(cfg)
 
         super().make_cfg_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
 
-        super().make_cfg_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ef, "pi_ef")
 
     def _body(self, cfg):
 
@@ -210,7 +209,7 @@ class MemoryExperiment(QickExperiment):
         super().__init__(cfg_dict=cfg_dict, prefix=prefix, progress=progress, qi=qi)
 
         params_def = dict(
-            shots=10000,
+            shots=1,
             reps=1,
             expts=100,
             rounds=1,
@@ -270,7 +269,6 @@ class MemoryExperiment(QickExperiment):
             iq_list = histpro.acquire(
                 self.im[self.cfg.aliases.soc],
                 threshold=None,
-                load_pulses=True,
                 progress=progress,
             )
             data["Ig"] = iq_list[0][0][:, 0]
@@ -281,11 +279,11 @@ class MemoryExperiment(QickExperiment):
             irawg, qrawg = histpro.collect_shots()
 
             rawd = [irawg[-1], qrawg[-1]]
-            # print("buffered readout:", rawd)
+            print("buffered readout:", rawd)
             dd = self.soc.read_mem(2, "dmem")
             dd_ang = np.arctan2(dd[1], dd[0]) * 180 / np.pi
-            # print("feedback readout:", dd)
-            # print("feedback angle:", dd_ang)
+            print("feedback readout:", dd)
+            #print("feedback angle:", dd_ang)
             dd_sz = np.sqrt(dd[0] ** 2 + dd[1] ** 2)
             # print("g size:", dd_sz)
             ig.append(dd[0])
@@ -304,7 +302,6 @@ class MemoryExperiment(QickExperiment):
                 iq_list = histpro.acquire(
                     self.im[self.cfg.aliases.soc],
                     threshold=None,
-                    load_pulses=True,
                     progress=progress,
                 )
 
@@ -314,9 +311,9 @@ class MemoryExperiment(QickExperiment):
                 rawd = [irawe[-1], qrawe[-1]]
                 dd = self.soc.read_mem(2, "dmem")
                 dd_ang = np.arctan2(dd[1], dd[0]) * 180 / np.pi
-                # print("buffered readout:", rawd)
-                # print("feedback readout:", dd)
-                # print("feedback angle:", dd_ang)
+                print("buffered readout:", rawd)
+                print("feedback readout:", dd)
+                #print("feedback angle:", dd_ang)
                 dd_sz = np.sqrt(dd[0] ** 2 + dd[1] ** 2)
                 ie.append(dd[0])
                 qe.append(dd[1])
@@ -428,6 +425,7 @@ class RepMeasExperiment(QickExperiment):
         check_e: whether to test the e state blob (true if unspecified)
         check_f: whether to also test the f state blob
     )
+    This just does the measurement repeatedly, not doing actual active reset. If the readout power is too high, we might expect that the ground state is being excited during the measurement. 
     """
 
     def __init__(
@@ -489,7 +487,6 @@ class RepMeasExperiment(QickExperiment):
         iq_list = histpro.acquire(
             self.im[self.cfg.aliases.soc],
             threshold=None,
-            load_pulses=True,
             progress=progress,
         )
         data["Ig"] = iq_list[0][0][:, 0]
@@ -513,7 +510,6 @@ class RepMeasExperiment(QickExperiment):
             iq_list = histpro.acquire(
                 self.im[self.cfg.aliases.soc],
                 threshold=None,
-                load_pulses=True,
                 progress=progress,
             )
 

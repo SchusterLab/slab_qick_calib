@@ -135,17 +135,18 @@ class T1StarkExperiment(QickExperiment):
         
             
         # Run experiment immediately if requested
-        if go:
-            super().qubit_run(
-                qi=qi,
-                display=display,
-                progress=progress,
-                analyze=analyze,
-                min_r2=min_r2,
-                max_err=max_err,
-                print=print,
-                disp_kwargs=disp_kwargs,
-            )
+
+        super().qubit_run(
+            qi=qi,
+            go=go,
+            display=display,
+            progress=progress,
+            analyze=analyze,
+            min_r2=min_r2,
+            max_err=max_err,
+            print=print,
+            disp_kwargs=disp_kwargs,
+        )
 
     def acquire(self, progress=False):
         """

@@ -799,7 +799,7 @@ def plot_reset(d):
 
             v, hist = make_hist(shot.data["Ier"][j, :], nbins=50)
             ax[1, j].semilogy(v, hist, label=shot.cfg.expt.threshold_v, color=b[i])
-
+            
     ax[0, 0].legend(ncol=int(np.ceil(len(d) / 6)), fontsize=8)
 
     ax[0, 0].set_title("Ground state")

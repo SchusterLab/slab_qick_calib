@@ -318,7 +318,22 @@ class StarkSpec(QickExperiment2DSweep):
         # Fit the data to a Lorentzian model
         self.fitterfunc = fitter.fitlor
         self.fitfunc = fitter.lorfunc
-        super().analyze(use_i=True)
+        ydata_lab = ["avgi"]  # Typically only fit I quadrature for speed
+
+        # Fit each row (y value) separately
+        for i, ydata in enumerate(ydata_lab):
+            data["fit_" + ydata] = []
+            data["fit_err_" + ydata] = []
+
+            # Iterate through each y value
+            for j in range(len(data["ypts"])):
+                # Fit this row to the model function
+                fit_pars, fit_err, init = self.fitterfunc(
+                    data["xpts"], data[ydata][j], fitparams=None
+                )
+                # Store fit parameters and errors
+                data["fit_" + ydata].append(fit_pars)
+                data["fit_err_" + ydata].append(fit_err)
 
         # fit frequency of resonance moving
         f = [self.data["fit_avgi"][i][2] for i in range(len(self.data["fit_avgi"]))]

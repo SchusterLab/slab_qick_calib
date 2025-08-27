@@ -277,7 +277,7 @@ class T2Experiment(QickExperiment):
 
         # Initialize parent class
         super().__init__(
-            cfg_dict=cfg_dict, prefix=prefix, fname=fname, progress=progress, qi=qi
+            cfg_dict=cfg_dict, prefix=prefix, fname=fname, progress=progress, qi=qi, check_params=check_params
         )
 
         # Define default parameters
@@ -338,22 +338,21 @@ class T2Experiment(QickExperiment):
             params_def[key] = cfg_qub[key][qi]
 
         # Final parameter merge and assignment
-        params = {**params_def, **params}
-        self.cfg.expt = params
+        self.cfg.expt = {**params_def, **params}
 
         # Check for unexpected parameters
         super().check_params(params_def)
 
-        if go:
-            super().qubit_run(
-                qi=qi,
-                display=display,
-                progress=progress,
-                min_r2=min_r2,
-                max_err=max_err,
-                print=print,
-                disp_kwargs=disp_kwargs,
-            )
+        super().qubit_run(
+            qi=qi,
+            go=go,
+            display=display,
+            progress=progress,
+            min_r2=min_r2,
+            max_err=max_err,
+            print=print,
+            disp_kwargs=disp_kwargs,
+        )
 
     def acquire(self, progress=False):
         """

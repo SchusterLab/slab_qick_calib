@@ -434,7 +434,7 @@ class SingleShotOptExperiment(QickExperiment):
                 )
 
                 ax[i].set_title(f"{labs[inds[0]]} {data[sweep_var[0]][i]:.2f}")
-            fig.savefig(folder + "images\\" + f"{imname}_raw_{k}.png")
+            fig.savefig(folder + "images\\" + f"{imname}_raw.png")
 
         elif ndims == 2:
             fig, ax = plt.subplots(npts[0], npts[1], figsize=(npts[1] * 3, npts[0] * 3))
