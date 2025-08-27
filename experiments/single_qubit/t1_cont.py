@@ -43,7 +43,7 @@ class PlotConfig:
     figure_size_smoothed: Tuple[float, float] = (15, 12)  # Smoothed data plot size
     figure_size_t1: Tuple[float, float] = (15, 4)  # T1 estimate plot size
     figure_size_combined: Tuple[float, float] = (15, 4)  # Combined plot size
-    figure_size_hist: Tuple[float, float] = (3, 3)  # Histogram plot size
+    figure_size_hist: Tuple[float, float] = (4, 4)  # Histogram plot size
     
     @property
     def nred(self) -> int:
@@ -253,6 +253,7 @@ class T1ContExperiment(QickExperiment):
         min_r2=None,
         max_err=None,
         display=True,
+        analyze=True,
     ):
         """
         Initialize the continuous T1 experiment.
@@ -315,6 +316,7 @@ class T1ContExperiment(QickExperiment):
             super().run(
                 display=display,
                 progress=progress,
+                analyze=analyze,
                 min_r2=min_r2,
                 max_err=max_err,
                 disp_kwargs=disp_kwargs,
@@ -460,8 +462,8 @@ class T1ContExperiment(QickExperiment):
             # With active reset
             n_reset = 3
             pulse_length = (
-                self.cfg.expt.readout
-                * (self.cfg.expt.n_g + n_reset * (self.cfg.expt.n_e + n_t1))
+                (self.cfg.expt.readout+0.3)
+                * (self.cfg.expt.n_g+1 + (n_reset+1) * (self.cfg.expt.n_e + n_t1))
                 + self.cfg.expt.wait_time * n_t1
                 + nexp * pi_time
             )
@@ -560,8 +562,9 @@ class T1ContExperiment(QickExperiment):
         fig, ax = plt.subplots(1, 1, figsize=PlotConfig.figure_size_hist)
         
         hist_params = {'bins': 50, 'alpha': 0.6, 'density': True}
-        ax.hist(data["avgi_e"].flatten(), label="Excited State", **hist_params)
+        
         ax.hist(data["avgi_g"].flatten(), label="Ground State", **hist_params)
+        ax.hist(data["avgi_e"].flatten(), label="Excited State", **hist_params)
         
         ax.set_xlabel("I [ADC units]")
         ax.set_ylabel("Probability")

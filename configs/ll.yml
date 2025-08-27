@@ -3,9 +3,9 @@ device:
   qubit:
     T1: [114.49, 150, 150, 150, 150, 150]
     T2e: [106.83, 300, 300, 300, 300, 300]
-    T2r: [12.83, 150, 150, 150, 150, 150]
+    T2r: [12.48, 150, 150, 150, 150, 150]
     f_ef: [3437.1538, 3800, 3800, 3800, 3800, 3800]
-    f_ge: [3585.2256, 4000, 4000, 4000, 4000, 4000]
+    f_ge: [3585.2235, 4000, 4000, 4000, 4000, 4000]
     kappa: [1.3467, 0, 0, 0, 0, 0]
     low_gain: 0.003
     max_gain: 1
@@ -18,7 +18,7 @@ device:
         sigma_inc: [4, 5, 5, 5, 5, 5]
         type: [gauss, gauss, gauss, gauss, gauss, gauss]
       pi_ge:
-        gain: [0.1664, 0.15, 0.15, 0.15, 0.15, 0.15]
+        gain: [0.1648, 0.15, 0.15, 0.15, 0.15, 0.15]
         phase: [0, 0, 0, 0, 0, 0]
         sigma: [0.06, 0.1, 0.1, 0.1, 0.1, 0.1]
         sigma_inc: [4, 4, 4, 4, 5, 5]
@@ -68,10 +68,10 @@ hw:
         type: [full, full, full, full, full, full]
 stark:
   f: [30, null, null, null, null, null]
-  fneg: [-30, null, null, null, null, null]
-  l: [-9.3263, null, null, null, null, null]
-  lneg: [0.1215, null, null, null, null, null]
-  o: [1.4678, null, null, null, null, null]
-  oneg: [0.0149, null, null, null, null, null]
-  q: [16.3945, null, null, null, null, null]
-  qneg: [3.2054, null, null, null, null, null]
+  fneg: [-25, null, null, null, null, null]
+  l: [0.7276, null, null, null, null, null]
+  lneg: [0.8705, null, null, null, null, null]
+  o: [-0.0011, null, null, null, null, null]
+  oneg: [-0.119, null, null, null, null, null]
+  q: [4.4973, null, null, null, null, null]
+  qneg: [4.7772, null, null, null, null, null]

@@ -120,10 +120,9 @@ class HistogramProcessor:
             i_shots: I quadrature measurement data
             bins: Number of histogram bins
             single: Whether to treat as single dataset or multiple
-            
-        Returns:
-            tuple: (bin_centers, hist) data
-        """
+            Returns:
+                tuple: (bin_centers, hist) data
+            """
         if single:
             hist, bin_edges = np.histogram(i_shots, bins=bins, density=True)
             bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
@@ -150,9 +149,9 @@ class HistogramProcessor:
             tuple: (i_shots, q_shots) data
         """
         i_shots_vec, q_shots_vec = prog.collect_shots(offset=offset)
-        i_shots = i_shots_vec[0].flatten()
-        q_shots = q_shots_vec[0].flatten()
-        return i_shots, q_shots
+        # i_shots = i_shots_vec[0].flatten()
+        # q_shots = q_shots_vec[0].flatten()
+        return i_shots_vec, q_shots_vec
 
 
 class DisplayManager:
@@ -370,6 +369,7 @@ class QickExperiment(Experiment):
         """
         # Set appropriate final delay based on whether active reset is enabled
         final_delay = self._get_final_delay()
+        #print(f"Final delay: {final_delay}")
 
         # Create program instance
         prog = prog_name(
@@ -416,8 +416,8 @@ class QickExperiment(Experiment):
     def _get_final_delay(self):
         """Get appropriate final delay based on active reset configuration."""
         if "active_reset" in self.cfg.expt and self.cfg.expt.active_reset:
-            return self.cfg.device.readout.readout_length[self.cfg.expt.qubit[0]]
-            #return 6.6
+            return self.cfg.device.readout.readout_length[self.cfg.expt.qubit[0]]+3
+            #return 10
         else:
             return self.cfg.device.readout.final_delay[self.cfg.expt.qubit[0]]
 
@@ -622,14 +622,17 @@ class QickExperiment(Experiment):
             Tuple of (bin_centers, hist) containing histogram data
         """
         offset = self.soccfg._cfg["readouts"][self.cfg.expt.qubit_chan]["iq_offset"]
-        i_shots, q_shots = HistogramProcessor.collect_shots_from_prog(prog, offset)
+        i_shots_vec, q_shots_vec = prog.collect_shots(offset=offset)
         
-        if not single:
+        # q_shots = q_shots_vec[0].flatten()
+        if single:
+            i_shots = i_shots_vec[0][:,:,0].flatten()
+        else:
             # Handle multiple sweep points separately
             i_shots_vec, q_shots_vec = prog.collect_shots(offset=offset)
             i_shots = []
             for j in range(i_shots_vec.shape[1]):
-                i_shots.append(i_shots_vec[0][:, j, :])
+                i_shots.append(i_shots_vec[0][0, j, :])
         
         return HistogramProcessor.generate_histogram(i_shots, single=single)
 
@@ -928,6 +931,7 @@ class QickExperimentLoop(QickExperiment):
             Dictionary containing measurement data for all sweep points
         """
         final_delay = self._get_final_delay()
+        print(final_delay)
 
         # Initialize data dictionary
         data = {"xpts": [], "avgi": [], "avgq": [], "amps": [], "phases": []}

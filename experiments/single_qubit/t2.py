@@ -63,6 +63,9 @@ class T2Program(QickProgram):
         """
         cfg = AttrDict(self.cfg)
 
+        # Create loop for sweeping wait time
+        self.add_loop("wait_loop", cfg.expt.expts)
+
         # Initialize standard readout
         super()._initialize(cfg, readout="standard")
 
@@ -85,8 +88,7 @@ class T2Program(QickProgram):
         pulse["phase"] = cfg.expt.wait_time * 360 * cfg.expt.ramsey_freq
         super().make_pulse(pulse, "pi2_read")
 
-        # Create loop for sweeping wait time
-        self.add_loop("wait_loop", cfg.expt.expts)
+        
 
         # For AC Stark shift in Ramsey experiments
         if hasattr(cfg.expt, "acStark") and cfg.expt.acStark:
@@ -118,8 +120,8 @@ class T2Program(QickProgram):
             # Create π pulse for EF transition check
             super().make_cfg_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ef, "pi_ef")
 
-        for i in range(1000):
-            self.nop()
+        # for i in range(1000):
+        #     self.nop()
 
     def _body(self, cfg):
         """
