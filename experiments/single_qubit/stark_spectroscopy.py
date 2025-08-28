@@ -348,7 +348,7 @@ class StarkSpec(QickExperiment2DSweep):
             )
             ng2 = popt[0] / 2 * Delta
             self.ng2 = ng2
-            print(f"ng2: {ng2}")
+            print(f"ng2: {ng2}") # This is n photons * g**2 
             self.f = f
         except:
             pass

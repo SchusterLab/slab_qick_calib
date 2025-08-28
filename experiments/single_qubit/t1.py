@@ -72,8 +72,9 @@ class T1Program(QickProgram):
         # If AC Stark shift is enabled, create a constant pulse to apply during wait time
         if cfg.expt.acStark:
             pulse = {
-                "sigma": cfg.expt.wait_time,  # Duration of the pulse
-                "sigma_inc": 0,  # No increment in duration
+                "length": cfg.expt.wait_time,  # Duration of the pulse
+                "ramp_sigma": 0.035,  # No increment in duration
+                "ramp_sigma_inc":4,
                 "freq": cfg.expt.stark_freq,  # Frequency of the AC Stark pulse
                 "gain": cfg.expt.stark_gain,  # Amplitude of the AC Stark pulse
                 "phase": 0,  # Phase of the pulse

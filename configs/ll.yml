@@ -1,11 +1,11 @@
 aliases: {soc: bf3_soc}
 device:
   qubit:
-    T1: [114.49, 150, 150, 150, 150, 150]
-    T2e: [106.83, 300, 300, 300, 300, 300]
-    T2r: [12.48, 150, 150, 150, 150, 150]
+    T1: [119.69, 150, 150, 150, 150, 150]
+    T2e: [68.0, 300, 300, 300, 300, 300]
+    T2r: [12.64, 150, 150, 150, 150, 150]
     f_ef: [3437.1538, 3800, 3800, 3800, 3800, 3800]
-    f_ge: [3585.2235, 4000, 4000, 4000, 4000, 4000]
+    f_ge: [3585.2226, 4000, 4000, 4000, 4000, 4000]
     kappa: [1.3467, 0, 0, 0, 0, 0]
     low_gain: 0.003
     max_gain: 1
@@ -18,7 +18,7 @@ device:
         sigma_inc: [4, 5, 5, 5, 5, 5]
         type: [gauss, gauss, gauss, gauss, gauss, gauss]
       pi_ge:
-        gain: [0.1648, 0.15, 0.15, 0.15, 0.15, 0.15]
+        gain: [0.1642, 0.15, 0.15, 0.15, 0.15, 0.15]
         phase: [0, 0, 0, 0, 0, 0]
         sigma: [0.06, 0.1, 0.1, 0.1, 0.1, 0.1]
         sigma_inc: [4, 4, 4, 4, 5, 5]
@@ -28,17 +28,17 @@ device:
     tuned_up: [true, false, false, false, false, false]
   readout:
     active_reset: [true, false, false, false, false, false]
-    chi: [-0.2556, 0, 0, 0, 0, 0]
-    fidelity: [0.8498, 0, 0, 0, 0, 0]
-    final_delay: [686.94, 900, 900, 900, 900, 900]
-    frequency: [7144.8433, 7174.3805, 7000, 7246.6119, 7247.044, 7000]
+    chi: [-0.2236, 0, 0, 0, 0, 0]
+    fidelity: [0.907, 0, 0, 0, 0, 0]
+    final_delay: [718.13, 900, 900, 900, 900, 900]
+    frequency: [7144.8479, 7174.3805, 7000, 7246.6119, 7247.044, 7000]
     gain: [0.078, 0.3, 0.05, 0.05, 0.05, 0.05]
-    kappa: [0.1313, 2.9889, 0.5, 98.7024, 10.9174, 0.5]
+    kappa: [0.1345, 2.9889, 0.5, 98.7024, 10.9174, 0.5]
     lamb: [0.6703, 0, 0, 0, 0, 0]
     max_gain: 1
-    phase: [146.787, 0, 0, 0, 0, 0]
-    qe: [11.0167, 0.2948, 0, 0.0073, 0.0664, 0]
-    qi: [10.7595, 1.2865, 0, 8291.1746, 351624.1232, 0]
+    phase: [79.9302, 0, 0, 0, 0, 0]
+    qe: [10.5045, 0.2948, 0, 0.0073, 0.0664, 0]
+    qi: [10.7448, 1.2865, 0, 8291.1746, 351624.1232, 0]
     readout_length: [9.375, 5, 5, 5, 5, 5]
     reps: [1.2622, 1, 1, 1, 1, 1]
     reps_base: 150
@@ -47,9 +47,9 @@ device:
     reset_g: [0, 0, 0, 0, 0, 0]
     rounds: [1, 1, 1, 1, 1, 1]
     rounds_base: 1
-    sigma: [0.5706, 0, 0, 0, 0, 0]
-    threshold: [2.6134, 10, 10, 10, 10, 10]
-    tm: [0.1382, 0, 0, 0, 0, 0]
+    sigma: [0.5581, 0, 0, 0, 0, 0]
+    threshold: [3.0899, 10, 10, 10, 10, 10]
+    tm: [0.1104, 0, 0, 0, 0, 0]
     trig_offset: [0.4545, 0.65, 0.65, 0.45, 0.45, 0.45]
 hw:
   soc:
@@ -67,11 +67,11 @@ hw:
         nyquist: [2, 2, 2, 2, 2, 2]
         type: [full, full, full, full, full, full]
 stark:
-  f: [30, null, null, null, null, null]
-  fneg: [-25, null, null, null, null, null]
-  l: [0.7276, null, null, null, null, null]
-  lneg: [0.8705, null, null, null, null, null]
-  o: [-0.0011, null, null, null, null, null]
-  oneg: [-0.119, null, null, null, null, null]
-  q: [4.4973, null, null, null, null, null]
-  qneg: [4.7772, null, null, null, null, null]
+  f: [45, null, null, null, null, null]
+  fneg: [-35, null, null, null, null, null]
+  l: [0.3757, null, null, null, null, null]
+  lneg: [0.2454, null, null, null, null, null]
+  o: [0.0229, null, null, null, null, null]
+  oneg: [-0.0407, null, null, null, null, null]
+  q: [2.5208, null, null, null, null, null]
+  qneg: [2.7763, null, null, null, null, null]

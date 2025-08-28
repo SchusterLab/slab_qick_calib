@@ -37,7 +37,7 @@ from ...analysis import time_series
 @dataclass
 class PlotConfig:
     """Configuration parameters for plotting continuous T1 data."""
-    navg: int = 100  # Number of points to average
+    navg: int = 10  # Number of points to average, in addition to those within a single experiment. 
     marker_size: float = 0.2  # Size of plot markers
     figure_size_raw: Tuple[float, float] = (15, 6)  # Raw data plot size
     figure_size_smoothed: Tuple[float, float] = (15, 12)  # Smoothed data plot size
@@ -48,7 +48,7 @@ class PlotConfig:
     @property
     def nred(self) -> int:
         """Reduction factor for plotting."""
-        return int(np.floor(self.navg / 10))
+        return int(np.floor(self.navg ))
 
 
 class T1ContProgram(QickProgram):
@@ -675,7 +675,6 @@ class T1ContExperiment(QickExperiment):
                 markersize=plot_config.marker_size, label="T1 Data")
         ax.set_xlabel("Time (s)")
         ax.set_ylabel("$T_1$ (μs)")
-        fig.tight_layout()
         super().save_fig(fig, "_t1")
     
     def _plot_combined_data(self, smoothed_data: Dict[str, np.ndarray], times: np.ndarray,
@@ -783,8 +782,10 @@ class T1ContExperiment(QickExperiment):
         
         # Prepare and process data
         flattened_data = self._prepare_data_for_plotting(data)
-        smoothed_data, times = self._smooth_data(flattened_data, plot_config)
-        normalized_t1, t1_estimates = self._calculate_t1(smoothed_data)
+        self.data['smoothed_data'], self.data['times'] = self._smooth_data(flattened_data, plot_config)
+        self.data['normalized_t1'], self.data['t1_estimates'] = self._calculate_t1(self.data['smoothed_data'])
+
+        
         
         # Generate plots
         if show_hist:
@@ -794,12 +795,12 @@ class T1ContExperiment(QickExperiment):
         self._plot_raw_data(data, qubit, plot_config)
         
         main_fig = self._plot_smoothed_data(
-            smoothed_data, times, normalized_t1, qubit, plot_config
+            self.data['smoothed_data'], self.data['times'], self.data['normalized_t1'], qubit, plot_config
         )
-        
-        self._plot_t1_estimates(t1_estimates, times, qubit, plot_config)
-        self._plot_combined_data(smoothed_data, times, qubit, plot_config)
-        
+
+        self._plot_t1_estimates(self.data['t1_estimates'], self.data['times'], qubit, plot_config)
+        self._plot_combined_data(self.data['smoothed_data'], self.data['times'], qubit, plot_config)
+
         # Save main figure if requested
         # if savefig:
         #     self._save_figure(main_fig)
@@ -823,9 +824,4 @@ class T1ContExperiment(QickExperiment):
             t1_data, fs=sampling_rate, nperseg=nperseg
         )
 
-    def psd(self):
-        t1_data = self.data["avgi_t1"].transpose().flatten()
 
-        time_series.analyze_qubit_psd(
-            t1_data, fs=1 / self.pulse_length * self.cfg.expt.n_t1, nperseg=2048
-        )

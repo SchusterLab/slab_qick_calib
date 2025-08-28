@@ -132,10 +132,8 @@ class T1StarkExperiment(QickExperiment):
         # Finalize experiment configuration
         self.cfg.expt = {**params_def, **params}
         super().check_params(params_def)
-        
             
         # Run experiment immediately if requested
-
         super().qubit_run(
             qi=qi,
             go=go,
@@ -704,7 +702,7 @@ class T1StarkPowerQuadSingle(QickExperimentLoop):
         go=True,
         params={},
         prefix=None,
-        progress=False,
+        progress=True,
         display=True,
         analyze=True,
         disp_kwargs={},
@@ -727,7 +725,7 @@ class T1StarkPowerQuadSingle(QickExperimentLoop):
             "start": 1,
             "wait_time": self.cfg.device.qubit.T1[qi],
             "acStark": True,
-            "active_reset": False,
+            "active_reset": self.cfg.device.readout.active_reset[qi],
             "qubit": [qi],
             "qubit_chan": self.cfg.hw.soc.adcs.readout.ch[qi],
             "df_pos": self.cfg.stark.f[qi],
@@ -758,9 +756,9 @@ class T1StarkPowerQuadSingle(QickExperimentLoop):
         super().check_params(params_def)
         
         # Run experiment immediately if requested
-        if go:
-            super().qubit_run(
+        super().qubit_run(
                 qi=qi,
+                go=go,
                 display=display,
                 progress=progress,
                 analyze=analyze,
