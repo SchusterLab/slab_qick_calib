@@ -143,7 +143,7 @@ class HistogramProgram(QickProgram):
 
         # Perform active reset if enabled
         if cfg.expt.active_reset:
-            self.reset(self.cfg.expt.reset)
+            self.reset(cfg.expt.reset)
         if cfg.expt.remeas:
             self.repeated_measurement(5)
 
@@ -673,7 +673,7 @@ class HistogramExperiment(QickExperiment):
         ve, histe = helpers.make_hist(self.data["Ie"], nbins=nbins)
         max_e = np.max(histe)
         ax[1].semilogy(ve, histe/max_e, color=RED, linewidth=2)
-        fig2, ax2 = plt.subplots(2, 6, figsize=(17, 7), sharex=True, sharey=True)
+        fig2, ax2 = plt.subplots(2, len(self.data["Igr"])+1, figsize=(17, 7), sharex=True, sharey=True)
         # Plot reset histograms for ground state
         ax2[0,0].plot(self.data['Ig'], self.data['Qg'], '.', markersize=1)
         ax2[1,0].plot(self.data['Ie'], self.data['Qe'], '.', markersize=1)

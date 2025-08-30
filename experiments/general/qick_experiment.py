@@ -931,7 +931,6 @@ class QickExperimentLoop(QickExperiment):
             Dictionary containing measurement data for all sweep points
         """
         final_delay = self._get_final_delay()
-        print(final_delay)
 
         # Initialize data dictionary
         data = {"xpts": [], "avgi": [], "avgq": [], "amps": [], "phases": []}
@@ -1058,6 +1057,8 @@ class QickExperiment2DBase(QickExperimentLoop):
 
         # Get x and y sweep values for the 2D plot
         x_sweep = data["xpts"]
+        if np.ndim(x_sweep) > 1:
+            x_sweep = x_sweep[0]
         y_sweep = data["ypts"]
 
         # Determine whether to save the figure

@@ -337,21 +337,22 @@ class StarkSpec(QickExperiment2DSweep):
 
         # fit frequency of resonance moving
         f = [self.data["fit_avgi"][i][2] for i in range(len(self.data["fit_avgi"]))]
+        self.data['f'] = f
 
         # Fit the data
         try:
             popt, pcov = curve_fit(quadratic, self.data["stark_gain"], f)
-            self.popt = popt
+            self.data["popt"] = popt
             Delta = (
                 self.cfg.device.qubit.f_ge[self.cfg.expt.qubit[0]]
                 - self.cfg.device.readout.frequency[self.cfg.expt.qubit[0]]
             )
             ng2 = popt[0] / 2 * Delta
-            self.ng2 = ng2
-            print(f"ng2: {ng2}") # This is n photons * g**2 
-            self.f = f
+            self.data["ng2"] = ng2
+            print(f"ng2: {ng2}") # This is n photons * g**2
+            
         except:
-            pass
+            print('Fit failed')
 
         # Store the fitted qubit frequency
         #        data["new_freq"] = data["best_fit"][2]
@@ -395,12 +396,16 @@ class StarkSpec(QickExperiment2DSweep):
         )
 
         # Plot the fitted curve
+        plt.plot(self.data["stark_gain"], self.data["f"], "o")
         x_fit = np.linspace(
             min(self.data["stark_gain"]), max(self.data["stark_gain"]), 100
         )
-        y_fit = quadratic(x_fit, *self.popt)
-        plt.plot(self.data["stark_gain"], self.f, "o")
-        plt.plot(x_fit, y_fit, label="Quadratic Fit")
+        try:
+            y_fit = quadratic(x_fit, *self.data["popt"])
+
+            plt.plot(x_fit, y_fit, label="Quadratic Fit")
+        except:
+            print('No fit to plot')
         plt.legend()
 
 

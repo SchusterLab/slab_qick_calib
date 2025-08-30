@@ -38,6 +38,7 @@ from ...analysis import time_series
 class PlotConfig:
     """Configuration parameters for plotting continuous T1 data."""
     navg: int = 10  # Number of points to average, in addition to those within a single experiment. 
+    navgeg: int = 5  # Number of points to average for the ground state
     marker_size: float = 0.2  # Size of plot markers
     figure_size_raw: Tuple[float, float] = (15, 6)  # Raw data plot size
     figure_size_smoothed: Tuple[float, float] = (15, 12)  # Smoothed data plot size
@@ -48,7 +49,7 @@ class PlotConfig:
     @property
     def nred(self) -> int:
         """Reduction factor for plotting."""
-        return int(np.floor(self.navg ))
+        return int(np.floor(self.navg/10 ))
 
 
 class T1ContProgram(QickProgram):
@@ -498,40 +499,138 @@ class T1ContExperiment(QickExperiment):
         }
     
     def _smooth_data(self, flattened_data: Dict[str, np.ndarray], 
-                     plot_config: PlotConfig) -> Tuple[Dict[str, np.ndarray], np.ndarray]:
+                     plot_config: PlotConfig, 
+                     filter_type: str = 'uniform',
+                     npoints: int = None) -> Tuple[Dict[str, np.ndarray], np.ndarray]:
         """
-        Apply uniform filtering to smooth the time series data.
+        Apply filtering to smooth the time series data with multiple filter options.
         
         Args:
             flattened_data: Dictionary of flattened data arrays
             plot_config: Configuration for plotting parameters
+            filter_type: Type of filter to apply ('uniform', 'boxcar', or 'both')
+            npoints: Number of points for boxcar filter (if None, uses plot_config.navg)
             
         Returns:
             Tuple of (smoothed_data_dict, time_array)
         """
+        if npoints is None:
+            npoints = plot_config.navg
+            
         smoothed = {}
         
-        # Smooth each data type with appropriate filter size
-        smoothed['t1'] = uniform_filter1d(
-            flattened_data['t1_data'], 
-            size=plot_config.navg * self.cfg.expt.n_t1
-        )[::plot_config.nred * self.cfg.expt.n_t1]
+        if filter_type == 'uniform':
+            # Apply uniform filter (original behavior)
+            smoothed['t1'] = uniform_filter1d(
+                flattened_data['t1_data'], 
+                size=plot_config.navg * self.cfg.expt.n_t1
+            )[::plot_config.nred * self.cfg.expt.n_t1]
+            
+            smoothed['g'] = uniform_filter1d(
+                flattened_data['g_data'], 
+                size=plot_config.navg * self.cfg.expt.n_g * plot_config.navgeg * 2
+            )[::plot_config.nred * self.cfg.expt.n_g]
+            
+            smoothed['e'] = uniform_filter1d(
+                flattened_data['e_data'], 
+                size=plot_config.navg * self.cfg.expt.n_e * plot_config.navgeg
+            )[::plot_config.nred * self.cfg.expt.n_e]
+            
+        elif filter_type == 'boxcar':
+            # Apply boxcar filter (simple averaging with data reduction)
+            smoothed['t1'] = self._apply_boxcar_filter(
+                flattened_data['t1_data'], 
+                npoints * self.cfg.expt.n_t1
+            )
+            
+            smoothed['g'] = self._apply_boxcar_filter(
+                flattened_data['g_data'], 
+                npoints * self.cfg.expt.n_g
+            )
+            
+            smoothed['e'] = self._apply_boxcar_filter(
+                flattened_data['e_data'], 
+                npoints * self.cfg.expt.n_e
+            )
+            
+        elif filter_type == 'both':
+            # Apply both filters and return both results
+            # First apply uniform filter
+            uniform_smoothed = {}
+            uniform_smoothed['t1'] = uniform_filter1d(
+                flattened_data['t1_data'], 
+                size=plot_config.navg * self.cfg.expt.n_t1
+            )[::plot_config.nred * self.cfg.expt.n_t1]
+            
+            uniform_smoothed['g'] = uniform_filter1d(
+                flattened_data['g_data'], 
+                size=plot_config.navg * self.cfg.expt.n_g * plot_config.navgeg * 2
+            )[::plot_config.nred * self.cfg.expt.n_g]
+            
+            uniform_smoothed['e'] = uniform_filter1d(
+                flattened_data['e_data'], 
+                size=plot_config.navg * self.cfg.expt.n_e * plot_config.navgeg
+            )[::plot_config.nred * self.cfg.expt.n_e]
+            
+            # Then apply boxcar filter
+            boxcar_smoothed = {}
+            boxcar_smoothed['t1'] = self._apply_boxcar_filter(
+                flattened_data['t1_data'], 
+                npoints * self.cfg.expt.n_t1
+            )
+            
+            boxcar_smoothed['g'] = self._apply_boxcar_filter(
+                flattened_data['g_data'], 
+                npoints * self.cfg.expt.n_g
+            )
+            
+            boxcar_smoothed['e'] = self._apply_boxcar_filter(
+                flattened_data['e_data'], 
+                npoints * self.cfg.expt.n_e
+            )
+            
+            # Return both in a nested dictionary
+            smoothed = {
+                'uniform': uniform_smoothed,
+                'boxcar': boxcar_smoothed
+            }
+            
+        else:
+            raise ValueError(f"Unknown filter_type: {filter_type}. Must be 'uniform', 'boxcar', or 'both'")
         
-        smoothed['g'] = uniform_filter1d(
-            flattened_data['g_data'], 
-            size=plot_config.navg * self.cfg.expt.n_g
-        )[::plot_config.nred * self.cfg.expt.n_g]
-        
-        smoothed['e'] = uniform_filter1d(
-            flattened_data['e_data'], 
-            size=plot_config.navg * self.cfg.expt.n_e
-        )[::plot_config.nred * self.cfg.expt.n_e]
-        
-        # Generate time array
-        npts = len(smoothed['t1'])
-        times = np.arange(npts) * self.pulse_length * plot_config.nred
+        # Generate time array based on the filter type
+        if filter_type == 'both':
+            # Use uniform filter length for time array when both filters are applied
+            npts = len(smoothed['uniform']['t1'])
+            times = np.arange(npts) * self.pulse_length * plot_config.nred
+        else:
+            npts = len(smoothed['t1'])
+            if filter_type == 'boxcar':
+                # For boxcar, time step is larger due to data reduction
+                times = np.arange(npts) * self.pulse_length * npoints
+            else:
+                times = np.arange(npts) * self.pulse_length * plot_config.nred
         
         return smoothed, times
+    
+    def _apply_boxcar_filter(self, data: np.ndarray, npoints: int) -> np.ndarray:
+        """
+        Apply boxcar filter by averaging npoints together and reducing data size.
+        
+        Args:
+            data: Input data array
+            npoints: Number of points to average together
+            
+        Returns:
+            Filtered and reduced data array
+        """
+        # Trim data to be divisible by npoints
+        n_trim = len(data) - (len(data) % npoints)
+        trimmed_data = data[:n_trim]
+        
+        # Reshape and average
+        reshaped = trimmed_data.reshape(-1, npoints)
+        return np.mean(reshaped, axis=1)
     
     def _calculate_t1(self, smoothed_data: Dict[str, np.ndarray]) -> np.ndarray:
         """
@@ -713,6 +812,114 @@ class T1ContExperiment(QickExperiment):
         fig.tight_layout()
         super().save_fig(fig, "_combo")
     
+    def _plot_comparison_data(self, smoothed_data: Dict[str, Dict[str, np.ndarray]], 
+                             times: np.ndarray, normalized_t1: np.ndarray,
+                             qubit: int, plot_config: PlotConfig, filter_type: str) -> None:
+        """
+        Create comparison plots showing both uniform and boxcar filter results.
+        
+        Args:
+            smoothed_data: Dictionary containing both 'uniform' and 'boxcar' filter results
+            times: Time array for x-axis
+            normalized_t1: Normalized T1 signal
+            qubit: Qubit index for labeling
+            plot_config: Configuration for plotting parameters
+            filter_type: Should be 'both' when this method is called
+        """
+        # Create a large figure with subplots for comparison
+        fig, axes = plt.subplots(3, 2, figsize=(20, 12), sharex=True)
+        fig.suptitle(f"Qubit {qubit} Filter Comparison: Uniform vs Boxcar")
+        
+        plot_params = {
+            'linewidth': 0.1, 
+            'markersize': plot_config.marker_size,
+            'marker': '.',
+        }
+        
+        # Data types to plot
+        data_types = ['t1', 'g', 'e']
+        data_labels = ['T1 Data', 'Ground State', 'Excited State']
+        data_ylabels = ['I (ADC), $T =T_1$', 'I (ADC), $g$ state', 'I (ADC), $e$ state']
+        
+        # Plot uniform filter results (left column)
+        for i, (data_type, label, ylabel) in enumerate(zip(data_types, data_labels, data_ylabels)):
+            axes[i, 0].plot(times, smoothed_data['uniform'][data_type], 
+                           color='blue', label=f"Uniform {label}", **plot_params)
+            axes[i, 0].set_ylabel(ylabel)
+            axes[i, 0].set_title(f"Uniform Filter - {label}")
+            axes[i, 0].legend()
+        
+        # Calculate boxcar times (may be different due to different reduction factor)
+        boxcar_times = times  # Use same times for now, but could be different
+        if len(smoothed_data['boxcar']['t1']) != len(times):
+            # Recalculate times for boxcar if lengths don't match
+            npts_boxcar = len(smoothed_data['boxcar']['t1'])
+            boxcar_times = np.arange(npts_boxcar) * self.pulse_length * plot_config.navg
+        
+        # Plot boxcar filter results (right column)
+        for i, (data_type, label, ylabel) in enumerate(zip(data_types, data_labels, data_ylabels)):
+            axes[i, 1].plot(boxcar_times, smoothed_data['boxcar'][data_type], 
+                           color='red', label=f"Boxcar {label}", **plot_params)
+            axes[i, 1].set_ylabel(ylabel)
+            axes[i, 1].set_title(f"Boxcar Filter - {label}")
+            axes[i, 1].legend()
+        
+        # Set x-labels for bottom row
+        axes[2, 0].set_xlabel("Time (s)")
+        axes[2, 1].set_xlabel("Time (s)")
+        
+        fig.tight_layout()
+        super().save_fig(fig, "_filter_comparison")
+        
+        # Also create a normalized T1 comparison plot
+        self._plot_normalized_comparison(smoothed_data, times, boxcar_times, qubit, plot_config)
+    
+    def _plot_normalized_comparison(self, smoothed_data: Dict[str, Dict[str, np.ndarray]], 
+                                   uniform_times: np.ndarray, boxcar_times: np.ndarray,
+                                   qubit: int, plot_config: PlotConfig) -> None:
+        """
+        Create comparison plot of normalized T1 signals from both filters.
+        
+        Args:
+            smoothed_data: Dictionary containing both filter results
+            uniform_times: Time array for uniform filter
+            boxcar_times: Time array for boxcar filter
+            qubit: Qubit index for labeling
+            plot_config: Configuration for plotting parameters
+        """
+        fig, axes = plt.subplots(2, 1, figsize=(15, 8), sharex=True)
+        fig.suptitle(f"Qubit {qubit} Normalized T1 Comparison")
+        
+        plot_params = {'linewidth': 0.1, 'markersize': plot_config.marker_size, 'marker': '.'}
+        
+        # Calculate normalized T1 for both filters
+        uniform_norm_t1, uniform_t1_est = self._calculate_t1(smoothed_data['uniform'])
+        boxcar_norm_t1, boxcar_t1_est = self._calculate_t1(smoothed_data['boxcar'])
+        
+        # Plot normalized T1 signals
+        axes[0].plot(uniform_times, uniform_norm_t1, color='blue', 
+                    label="Uniform Filter", **plot_params)
+        axes[0].plot(boxcar_times, boxcar_norm_t1, color='red', 
+                    label="Boxcar Filter", **plot_params)
+        axes[0].axhline(np.exp(-1), linestyle="--", color='black', 
+                       alpha=0.7, label="$e^{-1}$")
+        axes[0].set_ylabel("$(v_{t1}-v_g)/(v_e-v_g)$")
+        axes[0].legend()
+        axes[0].set_title("Normalized T1 Signal")
+        
+        # Plot T1 estimates
+        axes[1].plot(uniform_times, uniform_t1_est, color='blue', 
+                    label="Uniform Filter", **plot_params)
+        axes[1].plot(boxcar_times, boxcar_t1_est, color='red', 
+                    label="Boxcar Filter", **plot_params)
+        axes[1].set_ylabel("$T_1$ (μs)")
+        axes[1].set_xlabel("Time (s)")
+        axes[1].legend()
+        axes[1].set_title("T1 Estimates")
+        
+        fig.tight_layout()
+        super().save_fig(fig, "_normalized_comparison")
+    
     def _get_save_path(self) -> Optional[Path]:
         """
         Generate the save path for figures using modern path handling.
@@ -755,10 +962,12 @@ class T1ContExperiment(QickExperiment):
         show_hist: bool = True,
         rescale: bool = False,
         savefig: bool = True,
+        filter_type: str = 'uniform',
+        npoints: int = None,
         **kwargs,
     ) -> None:
         """
-        Display continuous T1 measurement results with improved organization.
+        Display continuous T1 measurement results with improved organization and filter selection.
 
         Creates several plots:
         1. Histogram of ground and excited state measurements
@@ -774,6 +983,8 @@ class T1ContExperiment(QickExperiment):
             show_hist: Whether to show histogram of ground and excited states
             rescale: Whether to rescale data (legacy parameter, not used)
             savefig: Whether to save the figure to disk
+            filter_type: Type of filter to apply ('uniform', 'boxcar', or 'both')
+            npoints: Number of points for boxcar filter (if None, uses plot_config.navg)
             **kwargs: Additional arguments (for compatibility)
         """
         data = data or self.data
@@ -782,24 +993,50 @@ class T1ContExperiment(QickExperiment):
         
         # Prepare and process data
         flattened_data = self._prepare_data_for_plotting(data)
-        self.data['smoothed_data'], self.data['times'] = self._smooth_data(flattened_data, plot_config)
-        self.data['normalized_t1'], self.data['t1_estimates'] = self._calculate_t1(self.data['smoothed_data'])
-
-        
-        
-        # Generate plots
-        if show_hist:
-            self._plot_histogram(data, qubit)
-            
-        
-        self._plot_raw_data(data, qubit, plot_config)
-        
-        main_fig = self._plot_smoothed_data(
-            self.data['smoothed_data'], self.data['times'], self.data['normalized_t1'], qubit, plot_config
+        self.data['smoothed_data'], self.data['times'] = self._smooth_data(
+            flattened_data, plot_config, filter_type=filter_type, npoints=npoints
         )
+        
+        # Handle different filter types for T1 calculation and plotting
+        if filter_type == 'both':
+            # For 'both' filter type, use uniform filter results for T1 calculation by default
+            # but allow user to specify which one to use
+            filter_for_t1 = kwargs.get('t1_filter', 'uniform')  # Default to uniform for T1 calculation
+            
+            if filter_for_t1 in self.data['smoothed_data']:
+                self.data['normalized_t1'], self.data['t1_estimates'] = self._calculate_t1(
+                    self.data['smoothed_data'][filter_for_t1]
+                )
+            else:
+                # Fallback to uniform if specified filter not available
+                self.data['normalized_t1'], self.data['t1_estimates'] = self._calculate_t1(
+                    self.data['smoothed_data']['uniform']
+                )
+            
+            # Plot both filter results
+            self._plot_comparison_data(
+                self.data['smoothed_data'], self.data['times'], 
+                self.data['normalized_t1'], qubit, plot_config, filter_type
+            )
+        else:
+            # Single filter type
+            self.data['normalized_t1'], self.data['t1_estimates'] = self._calculate_t1(
+                self.data['smoothed_data']
+            )
+            
+            # Generate standard plots
+            if show_hist:
+                self._plot_histogram(data, qubit)
+                
+            self._plot_raw_data(data, qubit, plot_config)
+            
+            main_fig = self._plot_smoothed_data(
+                self.data['smoothed_data'], self.data['times'], 
+                self.data['normalized_t1'], qubit, plot_config
+            )
 
-        self._plot_t1_estimates(self.data['t1_estimates'], self.data['times'], qubit, plot_config)
-        self._plot_combined_data(self.data['smoothed_data'], self.data['times'], qubit, plot_config)
+            self._plot_t1_estimates(self.data['t1_estimates'], self.data['times'], qubit, plot_config)
+            self._plot_combined_data(self.data['smoothed_data'], self.data['times'], qubit, plot_config)
 
         # Save main figure if requested
         # if savefig:
@@ -823,5 +1060,3 @@ class T1ContExperiment(QickExperiment):
         time_series.analyze_qubit_psd(
             t1_data, fs=sampling_rate, nperseg=nperseg
         )
-
-

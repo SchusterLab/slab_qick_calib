@@ -778,6 +778,11 @@ class T1StarkPowerQuadSingle(QickExperimentLoop):
         if pos and neg:
             gain_pts = np.concatenate((gain_neg[0:-1], gain_pos))
             f_pts = np.concatenate((f_pts_neg[0:-1], f_pts_pos))
+            # Remove indices where gain_pts is None
+            valid_inds = [i for i, val in enumerate(gain_pts) if val is not None]
+            gain_pts = np.array(gain_pts)[valid_inds]
+            f_pts = np.array(f_pts)[valid_inds]
+            gain_pts = np.array(gain_pts, dtype=float)
             m = len(f_pts_pos)  # Replace with the desired value of n
             n = len(f_pts_neg) - 1  # Replace with the desired value of m
             stark_freq = np.concatenate(
@@ -914,9 +919,11 @@ class T1StarkPowerQuad2D(QickExperiment2DSimple):
         df1 = self.cfg.expt.stark_freq_pos - self.cfg.device.qubit.f_ge[qubit]
         df2 = self.cfg.expt.stark_freq_neg - self.cfg.device.qubit.f_ge[qubit]
 
+        self.data['xpts']=self.data['f_pts']
         title = f"T1 Stark Power Q{qubit} Freqs: {df1}, {df2}"
-        ylabel = "Time (s)"
+        ylabel = "Time (hr)"
         
+
         super().display(plot_both=plot_both, title=title, xlabel=self.xlabel, ylabel=ylabel)
 
 
@@ -961,9 +968,10 @@ def find_inverse_quad_fit(y, a, b, c):
         
         # Check for complex solutions
         if discriminant < 0:
-            print(f"Warning: No real roots for y={yt}")
-            print(f"Coefficients: a={a}, b={b}, c={c}")
-            return None  # No real solution exists
+            # print(f"Warning: No real roots for y={yt}")
+            # print(f"Coefficients: a={a}, b={b}, c={c}")
+            results.append(None)
+            continue
             
         elif discriminant == 0:
             # Single solution case
