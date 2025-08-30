@@ -908,10 +908,13 @@ class T1StarkPowerQuad2D(QickExperiment2DSimple):
 
         return self.data
 
-    def analyze(self, data=None, fit=True, **kwargs):
-        pass
+    def analyze(self, data=None, fit=False, **kwargs):
+        super().analyze(rescale=True, fit=fit)
+        q = self.cfg.expt.qubit[0]
+        if 'g_norm' in self.cfg.expt:
+            self.data['t1_norm'] = -1/np.log((self.data['scale_data']-self.data['g_norm'])/self.data['e_norm'])*self.cfg.expt.wait_time/self.cfg.device.qubit.T1[q]
 
-    def display(self, data=None, fit=True, plot_both=False, **kwargs):
+    def display(self, data=None, fit=False, plot_both=False, **kwargs):
         
         if data is None:
             data = self.data
@@ -922,9 +925,21 @@ class T1StarkPowerQuad2D(QickExperiment2DSimple):
         self.data['xpts']=self.data['f_pts']
         title = f"T1 Stark Power Q{qubit} Freqs: {df1}, {df2}"
         ylabel = "Time (hr)"
-        
 
         super().display(plot_both=plot_both, title=title, xlabel=self.xlabel, ylabel=ylabel)
+
+        if 't1_norm' in data:
+            fig, ax = plt.subplots(1, 1, figsize=(6, 6))
+            im = ax.imshow(data['t1_norm'], aspect='auto', origin='lower', extent=(min(data['xpts']), max(data['xpts']), 0, self.cfg.expt.sweep_pts-1))
+            ax.set_xlabel(self.xlabel)
+            ax.set_ylabel('Sweep Index')
+            ax.set_title(f'Normalized T1 - {title}')
+            cbar = fig.colorbar(im, ax=ax)
+            cbar.set_label('T1 / T1_avg')
+            fig.tight_layout()
+            plt.show()
+
+
 
 
 def find_inverse_quad_fit(y, a, b, c):

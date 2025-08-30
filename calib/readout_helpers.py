@@ -640,7 +640,6 @@ def fit_single_shot(d, plot=True, rot=True):
     else:
         data = d
         theta = 0
-
     # Fit Gaussians to the ground state I and Q data
     paramsg, vhg, histg = fit_gaussian(data["Ig"], nbins=100, p0=None, plot=False)
     paramsqg, vhqg, histqg = fit_gaussian(data["Qg"], nbins=100, p0=None, plot=False)
@@ -689,6 +688,7 @@ def fit_single_shot(d, plot=True, rot=True):
         paramsg2 = np.nan
 
     # Store rotated data and histograms in the data dictionary
+
     data["Ie_rot"] = e_rot[0]
     data["Qe_rot"] = e_rot[1]
     data["Ig_rot"] = g_rot[0]
@@ -734,7 +734,9 @@ def fit_single_shot(d, plot=True, rot=True):
         'tm': tm,                 # T1 decay parameter
         'vqg': vqg,               # Ground state Q center
         'vqe': vqe,               # Excited state Q center
-        'theta_corr': theta_corr  # Correction angle from Gaussian fits
+        'theta_corr': theta_corr,  # Correction angle from Gaussian fits,
+        'g_mean': np.mean(data['Ig']),  # Mean of ground state I data
+        'e_mean': np.mean(data['Ie']),  # Mean of excited state I data
     }
     
     return data, p, paramsg, paramse2
@@ -811,3 +813,25 @@ def plot_reset(d):
     #             shot.fname[0 : -len(imname)] + "images\\" +  + ".png"
     #         )
     fig.savefig(f"reset_hist_{current_time}.png")
+
+def fit_hist(bin_centers, hist, data):
+        v_rng = np.max(bin_centers) - np.min(bin_centers)
+
+        p0 = [
+            0.5,
+            np.min(bin_centers) + v_rng / 3,
+            0.5,
+            v_rng / 10,
+            np.max(bin_centers) - v_rng / 3,
+        ]
+        try:
+            popt, pcov = curve_fit(two_gaussians, bin_centers, hist, p0=p0)
+            vg = popt[1]
+            ve = popt[4]
+            dv = ve - vg
+            scale_data = (data - popt[1]) / dv
+            hist_fit = popt
+        except:
+            scale_data = data 
+            hist_fit = None
+        return scale_data, hist_fit

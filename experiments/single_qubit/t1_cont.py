@@ -37,8 +37,8 @@ from ...analysis import time_series
 @dataclass
 class PlotConfig:
     """Configuration parameters for plotting continuous T1 data."""
-    navg: int = 10  # Number of points to average, in addition to those within a single experiment. 
-    navgeg: int = 5  # Number of points to average for the ground state
+    navg: int = 20  # Number of points to average, in addition to those within a single experiment. 
+    navgeg: int = 20  # Number of points to average for the ground state
     marker_size: float = 0.2  # Size of plot markers
     figure_size_raw: Tuple[float, float] = (15, 6)  # Raw data plot size
     figure_size_smoothed: Tuple[float, float] = (15, 12)  # Smoothed data plot size
@@ -543,13 +543,23 @@ class T1ContExperiment(QickExperiment):
                 npoints * self.cfg.expt.n_t1
             )
             
-            smoothed['g'] = self._apply_boxcar_filter(
+            smoothed['g'] = uniform_filter1d(
                 flattened_data['g_data'], 
+                size=plot_config.navg * self.cfg.expt.n_g * plot_config.navgeg * 2
+            )
+            
+            smoothed['e'] = uniform_filter1d(
+                flattened_data['e_data'], 
+                size=plot_config.navg * self.cfg.expt.n_e * plot_config.navgeg
+            )
+
+            smoothed['g'] = self._apply_boxcar_filter(
+                smoothed['g'], 
                 npoints * self.cfg.expt.n_g
             )
             
             smoothed['e'] = self._apply_boxcar_filter(
-                flattened_data['e_data'], 
+                smoothed['e'], 
                 npoints * self.cfg.expt.n_e
             )
             

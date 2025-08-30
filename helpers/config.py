@@ -335,8 +335,7 @@ def init_config(file_name, num_qubits, type="full", t1=50, aliases="Qick001"):
             "trig_offset": init_array(0.5),
             "final_delay": init_array(t1 * 6),
             "active_reset": init_array(False),
-            "reset_e": init_array(0),
-            "reset_g": init_array(0),
+            "reset": init_array(3),
         }
     )
 

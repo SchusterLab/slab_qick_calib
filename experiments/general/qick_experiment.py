@@ -817,6 +817,7 @@ class QickExperiment(Experiment):
             threshold_v=self.cfg.device.readout.threshold[qi],
             read_wait=0.1,
             extra_delay=0.2,
+            reset=self.cfg.device.readout.reset[qi],
         )
         self.cfg.expt = {**params_def, **self.cfg.expt}
 
@@ -875,24 +876,9 @@ class QickExperiment(Experiment):
         """Scale g->0 and e->1 based on histogram data"""
         hist = self.data["hist"]
         bin_centers = self.data["bin_centers"]
-        v_rng = np.max(bin_centers) - np.min(bin_centers)
-
-        p0 = [
-            0.5,
-            np.min(bin_centers) + v_rng / 3,
-            0.5,
-            v_rng / 10,
-            np.max(bin_centers) - v_rng / 3,
-        ]
-        try:
-            popt, pcov = curve_fit(helpers.two_gaussians, bin_centers, hist, p0=p0)
-            vg = popt[1]
-            ve = popt[4]
-            dv = ve - vg
-            self.data["scale_data"] = (self.data["avgi"] - popt[1]) / dv
-            self.data["hist_fit"] = popt
-        except:
-            self.data["scale_data"] = self.data["avgi"]
+        scale_data, hist_fit = helpers.fit_hist(bin_centers, hist, self.data["avgi"])
+        self.data["scale_data"] = scale_data
+        self.data["hist_fit"] = hist_fit
 
 
 class QickExperimentLoop(QickExperiment):
@@ -1107,7 +1093,7 @@ class QickExperiment2DBase(QickExperimentLoop):
             self.save_fig(fig)
             plt.show()
 
-    def analyze(self, fitfunc=None, fitterfunc=None, data=None, fit=False, **kwargs):
+    def analyze(self, fitfunc=None, fitterfunc=None, data=None, fit=True, rescale=False, **kwargs):
         """
         Analyze 2D experiment data by fitting each row.
 
@@ -1126,23 +1112,38 @@ class QickExperiment2DBase(QickExperimentLoop):
 
         # Define which data sets to fit (focus on I quadrature)
         ydata_lab = ["avgi"]  # Typically only fit I quadrature for speed
+        if rescale: 
+            self.scale_ge()
 
         # Fit each row (y value) separately
-        for i, ydata in enumerate(ydata_lab):
-            data["fit_" + ydata] = []
-            data["fit_err_" + ydata] = []
+        if fit: 
+            for i, ydata in enumerate(ydata_lab):
+                data["fit_" + ydata] = []
+                data["fit_err_" + ydata] = []
 
-            # Iterate through each y value
-            for j in range(len(data["ypts"])):
-                # Fit this row to the model function
-                fit_pars, fit_err, init = fitterfunc(
-                    data["xpts"], data[ydata][j], fitparams=None
-                )
-                # Store fit parameters and errors
-                data["fit_" + ydata].append(fit_pars)
-                data["fit_err_" + ydata].append(fit_err)
+                # Iterate through each y value
+                for j in range(len(data["ypts"])):
+                    # Fit this row to the model function
+                    fit_pars, fit_err, init = fitterfunc(
+                        data["xpts"], data[ydata][j], fitparams=None
+                    )
+                    # Store fit parameters and errors
+                    data["fit_" + ydata].append(fit_pars)
+                    data["fit_err_" + ydata].append(fit_err)
+
 
         return data
+    
+    def scale_ge(self):
+        """Scale g->0 and e->1 based on histogram data"""
+        self.data["scale_data"] = []
+        self.data["hist_fit"] = []
+        for j in range(len(self.data["ypts"])):
+            hist = self.data["hist"][j]
+            bin_centers = self.data["bin_centers"][j]
+            scale_data, hist_fit = helpers.fit_hist(bin_centers, hist, self.data["avgi"][j,:])
+            self.data["scale_data"].append(scale_data)
+            self.data["hist_fit"].append(hist_fit)
 
 
 class QickExperiment2D(QickExperiment2DBase):
@@ -1285,7 +1286,7 @@ class QickExperiment2DSimple(QickExperiment2DBase):
             data["time"].append(time.time())
             
             # Live update heatmap plot using Visdom
-            if self.live_plot:
+            if self.live_plot and i>0:
                 self._plot_live_update(data, y_sweep)
             if self.save_interim: 
                 super().save_data(data=data)

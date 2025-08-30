@@ -263,7 +263,7 @@ class QickProgram(AveragerProgramV2):
         )
         # Perform active reset if enabled
         if cfg.expt.active_reset:
-            self.reset(3)  # Reset qubit state 3 times
+            self.reset(cfg.expt.reset)  # Reset qubit state 3 times
 
     def make_pulse(self, pulse, name):
         """

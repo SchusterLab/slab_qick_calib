@@ -493,6 +493,12 @@ class HistogramExperiment(QickExperiment):
             data["histe"] = data2["histe"]
             data["paramsg"] = paramsg
             data["shots"] = self.cfg.expt.shots
+            data['e_mean'] = p['e_mean']
+            data['g_mean'] = p['g_mean']
+            dv = self.data['ve'] - self.data['vg']
+            data['e_norm'] = (self.data['e_mean']-self.data['vg'])/dv
+
+            data['g_norm'] = (self.data['g_mean']-self.data['vg'])/dv
         except Exception as e:
             print(f"Fits failed: {str(e)}")
 
