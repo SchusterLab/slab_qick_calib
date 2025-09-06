@@ -410,7 +410,7 @@ def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True)
     tracking_path = os.path.join(base_path, tracking_id)
     os.makedirs(tracking_path, exist_ok=True)
     os.mkdir(os.path.join(tracking_path, "images"))
-    #cfg_dict = deepcopy(cfg_dict)  # Avoid modifying original cfg_dict
+    cfg_dict = deepcopy(cfg_dict)  # Avoid modifying original cfg_dict
     cfg_dict["expt_path"] = tracking_path
 
     # Initialize timing variables
@@ -475,11 +475,43 @@ def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True)
             # Create header and data rows
             header = ",".join(data_arrays.keys())
             rows = np.vstack(list(data_arrays.values())).T
-
+            # Future change to only add a new row 
             # Save to CSV
             np.savetxt(csv_path, rows, delimiter=",", header=header, comments="")
 
-    return tracking_data, tracking_path
+    
+    tt_stats = calc_stats(tracking_data)
+
+    return tracking_data, tracking_path, tt_stats
+
+
+def calc_stats(tracking_data): 
+
+    for qubit in tracking_data:
+        t1_arr = np.array(qubit['t1'])
+        t2_arr = np.array(qubit['t2'])
+        f_ge_arr = np.array(qubit['f_ge'])
+        q1_val = np.pi * 2 * t1_arr * f_ge_arr/1e6
+        q2_val = np.pi * 2 * t2_arr * f_ge_arr/1e6
+        tphi = 1 / (1 / t2_arr - 1 / (2 * t1_arr))
+        qubit['tphi'] = tphi
+        qubit['q1'] = q1_val
+        qubit['q2'] = q2_val
+
+    tt_stats = {}
+
+    for idx, qubit_data in enumerate(tracking_data):
+        stats = {}
+        for key, values in qubit_data.items():
+            arr = np.array(values)
+            stats[key] = {
+                'mean': np.mean(arr),
+                'max': np.max(arr),
+                'std': np.std(arr)
+            }
+        tt_stats[idx] = stats
+
+    return tt_stats
 
 
 def recenter(qi, cfg_dict, t2r, update=True, display=False, max_t1=MAX_T1):

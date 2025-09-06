@@ -128,7 +128,7 @@ class T1ContProgram(QickProgram):
             # Handle active reset or standard delay
             if cfg.expt.active_reset:
                 self.reset(cfg.expt.reset, 0, i)  # Perform active reset
-                self.delay_auto(t=cfg.expt["readout"] + 0.01+5, tag=f"final_delay_0_{i}")
+                self.delay_auto(t=cfg.expt["readout"] + 0.01+cfg.expt.ff, tag=f"final_delay_0_{i}")
             else:
                 # Standard delay between measurements
                 self.delay_auto(
@@ -147,7 +147,7 @@ class T1ContProgram(QickProgram):
             # Handle active reset or standard delay
             if cfg.expt.active_reset:
                 self.reset(cfg.expt.reset, 1, i)  # Perform active reset
-                self.delay_auto(t=cfg.expt["readout"] + 0.01+5, tag=f"final_delay_{i}")
+                self.delay_auto(t=cfg.expt["readout"] + 0.01+cfg.expt.ff, tag=f"final_delay_{i}")
             else:
                 # Standard delay between measurements
                 self.delay_auto(
@@ -284,13 +284,10 @@ class T1ContExperiment(QickExperiment):
             "reps": 1,  # Number of repetitions
             "rounds": self.rounds,  # Number of software averages
             "wait_time": self.cfg.device.qubit.T1[qi],  # Wait time set to current T1
-            "active_reset": self.cfg.device.readout.active_reset[
-                qi
-            ],  # Use active reset if configured
+            "active_reset": self.cfg.device.readout.active_reset[qi],  # Use active reset if configured
             "final_delay": self.cfg.device.qubit.T1[qi] * 6,  # Final delay set to 6*T1
-            "readout": self.cfg.device.readout.readout_length[
-                qi
-            ],  # Readout pulse length
+            "readout": self.cfg.device.readout.readout_length[qi],  # Readout pulse length
+            'ff': 5,  # fudge factor for reset
             "n_g": 1,  # Number of ground state measurements
             "n_e": 2,  # Number of excited state measurements
             "n_t1": 7,  # Number of T1 measurements
@@ -344,7 +341,7 @@ class T1ContExperiment(QickExperiment):
 
         # Set appropriate final delay based on active reset setting
         if "active_reset" in self.cfg.expt and self.cfg.expt.active_reset:
-            final_delay = self.cfg.device.readout.readout_length[self.cfg.expt.qubit[0]]+5
+            final_delay = self.cfg.device.readout.readout_length[self.cfg.expt.qubit[0]]+self.cfg.expt.ff
         else:
             final_delay = self.cfg.device.readout.final_delay[self.cfg.expt.qubit[0]]
 
@@ -1037,8 +1034,9 @@ class T1ContExperiment(QickExperiment):
             # Generate standard plots
             if show_hist:
                 self._plot_histogram(data, qubit)
-                
-            self._plot_raw_data(data, qubit, plot_config)
+
+            if len(data["avgi_t1"]) < 100000:
+                self._plot_raw_data(data, qubit, plot_config)
             
             main_fig = self._plot_smoothed_data(
                 self.data['smoothed_data'], self.data['times'], 

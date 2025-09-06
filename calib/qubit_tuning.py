@@ -149,6 +149,11 @@ def tune_up_qubit(
             cfg_path, ("pulses", "pi_ge", "gain"), amp_rabi.data["pi_length"], qi
         )
 
+    amp_rabi = meas.RabiExperiment(cfg_dict,qi=qi, params={'n_pulses':15})
+    if update and amp_rabi.status:
+        ind = np.argmax(amp_rabi.fitfunc(amp_rabi.data['xpts'], *amp_rabi.data['best_fit']))
+        config.update_qubit(cfg_path, ('pulses','pi_ge','gain'), amp_rabi.data['xpts'][ind], qi);
+
     # Step 8: Optimize single-shot readout if requested
     if single:
         params = {"expts_f": 1, "expts_gain": 7, "expts_len": 5}
