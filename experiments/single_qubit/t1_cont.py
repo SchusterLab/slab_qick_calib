@@ -37,7 +37,7 @@ from ...analysis import time_series
 @dataclass
 class PlotConfig:
     """Configuration parameters for plotting continuous T1 data."""
-    navg: int = 20  # Number of points to average, in addition to those within a single experiment. 
+    navg: int = 10  # Number of points to average, in addition to those within a single experiment. 
     navgeg: int = 20  # Number of points to average for the ground state
     marker_size: float = 0.2  # Size of plot markers
     figure_size_raw: Tuple[float, float] = (15, 6)  # Raw data plot size
@@ -49,7 +49,7 @@ class PlotConfig:
     @property
     def nred(self) -> int:
         """Reduction factor for plotting."""
-        return int(np.floor(self.navg/10 ))
+        return int(np.floor(self.navg/4 ))
 
 
 class T1ContProgram(QickProgram):
@@ -127,8 +127,8 @@ class T1ContProgram(QickProgram):
 
             # Handle active reset or standard delay
             if cfg.expt.active_reset:
-                self.reset(3, 0, i)  # Perform active reset
-                self.delay_auto(t=cfg.expt["readout"] + 0.01, tag=f"final_delay_0_{i}")
+                self.reset(cfg.expt.reset, 0, i)  # Perform active reset
+                self.delay_auto(t=cfg.expt["readout"] + 0.01+5, tag=f"final_delay_0_{i}")
             else:
                 # Standard delay between measurements
                 self.delay_auto(
@@ -146,8 +146,8 @@ class T1ContProgram(QickProgram):
 
             # Handle active reset or standard delay
             if cfg.expt.active_reset:
-                self.reset(3, 1, i)  # Perform active reset
-                self.delay_auto(t=cfg.expt["readout"] + 0.01, tag=f"final_delay_{i}")
+                self.reset(cfg.expt.reset, 1, i)  # Perform active reset
+                self.delay_auto(t=cfg.expt["readout"] + 0.01+5, tag=f"final_delay_{i}")
             else:
                 # Standard delay between measurements
                 self.delay_auto(
@@ -344,7 +344,7 @@ class T1ContExperiment(QickExperiment):
 
         # Set appropriate final delay based on active reset setting
         if "active_reset" in self.cfg.expt and self.cfg.expt.active_reset:
-            final_delay = self.cfg.device.readout.readout_length[self.cfg.expt.qubit[0]]
+            final_delay = self.cfg.device.readout.readout_length[self.cfg.expt.qubit[0]]+5
         else:
             final_delay = self.cfg.device.readout.final_delay[self.cfg.expt.qubit[0]]
 
@@ -390,7 +390,7 @@ class T1ContExperiment(QickExperiment):
             start_ind = [
                 0,  # Start of ground state measurements
                 self.cfg.expt.n_g,  # Start of excited state measurements
-                self.cfg.expt.n_g + self.cfg.expt.n_e * 3,  # Start of T1 measurements
+                self.cfg.expt.n_g + self.cfg.expt.n_e * self.cfg.expt.reset,  # Start of T1 measurements
                 len(iq_list[0]),  # End of all measurements
             ]
         else:
@@ -412,7 +412,7 @@ class T1ContExperiment(QickExperiment):
             # Get indices for this measurement type
             if self.cfg.expt.active_reset:
                 # With active reset, skip reset measurements (every 3rd point)
-                inds = np.arange(start_ind[i], start_ind[i + 1], 3)
+                inds = np.arange(start_ind[i], start_ind[i + 1], self.cfg.expt.reset)
             else:
                 # Without active reset, use all points
                 inds = np.arange(start_ind[i], start_ind[i + 1])
@@ -454,14 +454,14 @@ class T1ContExperiment(QickExperiment):
         """
         if data is None:
             data = self.data
-
+        q = self.cfg.expt.qubit[0]
         nexp = self.cfg.expt.n_g + self.cfg.expt.n_e + self.cfg.expt.n_t1
         n_t1 = self.cfg.expt.n_t1
-        pi_time = 0.4  # Approximate π pulse time in μs
+        pi_time = self.cfg.device.qubit.pulses.pi_ge.sigma[q]*4  # Approximate π pulse time in μs
         # Calculate total pulse sequence length
         if self.cfg.expt.active_reset:
             # With active reset
-            n_reset = 3
+            n_reset = self.cfg.device.readout.reset[q]
             pulse_length = (
                 (self.cfg.expt.readout+0.3)
                 * (self.cfg.expt.n_g+1 + (n_reset+1) * (self.cfg.expt.n_e + n_t1))

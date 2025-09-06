@@ -294,10 +294,10 @@ def measure_cohere(qi, cfg_dict, update=True, display=False, max_t1=MAX_T1):
     return qubit_dict
 
 
-def set_up_dict(t1, t2r):
+def set_up_dict(t1, t2):
     err_dict = {
-        "t2r_err": np.sqrt(t2r.data["fit_err_avgi"][3][3]),
-        "fge_err": np.sqrt(t2r.data["fit_err_avgi"][1][1]),
+        "t2_err": np.sqrt(t2.data["fit_err_avgi"][3][3]),
+        "fge_err": np.sqrt(t2.data["fit_err_avgi"][1][1]),
         "t1_err": np.sqrt(t1.data["fit_err_avgi"][2][2]),
     }
     # Compile all measured parameters into a dictionary
@@ -305,15 +305,15 @@ def set_up_dict(t1, t2r):
         "t1": t1.data["new_t1_i"],
         "t1_off": t1.data["best_fit"][0],
         "t1_amp": t1.data["best_fit"][1],
-        "t2r_off": t2r.data["best_fit"][4],
-        "t2r_amp": t2r.data["best_fit"][0],
-        "t2r": t2r.data["best_fit"][3],
-        "f_ge": t2r.data["new_freq"],
+        "t2_off": t2.data["best_fit"][4],
+        "t2_amp": t2.data["best_fit"][0],
+        "t2": t2.data["best_fit"][3],
+        "f_ge": t2.data["new_freq"],
     }
     # Add R² values for fit quality assessment
     r2_dict = {
         "t1_r2": t1.data["r2"],
-        "t2r_r2": t2r.data["r2"],
+        "t2_r2": t2.data["r2"],
     }
 
     # Add error values
@@ -345,22 +345,22 @@ def measure_fast(qi, cfg_dict, i, tdir, t1_val, t2_val):
         params={"span": 3.7 * t1_val},
     )
 
-    fname = os.path.join(tdir, f"t2r_qubit{qi}_{i:05d}")
-    t2r = meas.T2Experiment(
+    fname = os.path.join(tdir, f"t2e_qubit{qi}_{i:05d}")
+    t2 = meas.T2Experiment(
         cfg_dict,
         qi=qi,
         fname=fname,
         display=False,
         progress=False,
         style="fast",
-        params={"span": 3.2 * t2_val},
+        params={"span": 3.2 * t2_val, 'experiment_type': 'echo'},
     )
 
-    qubit_dict = set_up_dict(t1, t2r)
+    qubit_dict = set_up_dict(t1, t2)
     return qubit_dict
 
 
-def measure_fast2(qi, cfg_dict, i, t2r=None, t1=None, t1_val=30, t2_val=30):
+def measure_fast2(qi, cfg_dict, i, t2e=None, t1=None, t1_val=30, t2_val=30):
     if t1 is None:
         t1 = meas.T1Experiment(
             cfg_dict, qi=qi, display=False, progress=False, style="fast"
@@ -369,14 +369,14 @@ def measure_fast2(qi, cfg_dict, i, t2r=None, t1=None, t1_val=30, t2_val=30):
         t1.fname = os.path.join(t1.fname.split("\\")[0:-1], f"t1_qubit{qi}_{i:%5d}")
         t1.span = 3.7 * t1_val
 
-    if t2r is None:
-        t2r = meas.T2Experiment(
-            cfg_dict, qi=qi, display=False, progress=False, style="fast"
+    if t2e is None:
+        t2e = meas.T2Experiment(
+            cfg_dict, qi=qi, display=False, progress=False, style="fast", params={'experiment_type':'echo'}
         )
-        t2r.fname = os.path.join(t2r.fname.split("\\")[0:-1], f"t2_qubit{qi}_{i:%5d}")
-    t2r.span = 3 * t2_val
+        t2e.fname = os.path.join(t2e.fname.split("\\")[0:-1], f"t2_qubit{qi}_{i:%5d}")
+    t2e.span = 3 * t2_val
 
-    return t1, t2r
+    return t1, t2e
 
 
 def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True):
@@ -431,12 +431,12 @@ def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True)
                 if i == 0:
                     auto_cfg = config.load(cfg_dict["cfg_file"])
                     t1_val = auto_cfg["device"]["qubit"]["T1"][qi]
-                    t2_val = auto_cfg["device"]["qubit"]["T2r"][qi]
+                    t2_val = auto_cfg["device"]["qubit"]["T2e"][qi]
 
                 # cfg_dict['cfg_file']=None
                 d = measure_fast(qi, cfg_dict, i, tracking_path, t1_val, t2_val)
                 t1_val = d["t1"]
-                t2_val = d["t2r"]
+                t2_val = d["t2"]
                 # d = measure_cohere(qi, cfg_dict, display=display)
                 # d = measure_params(qi, cfg_dict, display=display, fast=True,  check_fid=False)
             else:
@@ -461,8 +461,10 @@ def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True)
 
         # Save tracking data to CSV files
         for j, qi in enumerate(qubit_list):
+            csv_dir = os.path.join(base_path, "csv")
+            os.makedirs(csv_dir, exist_ok=True)
             csv_path = os.path.join(
-                base_path, "csv", f"{tracking_id}_qubit_{qi}_tracking.csv"
+                csv_dir, f"{tracking_id}_qubit_{qi}_tracking.csv"
             )
 
             # Convert tracking data dict to numpy arrays for saving

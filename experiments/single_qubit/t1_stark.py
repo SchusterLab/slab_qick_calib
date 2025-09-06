@@ -912,7 +912,7 @@ class T1StarkPowerQuad2D(QickExperiment2DSimple):
         super().analyze(rescale=True, fit=fit)
         q = self.cfg.expt.qubit[0]
         if 'g_norm' in self.cfg.expt:
-            self.data['t1_norm'] = -1/np.log((self.data['scale_data']-self.data['g_norm'])/self.data['e_norm'])*self.cfg.expt.wait_time/self.cfg.device.qubit.T1[q]
+            self.data['t1_norm'] = -1/np.log((self.data['scale_data']-self.cfg.expt['g_norm'])/self.cfg.expt['e_norm'])*self.cfg.expt.wait_time/self.cfg.device.qubit.T1[q]
 
     def display(self, data=None, fit=False, plot_both=False, **kwargs):
         
@@ -930,7 +930,7 @@ class T1StarkPowerQuad2D(QickExperiment2DSimple):
 
         if 't1_norm' in data:
             fig, ax = plt.subplots(1, 1, figsize=(6, 6))
-            im = ax.imshow(data['t1_norm'], aspect='auto', origin='lower', extent=(min(data['xpts']), max(data['xpts']), 0, self.cfg.expt.sweep_pts-1))
+            im = ax.pcolor(data['xpts'], np.arange(self.cfg.expt["sweep_pts"]), data['t1_norm'], shading='auto')
             ax.set_xlabel(self.xlabel)
             ax.set_ylabel('Sweep Index')
             ax.set_title(f'Normalized T1 - {title}')
