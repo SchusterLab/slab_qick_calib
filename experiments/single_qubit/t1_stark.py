@@ -730,7 +730,8 @@ class T1StarkPowerQuadSingle(QickExperimentLoop):
             "qubit_chan": self.cfg.hw.soc.adcs.readout.ch[qi],
             "df_pos": self.cfg.stark.f[qi],
             "df_neg": self.cfg.stark.fneg[qi],
-            "stop_f": 20,
+            "stop_f_pos": 10,
+            "stop_f_neg": 10,
             'end_wait': 0.5,
             'pos': True,
             'neg': True,
@@ -770,10 +771,10 @@ class T1StarkPowerQuadSingle(QickExperimentLoop):
 
     def get_gain_pts(self, pos=True, neg=True): 
         if pos:
-            f_pts_pos = np.linspace(0, self.cfg.expt.stop_f, int(self.cfg.expt.expts2 / 2))
+            f_pts_pos = np.linspace(0, self.cfg.expt.stop_f_pos, int(self.cfg.expt.expts2 / 2))
             gain_pos = find_inverse_quad_fit(f_pts_pos, *self.cfg.expt.quad_fit_pos)
         if neg:
-            f_pts_neg = np.linspace(-self.cfg.expt.stop_f, 0, int(self.cfg.expt.expts2 / 2))
+            f_pts_neg = np.linspace(-self.cfg.expt.stop_f_neg, 0, int(self.cfg.expt.expts2 / 2))
             gain_neg = find_inverse_quad_fit(-f_pts_neg, *self.cfg.expt.quad_fit_neg)
         if pos and neg:
             gain_pts = np.concatenate((gain_neg[0:-1], gain_pos))
@@ -909,9 +910,11 @@ class T1StarkPowerQuad2D(QickExperiment2DSimple):
         return self.data
 
     def analyze(self, data=None, fit=False, **kwargs):
-        super().analyze(rescale=True, fit=fit)
+        #super().analyze(rescale=True, fit=fit)
         q = self.cfg.expt.qubit[0]
         if 'g_norm' in self.cfg.expt:
+            dv = self.cfg.expt.ve-self.cfg.expt.vg
+            self.data['scale_data']= (self.data['avgi']-self.cfg.expt.vg)/dv
             self.data['t1_norm'] = -1/np.log((self.data['scale_data']-self.cfg.expt['g_norm'])/self.cfg.expt['e_norm'])*self.cfg.expt.wait_time/self.cfg.device.qubit.T1[q]
 
     def display(self, data=None, fit=False, plot_both=False, **kwargs):

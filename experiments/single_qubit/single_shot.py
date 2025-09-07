@@ -69,8 +69,8 @@ class HistogramProgram(QickProgram):
         - `expt.active_reset` (optional): Boolean to enable active reset
     """
 
-    def __init__(self, soccfg, final_delay, cfg):
-        super().__init__(soccfg, final_delay=final_delay, cfg=cfg)
+    def __init__(self, soccfg, final_delay, cfg, final_wait=0):
+        super().__init__(soccfg, final_delay=final_delay, cfg=cfg, final_wait=final_wait)
 
     def _initialize(self, cfg):
         """
@@ -328,67 +328,61 @@ class HistogramExperiment(QickExperiment):
         else:
             final_delay = self.cfg.device.readout.final_delay[self.cfg.expt.qubit[0]]
 
-        # ----------------------------------------------------------------------
-        # Ground state measurements
-        # ----------------------------------------------------------------------
-        # Create configuration for ground state measurement
-        cfg2 = copy.deepcopy(dict(self.cfg))
-        cfg = AttrDict(cfg2)
-        cfg.expt.pulse_e = False
-        cfg.expt.pulse_f = False
-
-        # Create and configure histogram program
-        histpro = HistogramProgram(soccfg=self.soccfg, final_delay=final_delay, cfg=cfg)
-
-        # Configure DDR4 if enabled
+        # Configure DDR4 parameters if enabled
         if self.cfg.expt.ddr4:
             # Each transfer (burst) is 256 decimated samples
             n_transfers = 1500000
             nt = n_transfers
-            # Arm the DDR4 buffer
-            self.im[self.cfg.aliases.soc].arm_ddr4(
-                ch=self.cfg.expt.qubit_chan, nt=n_transfers
-            )
 
-        # Acquire ground state data
-        iq_list = histpro.acquire(
-            self.im[self.cfg.aliases.soc],
-            threshold=None,
-            progress=progress,
-        )
-
-        # Store ground state I/Q data
-        data["Ig"] = iq_list[0][0][:, 0]
-        data["Qg"] = iq_list[0][0][:, 1]
-
-        # Store reset data if active reset is enabled
-        if self.cfg.expt.active_reset or self.cfg.expt.remeas:
-            data["Igr"] = iq_list[0][1:, :, 0]
-            data["Qgr"] = iq_list[0][1:, :, 1]
-
-        # Get DDR4 data if enabled
-        if self.cfg.expt.ddr4:
-            iq_ddr4 = self.im[self.cfg.aliases.soc].get_ddr4(nt)
-            t = histpro.get_time_axis_ddr4(self.cfg.expt.qubit_chan, iq_ddr4)
-            data["t_g"] = t
-            data["iq_ddr4_g"] = iq_ddr4
-
-        # Collect raw shots
-        irawg, qrawg = histpro.collect_shots()
-
-        # ----------------------------------------------------------------------
-        # Excited state measurements
-        # ----------------------------------------------------------------------
+        # Define scan configurations for different quantum states
+        scan_configs = [
+            {
+                'name': 'ground',
+                'pulse_e': False,
+                'pulse_f': False,
+                'data_keys': ('Ig', 'Qg', 'Igr', 'Qgr', 't_g', 'iq_ddr4_g'),
+                'enabled': True,
+                'acquire_kwargs': {}
+            }
+        ]
+        
+        # Add excited state scan if enabled
         if self.cfg.expt.check_e:
-            # Create configuration for excited state measurement
-            cfg = AttrDict(self.cfg.copy())
-            cfg.expt.pulse_e = True
-            cfg.expt.pulse_f = False
+            scan_configs.append({
+                'name': 'excited',
+                'pulse_e': True,
+                'pulse_f': False,
+                'data_keys': ('Ie', 'Qe', 'Ier', 'Qer', 't_e', 'iq_ddr4_e'),
+                'enabled': True,
+                'acquire_kwargs': {}
+            })
+
+        # Add second excited state scan if enabled
+        self.check_f = self.cfg.expt.check_f
+        if self.check_f:
+            scan_configs.append({
+                'name': 'second_excited',
+                'pulse_e': True,
+                'pulse_f': True,
+                'data_keys': ('If', 'Qf', 'Ifr', 'Qfr', 't_f', 'iq_ddr4_f'),
+                'enabled': True,
+                'acquire_kwargs': {}
+            })
+
+        # Loop through each scan configuration
+        for scan_config in scan_configs:
+                
+            if debug:
+                print(f"Acquiring {scan_config['name']} state data...")
+
+            # Create configuration for this scan
+            cfg = AttrDict(copy.deepcopy(dict(self.cfg)))
+            cfg.expt.pulse_e = scan_config['pulse_e']
+            cfg.expt.pulse_f = scan_config['pulse_f']
 
             # Create and configure histogram program
-            histpro = HistogramProgram(
-                soccfg=self.soccfg, final_delay=final_delay, cfg=cfg
-            )
+            kwargs = {"soccfg": self.soccfg, "final_delay": final_delay, "cfg": cfg}
+            histpro = HistogramProgram(**kwargs)
 
             # Configure DDR4 if enabled
             if self.cfg.expt.ddr4:
@@ -396,55 +390,36 @@ class HistogramExperiment(QickExperiment):
                     ch=self.cfg.expt.qubit_chan, nt=n_transfers
                 )
 
-            # Acquire excited state data
+            # Acquire data for this scan
+            acquire_kwargs = {
+                'threshold': None,
+                'progress': progress,
+                **scan_config['acquire_kwargs']
+            }
+            
             iq_list = histpro.acquire(
                 self.im[self.cfg.aliases.soc],
-                threshold=None,
-                progress=progress,
+                **acquire_kwargs
             )
+
+            # Extract data keys for this scan
+            i_key, q_key, ir_key, qr_key, t_key, ddr4_key = scan_config['data_keys']
+
+            # Store I/Q data
+            data[i_key] = iq_list[0][0][:, 0]
+            data[q_key] = iq_list[0][0][:, 1]
+
+            # Store reset data if active reset is enabled
+            if self.cfg.expt.active_reset or self.cfg.expt.remeas:
+                data[ir_key] = iq_list[0][1:, :, 0]
+                data[qr_key] = iq_list[0][1:, :, 1]
 
             # Get DDR4 data if enabled
             if self.cfg.expt.ddr4:
                 iq_ddr4 = self.im[self.cfg.aliases.soc].get_ddr4(nt)
                 t = histpro.get_time_axis_ddr4(self.cfg.expt.qubit_chan, iq_ddr4)
-                data["t_e"] = t
-                data["iq_ddr4_e"] = iq_ddr4
-
-            # Store excited state I/Q data
-            data["Ie"] = iq_list[0][0][:, 0]
-            data["Qe"] = iq_list[0][0][:, 1]
-
-            # Collect raw shots
-            irawe, qraw = histpro.collect_shots()
-
-            # Store reset data if active reset is enabled
-            if self.cfg.expt.active_reset or self.cfg.expt.remeas:
-                data["Ier"] = iq_list[0][1:, :, 0]
-                data["Qer"] = iq_list[0][1:, :, 1]
-
-        # ----------------------------------------------------------------------
-        # Second excited state measurements
-        # ----------------------------------------------------------------------
-        self.check_f = self.cfg.expt.check_f
-        if self.check_f:
-            # Create configuration for second excited state measurement
-            cfg = AttrDict(self.cfg.copy())
-            cfg.expt.pulse_e = True
-            cfg.expt.pulse_f = True
-
-            # Create and configure histogram program
-            histpro = HistogramProgram(soccfg=self.soccfg, cfg=cfg)
-
-            # Acquire second excited state data
-            avgi, avgq = histpro.acquire(
-                self.im[self.cfg.aliases.soc],
-                threshold=None,
-                load_pulses=True,
-                progress=progress,
-            )
-
-            # Store second excited state I/Q data
-            data["If"], data["Qf"] = histpro.collect_shots()
+                data[t_key] = t
+                data[ddr4_key] = iq_ddr4
 
         # Store data and return
         self.data = data

@@ -30,7 +30,8 @@ class QickProgram(AveragerProgramV2):
     that override the _body method to define the experiment sequence.
     """
 
-    def __init__(self, soccfg, final_delay=50, cfg={}):
+    def __init__(self, soccfg, final_delay=50, final_wait=0, cfg=None):
+
         """
         Initialize the QickProgram with hardware configuration and experiment parameters.
 
@@ -39,11 +40,13 @@ class QickProgram(AveragerProgramV2):
             final_delay: Delay time (in ns) after each experiment repetition
             cfg: Configuration dictionary containing experiment parameters
         """
+        if cfg is None:
+            cfg = {}
         self.cfg = AttrDict(cfg)  # Convert to attribute dictionary for easier access
 
         # Update configuration with experiment-specific parameters
         self.cfg.update(self.cfg.expt)
-        super().__init__(soccfg, self.cfg.expt.reps, final_delay, cfg=cfg)
+        super().__init__(soccfg, self.cfg.expt.reps, final_delay, final_wait=final_wait, cfg=cfg)
 
     def save_params(self, readout='standard'):
         cfg = AttrDict(self.cfg)
