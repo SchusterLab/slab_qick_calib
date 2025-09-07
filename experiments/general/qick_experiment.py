@@ -372,11 +372,10 @@ class QickExperiment(Experiment):
         #print(f"Final delay: {final_delay}")
 
         # Create program instance
-        prog = prog_name(
-            soccfg=self.soccfg,
-            final_delay=final_delay,
-            cfg=self.cfg,
-        )
+        kwargs = {'final_delay':final_delay, 'cfg':self.cfg}
+        if self.cfg.expt.active_reset: 
+            kwargs['final_wait']=None
+        prog = prog_name(soccfg=self.soccfg,**kwargs)
 
         # Record start time
         current_time = get_current_time_string()
@@ -416,7 +415,7 @@ class QickExperiment(Experiment):
     def _get_final_delay(self):
         """Get appropriate final delay based on active reset configuration."""
         if "active_reset" in self.cfg.expt and self.cfg.expt.active_reset:
-            return self.cfg.device.readout.readout_length[self.cfg.expt.qubit[0]]+3
+            return self.cfg.device.readout.readout_length[self.cfg.expt.qubit[0]]+4
             #return 10
         else:
             return self.cfg.device.readout.final_delay[self.cfg.expt.qubit[0]]

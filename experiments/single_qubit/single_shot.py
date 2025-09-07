@@ -283,6 +283,7 @@ class HistogramExperiment(QickExperiment):
             qubit_chan=self.cfg.hw.soc.adcs.readout.ch[qi],  # Readout channel
             ddr4=False,  # Whether to use DDR4 memory
             remeas=False,  # Whether to do repeated measurement
+            final_delay=self.cfg.device.readout.final_delay[qi],  # Final delay
         )
 
         # Merge default and user-provided parameters
@@ -324,7 +325,7 @@ class HistogramExperiment(QickExperiment):
         if "setup_reset" in self.cfg.expt and self.cfg.expt.setup_reset:
             final_delay = self.cfg.device.readout.final_delay[self.cfg.expt.qubit[0]]
         elif self.cfg.expt.active_reset:
-            final_delay = self.cfg.expt.readout_length
+            final_delay = self.cfg.expt.final_delay
         else:
             final_delay = self.cfg.device.readout.final_delay[self.cfg.expt.qubit[0]]
 
@@ -382,6 +383,8 @@ class HistogramExperiment(QickExperiment):
 
             # Create and configure histogram program
             kwargs = {"soccfg": self.soccfg, "final_delay": final_delay, "cfg": cfg}
+            if self.cfg.expt.active_reset: 
+                kwargs["final_wait"] = None
             histpro = HistogramProgram(**kwargs)
 
             # Configure DDR4 if enabled

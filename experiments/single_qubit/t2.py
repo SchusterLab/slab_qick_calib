@@ -38,7 +38,7 @@ class T2Program(QickProgram):
     Additional options include AC Stark shift during wait time and EF transition measurements.
     """
 
-    def __init__(self, soccfg, final_delay, cfg):
+    def __init__(self, soccfg, final_delay, cfg, final_wait=0):
         """
         Initialize the T2 program.
 
@@ -47,7 +47,7 @@ class T2Program(QickProgram):
             final_delay: Delay after measurement before next experiment
             cfg: Configuration dictionary containing experiment parameters
         """
-        super().__init__(soccfg, final_delay=final_delay, cfg=cfg)
+        super().__init__(soccfg, final_delay=final_delay, cfg=cfg, final_wait=0)
 
     def _initialize(self, cfg):
         """
@@ -136,7 +136,6 @@ class T2Program(QickProgram):
             cfg: Configuration dictionary
         """
         cfg = AttrDict(self.cfg)
-
         # Configure readout
         if self.adc_type == "dyn":
             self.send_readoutconfig(ch=self.adc_ch, name="readout", t=0)

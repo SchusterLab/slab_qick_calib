@@ -470,9 +470,9 @@ class QickProgram(AveragerProgramV2):
                 if self.lo_ch is not None:
                     self.pulse(ch=self.lo_ch, name="mix_pulse", t=0.0)
                 # Small delay before next iteration
-                self.delay_auto(0.01)
-            else:
-                self.delay_auto(0.01)  # Final small delay after last iteration
+                # self.delay_auto(0.01)
+            # else:
+            #     self.delay_auto(0.01)  # Final small delay after last iteration
 
     def cond_reset(self, i):
         """
