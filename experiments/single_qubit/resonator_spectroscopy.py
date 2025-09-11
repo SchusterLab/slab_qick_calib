@@ -836,7 +836,7 @@ class ResSpecPower(QickExperiment2DSimple):
 
         # Create figure and plot 2D data
         fig, ax = plt.subplots(1, 1, figsize=(10, 8))
-        plt.pcolormesh(x_sweep, y_sweep, amps, cmap="viridis", shading="auto")
+        plt.pcolormesh(x_sweep, y_sweep, amps, cmap="viridis", shading="auto", rasterized=True)
         
         # Use logarithmic y-axis if requested
         if self.cfg.expt.get('log', False):

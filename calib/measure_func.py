@@ -156,7 +156,7 @@ def check_chi(cfg_dict, qi=0, span=7, offset=0.5, npts=301, plot=False, check_f=
     )
 
 
-def measure_temp(cfg_dict, qi, temp=40, expts=20, rounds=1, chan=None):
+def measure_temp(cfg_dict, qi, temp=40, expts=20, chan=None):
     """
     Measures the temperature of a qubit.
     This is done by measuring the population of the excited state with and without a pi pulse.
@@ -192,7 +192,6 @@ def measure_temp(cfg_dict, qi, temp=40, expts=20, rounds=1, chan=None):
             "expts": expts,
             "pulse_ge": False,
             "checkEF": True,
-            "rounds": rounds,
             "temp": temp,
         },
         style="temp",

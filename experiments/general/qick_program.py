@@ -30,7 +30,7 @@ class QickProgram(AveragerProgramV2):
     that override the _body method to define the experiment sequence.
     """
 
-    def __init__(self, soccfg, final_delay=50, final_wait=0, cfg=None):
+    def __init__(self, soccfg, final_delay=50,  cfg=None,final_wait=0,):
 
         """
         Initialize the QickProgram with hardware configuration and experiment parameters.

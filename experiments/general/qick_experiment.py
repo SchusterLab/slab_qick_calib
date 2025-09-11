@@ -373,8 +373,8 @@ class QickExperiment(Experiment):
 
         # Create program instance
         kwargs = {'final_delay':final_delay, 'cfg':self.cfg}
-        if self.cfg.expt.active_reset: 
-            kwargs['final_wait']=None
+        # if self.cfg.expt.active_reset: 
+        #     kwargs['final_wait']=None
         prog = prog_name(soccfg=self.soccfg,**kwargs)
 
         # Record start time
@@ -1075,7 +1075,7 @@ class QickExperiment2DBase(QickExperimentLoop):
         for i, ydata in enumerate(ydata_lab):
             # Create heatmap using pcolormesh
             ax[i].pcolormesh(
-                x_sweep, y_sweep, data[ydata], cmap="viridis", shading="auto"
+                x_sweep, y_sweep, data[ydata], cmap="viridis", shading="auto", rasterized=True
             )
             # Add colorbar with label
             plt.colorbar(ax[i].collections[0], ax=ax[i], label=ylabels[i])
@@ -1086,6 +1086,8 @@ class QickExperiment2DBase(QickExperimentLoop):
             # Use log scale for y-axis if specified in configuration
             if "log" in self.cfg.expt and self.cfg.expt.log:
                 ax[i].set_yscale("log")
+
+            #ax[i].grid(False)
 
         # Save figure if created in this method
         if save_fig and fig:

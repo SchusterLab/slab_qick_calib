@@ -230,7 +230,7 @@ class RabiExperiment(QickExperiment):
             # Special configuration for temperature-dependent measurements
             params_def["reps"] = int(40 * params_def["reps"])
             params_def["rounds"] = int(
-                np.ceil(20 * params_def["rounds"] * 1.5 ** (params.get("temp", 40) / 40))
+                np.ceil(20 * params_def["rounds"] * np.exp( 2*(40 / params.get("temp", 40)-1)))
             )
             params_def["pulse_ge"] = False
         

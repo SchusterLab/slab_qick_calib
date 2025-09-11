@@ -124,6 +124,11 @@ class HistogramProgram(QickProgram):
         if self.adc_type == "dyn":
             self.send_readoutconfig(ch=self.adc_ch, name="readout", t=0)
 
+        # Perform active reset if enabled
+        if cfg.expt.active_reset:
+            self.reset(cfg.expt.reset)
+            self.delay_auto(10)
+
         # Apply pi pulse to prepare excited state if requested
         if cfg.expt.pulse_e:
             self.pulse(ch=self.qubit_ch, name="pi_ge", t=0)
@@ -141,9 +146,7 @@ class HistogramProgram(QickProgram):
             self.pulse(ch=self.lo_ch, name="mix_pulse", t=0.0)
         self.trigger(ros=[self.adc_ch], ddr4=True, pins=[0], t=self.trig_offset)
 
-        # Perform active reset if enabled
-        if cfg.expt.active_reset:
-            self.reset(cfg.expt.reset)
+        
         if cfg.expt.remeas:
             self.repeated_measurement(5)
 
@@ -156,7 +159,39 @@ class HistogramProgram(QickProgram):
         i : int
             Reset index
         """
-        super().reset(i)
+        cfg = AttrDict(self.cfg)
+
+        # Perform reset sequence i times
+        for n in range(i):
+            # Apply readout pulse and trigger data acquisition
+            self.pulse(ch=self.res_ch, name="readout_pulse", t=0)
+            if self.lo_ch is not None:
+                self.pulse(ch=self.lo_ch, name="mix_pulse", t=0.0)
+            self.trigger(ros=[self.adc_ch], ddr4=True, pins=[0], t=self.trig_offset)
+            # Wait for readout to complete
+            self.wait_auto(cfg.expt.read_wait)
+            # Add extra delay for stability
+            self.delay_auto(cfg.expt.read_wait + cfg.expt.extra_delay)
+
+            # Read qubit state and conditionally apply π pulse
+            # If I < threshold (qubit in |1⟩), apply π pulse to return to |0⟩
+            # If I >= threshold (qubit in |0⟩), skip the π pulse
+            self.read_and_jump(
+                ro_ch=self.adc_ch,
+                component="I",  # Use I quadrature for state discrimination
+                threshold=cfg.expt.threshold,  # Threshold for state discrimination
+                test="<",  # Skip to end of no pulse if I < threshold
+                label=f"NOPULSE{n}",  # Jump to this label if I >= threshold
+            )
+            #print(cfg.expt.threshold)
+
+            # Apply π pulse to flip qubit from |1⟩ to |0⟩
+            self.pulse(ch=self.qubit_ch, name="pi_ge", t=0)
+            # Small delay for pulse completion
+            self.delay_auto(0.01)
+            # Label for conditional jump target
+            self.label(f"NOPULSE{n}")
+
 
     def repeated_measurement(self, i):
         """
@@ -283,7 +318,7 @@ class HistogramExperiment(QickExperiment):
             qubit_chan=self.cfg.hw.soc.adcs.readout.ch[qi],  # Readout channel
             ddr4=False,  # Whether to use DDR4 memory
             remeas=False,  # Whether to do repeated measurement
-            final_delay=self.cfg.device.readout.final_delay[qi],  # Final delay
+            final_delay=self.cfg.device.readout.readout_length[qi],  # Final delay
         )
 
         # Merge default and user-provided parameters
@@ -325,7 +360,8 @@ class HistogramExperiment(QickExperiment):
         if "setup_reset" in self.cfg.expt and self.cfg.expt.setup_reset:
             final_delay = self.cfg.device.readout.final_delay[self.cfg.expt.qubit[0]]
         elif self.cfg.expt.active_reset:
-            final_delay = self.cfg.expt.final_delay
+            #final_delay = self.cfg.expt.final_delay
+            final_delay=1
         else:
             final_delay = self.cfg.device.readout.final_delay[self.cfg.expt.qubit[0]]
 
@@ -383,8 +419,8 @@ class HistogramExperiment(QickExperiment):
 
             # Create and configure histogram program
             kwargs = {"soccfg": self.soccfg, "final_delay": final_delay, "cfg": cfg}
-            if self.cfg.expt.active_reset: 
-                kwargs["final_wait"] = None
+            # if self.cfg.expt.active_reset: 
+            #     kwargs["final_wait"] = None
             histpro = HistogramProgram(**kwargs)
 
             # Configure DDR4 if enabled
@@ -409,8 +445,8 @@ class HistogramExperiment(QickExperiment):
             i_key, q_key, ir_key, qr_key, t_key, ddr4_key = scan_config['data_keys']
 
             # Store I/Q data
-            data[i_key] = iq_list[0][0][:, 0]
-            data[q_key] = iq_list[0][0][:, 1]
+            data[i_key] = iq_list[0][-1][:, 0]
+            data[q_key] = iq_list[0][-1][:, 1]
 
             # Store reset data if active reset is enabled
             if self.cfg.expt.active_reset or self.cfg.expt.remeas:
