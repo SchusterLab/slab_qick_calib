@@ -113,18 +113,11 @@ class QickProgram(AveragerProgramV2):
 
         q = self.qubits[0]  # Single qubit index
 
-        
         # Configure local oscillator (LO) if available
-        if (
-            "lo" in cfg.hw.soc
-            and "ch" in cfg.hw.soc.lo
-            and cfg.hw.soc.lo.ch[q] != "None"
-        ):
+        if ("lo" in cfg.hw.soc and "ch" in cfg.hw.soc.lo and cfg.hw.soc.lo.ch[q] != "None"):
             
             # Declare LO signal generator with offset from mixer frequency, this assumes it is using int generator
-            self.declare_gen(
-                ch=self.lo_ch, nqz=self.lo_nqz, mixer_freq=self.mixer_freq - 500
-            )
+            self.declare_gen(ch=self.lo_ch, nqz=self.lo_nqz, mixer_freq=self.mixer_freq - 500)
 
             # Create LO pulse for readout
             self.add_pulse(
@@ -138,7 +131,7 @@ class QickProgram(AveragerProgramV2):
             )
 
 
-        if "aves" in cfg.expt:
+        if "aves" in cfg.expt: # Used to make a 2D scan from a 1D scan
             self.add_loop("ave_loop", cfg.expt.aves)
 
         # Set up readout generator

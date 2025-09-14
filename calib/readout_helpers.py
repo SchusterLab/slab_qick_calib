@@ -18,6 +18,7 @@ from scipy.special import erf
 from copy import deepcopy
 import seaborn as sns
 import datetime
+from pathlib import Path
 
 # Standard colors for plotting
 BLUE = "#4053d3"  # Color for ground state
@@ -742,7 +743,7 @@ def fit_single_shot(d, plot=True, rot=True):
     return data, p, paramsg, paramse2
 
 
-def plot_reset(d):
+def plot_reset(d, fname):
     blue = "#4053d3"
     red = "#b51d14"
 
@@ -763,6 +764,7 @@ def plot_reset(d):
             ax[i].semilogy(v, hist, color=b[j])
 
     fig.tight_layout()
+    fig.suptitle("Ground state reset Histograms")
     fig, ax = plt.subplots(
         int(np.ceil(num_plots / 4)), 4, figsize=(14, 1 * num_plots), sharey=True
     )
@@ -780,8 +782,9 @@ def plot_reset(d):
 
     fig.tight_layout()
 
-    nplots = 6
+    nplots = shot.data["Igr"].shape[0]+1
     fig, ax = plt.subplots(2, nplots, figsize=(nplots * 4, 8))
+    fig.suptitle("Excited state reset Histograms")
     b = sns.color_palette("ch:s=-.2,r=.6", n_colors=len(d))
 
     for i, shot in enumerate(d):
@@ -806,13 +809,13 @@ def plot_reset(d):
 
     ax[0, 0].set_title("Ground state")
     ax[1, 0].set_title("Excited state")
+    fig.suptitle("Vary number of resets")
     fig.tight_layout()
-    current_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    # fig.savefig(
-    #             shot.fname[0 : -len(imname)] + "images\\" +  + ".png"
-    #         )
-    fig.savefig(f"reset_hist_{current_time}.png")
+    file_path = Path(fname)
+    new_filename = file_path.name.rsplit(".", 1)[0] + "_reset_hist.png"
+    fig.savefig(file_path.parent / "images" / new_filename)
+    
 
 def fit_hist(bin_centers, hist, data):
         v_rng = np.max(bin_centers) - np.min(bin_centers)

@@ -125,8 +125,8 @@ class HistogramProgram(QickProgram):
             self.send_readoutconfig(ch=self.adc_ch, name="readout", t=0)
 
         # Perform active reset if enabled
-        if cfg.expt.active_reset:
-            self.reset(cfg.expt.reset)
+        # if cfg.expt.active_reset:
+        #     self.reset(cfg.expt.reset)
             #self.delay_auto(10)
 
         # Apply pi pulse to prepare excited state if requested
@@ -146,7 +146,8 @@ class HistogramProgram(QickProgram):
             self.pulse(ch=self.lo_ch, name="mix_pulse", t=0.0)
         self.trigger(ros=[self.adc_ch], ddr4=True, pins=[0], t=self.trig_offset)
 
-        
+        if cfg.expt.active_reset:
+            self.reset2(cfg.expt.reset)
         if cfg.expt.remeas:
             self.repeated_measurement(5)
 
@@ -169,30 +170,76 @@ class HistogramProgram(QickProgram):
             #    self.pulse(ch=self.lo_ch, name="mix_pulse", t=0.0)
             self.trigger(ros=[self.adc_ch], ddr4=True, pins=[0], t=self.trig_offset)
             # Wait for readout to complete
-            self.wait(7)
-            self.delay(14)
-            #self.wait_auto(cfg.expt.read_wait)
+            #self.wait(7)
+            #self.delay(14)
+            self.wait_auto(cfg.expt.read_wait)
             # Add extra delay for stability
-            #self.delay_auto(cfg.expt.read_wait + cfg.expt.extra_delay)
+            self.delay_auto(cfg.expt.read_wait + cfg.expt.extra_delay+10)
+            
 
             # Read qubit state and conditionally apply π pulse
             # If I < threshold (qubit in |1⟩), apply π pulse to return to |0⟩
             # If I >= threshold (qubit in |0⟩), skip the π pulse
-            # self.read_and_jump(
-            #     ro_ch=self.adc_ch,
-            #     component="I",  # Use I quadrature for state discrimination
-            #     threshold=cfg.expt.threshold,  # Threshold for state discrimination
-            #     test="<",  # Skip to end of no pulse if I < threshold
-            #     label=f"NOPULSE{n}",  # Jump to this label if I >= threshold
-            # )
+            self.read_and_jump(
+                ro_ch=self.adc_ch,
+                component="I",  # Use I quadrature for state discrimination
+                threshold=cfg.expt.threshold,  # Threshold for state discrimination
+                test="<",  # Skip to end of no pulse if I < threshold
+                label=f"NOPULSE{n}",  # Jump to this label if I >= threshold
+            )
 
-            # # Apply π pulse to flip qubit from |1⟩ to |0⟩
-            # self.pulse(ch=self.qubit_ch, name="pi_ge", t=0)
-            # # Small delay for pulse completion
-            # self.delay_auto(0.01)
+            # Apply π pulse to flip qubit from |1⟩ to |0⟩
+            self.pulse(ch=self.qubit_ch, name="pi_ge", t=0)
+            # Small delay for pulse completion
+            self.delay_auto(0.01)
 
-            # # Label for conditional jump target
-            # self.label(f"NOPULSE{n}")
+            # Label for conditional jump target
+            self.label(f"NOPULSE{n}")
+
+    def reset2(self, i):
+        """
+        Reset the qubit to ground state.
+
+        Parameters
+        ----------
+        i : int
+            Reset index
+        """
+        cfg = AttrDict(self.cfg)
+
+        # Perform reset sequence i times
+        for n in range(i):
+            if i>0:
+            # Apply readout pulse and trigger data acquisition
+                self.pulse(ch=self.res_ch, name="readout_pulse", t=0)
+                #if self.lo_ch is not None:
+                #    self.pulse(ch=self.lo_ch, name="mix_pulse", t=0.0)
+                self.trigger(ros=[self.adc_ch], ddr4=True, pins=[0], t=self.trig_offset)
+                # Wait for readout to complete
+
+                self.wait_auto(cfg.expt.read_wait)
+                # Add extra delay for stability
+            self.delay_auto(cfg.expt.read_wait + cfg.expt.extra_delay+10)
+            
+
+            # Read qubit state and conditionally apply π pulse
+            # If I < threshold (qubit in |1⟩), apply π pulse to return to |0⟩
+            # If I >= threshold (qubit in |0⟩), skip the π pulse
+            self.read_and_jump(
+                ro_ch=self.adc_ch,
+                component="I",  # Use I quadrature for state discrimination
+                threshold=cfg.expt.threshold,  # Threshold for state discrimination
+                test="<",  # Skip to end of no pulse if I < threshold
+                label=f"NOPULSE{n}",  # Jump to this label if I >= threshold
+            )
+
+            # Apply π pulse to flip qubit from |1⟩ to |0⟩
+            self.pulse(ch=self.qubit_ch, name="pi_ge", t=0)
+            # Small delay for pulse completion
+            self.delay_auto(0.01)
+
+            # Label for conditional jump target
+            self.label(f"NOPULSE{n}")
 
 
     def repeated_measurement(self, i):
@@ -446,9 +493,20 @@ class HistogramExperiment(QickExperiment):
             # Extract data keys for this scan
             i_key, q_key, ir_key, qr_key, t_key, ddr4_key = scan_config['data_keys']
 
+            # Use for active reset first 
+            # # Store I/Q data
+            # data[i_key] = iq_list[0][-1][:, 0]
+            # data[q_key] = iq_list[0][-1][:, 1]
+
+            # # Store reset data if active reset is enabled
+            # if self.cfg.expt.active_reset or self.cfg.expt.remeas:
+            #     data[ir_key] = iq_list[0][0:-1, :, 0]
+            #     data[qr_key] = iq_list[0][0:-1, :, 1]
+
+            # Use for active reset at the end
             # Store I/Q data
-            data[i_key] = iq_list[0][-1][:, 0]
-            data[q_key] = iq_list[0][-1][:, 1]
+            data[i_key] = iq_list[0][0][:, 0]
+            data[q_key] = iq_list[0][0][:, 1]
 
             # Store reset data if active reset is enabled
             if self.cfg.expt.active_reset or self.cfg.expt.remeas:
