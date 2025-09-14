@@ -199,7 +199,7 @@ class T1Experiment(QickExperiment):
 
         # Define default parameters
         params_def = {
-            "reps": 2 * self.reps,  # Number of repetitions (inner loop)
+            "reps": int(1.5*self.reps),  # Number of repetitions (inner loop)
             "rounds": self.rounds,  # Number of averages (outer loop)
             "expts": 60,  # Number of wait time points
             "start": 0,  # Start time for wait sweep (μs)

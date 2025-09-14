@@ -50,6 +50,94 @@ class NpEncoder(json.JSONEncoder):
         return super(NpEncoder, self).default(obj)
 
 
+class YamlNpEncoder:
+    """
+    Custom YAML encoder to handle NumPy data types and arrays.
+    
+    This encoder ensures that numpy arrays and scalar types can be properly
+    serialized to YAML format for configuration and data storage.
+    Unlike JSON, YAML has native support for many data types, but we still
+    need to convert numpy objects to standard Python types.
+    """
+
+    @staticmethod
+    def convert_numpy_types(obj):
+        """
+        Recursively convert numpy objects to YAML-serializable types.
+        
+        Args:
+            obj: Object to be converted (can be nested dict/list structure)
+            
+        Returns:
+            YAML-serializable representation of the object
+        """
+        if isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            # Handle special float values
+            if np.isnan(obj):
+                return None  # YAML represents NaN as null
+            elif np.isinf(obj):
+                return float('inf') if obj > 0 else float('-inf')
+            else:
+                return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, np.bool_):
+            return bool(obj)
+        elif isinstance(obj, dict):
+            return {key: YamlNpEncoder.convert_numpy_types(value) for key, value in obj.items()}
+        elif isinstance(obj, (list, tuple)):
+            return [YamlNpEncoder.convert_numpy_types(item) for item in obj]
+        elif str(type(obj)) == "<class 'qick.asm_v2.QickParam'>":
+            return ""
+        else:
+            return obj
+
+    @staticmethod
+    def dump(data, stream=None, **kwargs):
+        """
+        Serialize data to YAML format with numpy type conversion.
+        
+        Args:
+            data: Data to serialize
+            stream: Output stream (file-like object) or None for string output
+            **kwargs: Additional arguments passed to yaml.dump()
+            
+        Returns:
+            YAML string if stream is None, otherwise None
+        """
+        # Convert numpy types before dumping
+        converted_data = YamlNpEncoder.convert_numpy_types(data)
+        
+        # Set default YAML dump parameters for better formatting
+        default_kwargs = {
+            'default_flow_style': False,  # Use block style instead of flow style
+            'indent': 2,                  # Use 2-space indentation
+            'width': 120,                 # Line width for wrapping
+            'allow_unicode': True,        # Allow unicode characters
+        }
+        
+        # Update with user-provided kwargs
+        default_kwargs.update(kwargs)
+        
+        return yaml.dump(converted_data, stream=stream, **default_kwargs)
+
+    @staticmethod
+    def dumps(data, **kwargs):
+        """
+        Serialize data to YAML string with numpy type conversion.
+        
+        Args:
+            data: Data to serialize
+            **kwargs: Additional arguments passed to yaml.dump()
+            
+        Returns:
+            YAML string representation
+        """
+        return YamlNpEncoder.dump(data, stream=None, **kwargs)
+
+
 class Experiment:
     """
     Base class for all quantum control experiments.

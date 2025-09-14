@@ -7,10 +7,12 @@ import time
 from pathlib import Path
 from visdom import Visdom
 from scipy.optimize import curve_fit
-
+import yaml
 from qick import *
+import json
 
 from ...exp_handling.experiment import Experiment
+from ...exp_handling.experiment import NpEncoder, YamlNpEncoder
 from ...analysis import fitting as fitter
 from ...calib import readout_helpers as helpers
 
@@ -581,6 +583,7 @@ class QickExperiment(Experiment):
         # Save figure if created in this method
         if save_fig and fig:
             self.save_fig(fig)
+            self.save_config()
             plt.show()
 
     def _show_histogram(self, data):
@@ -609,6 +612,19 @@ class QickExperiment(Experiment):
 
         fig.savefig(output_path)
         plt.show()
+
+    def save_config(self, suffix=''):
+        file_path = Path(self.fname)
+        parent_dir = file_path.parent
+        new_filename = file_path.name.rsplit(".", 1)[0] + suffix + ".yml"
+        output_path = parent_dir / "images" / new_filename
+        
+        with open(output_path, "w") as f:
+            YamlNpEncoder.dump(self.cfg, f, default_flow_style=None)
+
+
+
+        
 
     def make_hist(self, prog, single=True):
         """
