@@ -581,55 +581,9 @@ def calculate_discrimination_metrics(ground_data: ArrayLike, excited_data: Array
     }
 
 
-#------------------------------------------------------------------------------
-# Legacy Function Wrappers (for backward compatibility)
-#------------------------------------------------------------------------------
-
-def rotate(x: ArrayLike, y: ArrayLike, theta: float) -> Tuple[np.ndarray, np.ndarray]:
-    """Legacy wrapper for rotate_coordinates function."""
-    return rotate_coordinates(x, y, theta)
-
-
-def full_rotate(data: IQData, theta: float) -> IQData:
-    """Legacy wrapper for rotate_iq_data function."""
-    return rotate_iq_data(data, theta)
-
-
-def make_hist(data: ArrayLike, nbins: int = 200) -> Tuple[np.ndarray, np.ndarray]:
-    """Legacy wrapper for create_histogram function."""
-    return create_histogram(data, nbins)
-
-
-def two_gaussians(x: ArrayLike, mag1: float, cen1: float, wid: float, 
-                 mag2: float, cen2: float) -> np.ndarray:
-    """Legacy wrapper for double_gaussian function."""
-    return double_gaussian(x, mag1, cen1, wid, mag2, cen2)
-
-
-def distfn(v: ArrayLike, vg: float, ve: float, sigma: float, tm: float) -> np.ndarray:
-    """Legacy wrapper for t1_decay_distribution function."""
-    return t1_decay_distribution(v, vg, ve, sigma, tm)
-
-
-def excited_func(x: ArrayLike, vg: float, ve: float, sigma: float, tm: float) -> np.ndarray:
-    """Legacy wrapper for excited_state_model function."""
-    return excited_state_model(x, vg, ve, sigma, tm)
-
-
-def fit_all(x: ArrayLike, mag_g: float, vg: float, ve: float, sigma: float, tm: float) -> np.ndarray:
-    """Legacy wrapper for combined_state_model function."""
-    return combined_state_model(x, mag_g, vg, ve, sigma, tm)
-
-
-def fit_gaussian(data: ArrayLike, nbins: int = 200, p0: Optional[List[float]] = None, 
-                plot: bool = False) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Legacy wrapper for fit_gaussian_distribution function."""
-    return fit_gaussian_distribution(data, nbins, p0, plot)
-
-
-def hist(data: IQData, plot: bool = True, span: Optional[float] = None, 
-         ax: Optional[List[plt.Axes]] = None, verbose: bool = False, 
-         qubit: int = 0) -> Tuple[Dict[str, Any], Optional[plt.Figure]]:
+def analyze_single_shot_histograms(data: IQData, plot: bool = True, span: Optional[float] = None, 
+                                 ax: Optional[List[plt.Axes]] = None, verbose: bool = False, 
+                                 qubit: int = 0) -> Tuple[Dict[str, Any], Optional[plt.Figure]]:
     """
     Analyze and visualize IQ data histograms for quantum state discrimination.
     
@@ -941,7 +895,7 @@ def fit_single_shot(data: IQData, plot: bool = True, rot: bool = True) -> Tuple[
     # Rotate the data if requested
     if rot:
         # Get rotation angle from histogram analysis
-        params, _ = hist(d, plot=False, verbose=False)
+        params, _ = analyze_single_shot_histograms(d, plot=False, verbose=False)
         theta = np.pi * params['angle'] / 180
         data_rotated = rotate_iq_data(d, theta)
     else:
