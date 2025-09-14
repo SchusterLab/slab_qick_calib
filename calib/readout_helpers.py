@@ -1034,15 +1034,18 @@ def plot_reset(experiment_data: List[Any], filename: str) -> None:
 
     for i, shot in enumerate(experiment_data):
         v, hist = create_histogram(shot.data["Ig"], n_bins=50)
-        ax[i].semilogy(v, hist, color=COLORS['ground'])
+        ax[i].semilogy(v, hist, color=COLORS['ground'], label='Ground')
         ax[i].set_title(f"{shot.cfg.expt.threshold_v:0.2f}")
         ax[i].axvline(x=shot.cfg.expt.threshold_v, color="k", linestyle="--")
         for j in range(len(shot.data["Igr"])):
             v, hist = create_histogram(shot.data["Igr"][j], n_bins=50)
-            ax[i].semilogy(v, hist, color=reset_colors[j])
+            ax[i].semilogy(v, hist, color=reset_colors[j], label=f"Reset {j+1}")
+        if i==0:
+            ax[i].legend(fontsize=8)
 
-    fig.tight_layout()
     fig.suptitle("Ground state reset Histograms")
+    fig.tight_layout()
+    
     
     # Plot 2: Excited state reset histograms
     fig, ax = plt.subplots(
@@ -1060,18 +1063,19 @@ def plot_reset(experiment_data: List[Any], filename: str) -> None:
             v, hist = create_histogram(shot.data["Ier"][j], n_bins=50)
             ax[i].semilogy(v, hist, color=reset_colors[j])
 
+    fig.suptitle("Excited state reset Histograms")
     fig.tight_layout()
 
     # Plot 3: Reset efficiency summary
     nplots = experiment_data[0].data["Igr"].shape[0]+1
     fig, ax = plt.subplots(2, nplots, figsize=(nplots * 4, 8))
-    fig.suptitle("Excited state reset Histograms")
+    
     b = sns.color_palette("ch:s=-.2,r=.6", n_colors=len(experiment_data))
 
     for i, shot in enumerate(experiment_data):
         vg, histg = create_histogram(shot.data["Ig"], n_bins=50)
         ve, histe = create_histogram(shot.data["Ie"], n_bins=50)
-        for j in range(nplots):
+        for j in range(nplots-1):
 
             ax[0, j].semilogy(vg, histg, color=COLORS['ground'], linewidth=1)
             ax[1, j].semilogy(vg, histg, color=COLORS['ground'], linewidth=1)

@@ -406,7 +406,10 @@ class StarkSpec(QickExperiment2DSweep):
             plt.plot(x_fit, y_fit, label="Quadratic Fit")
         except:
             print('No fit to plot')
+        gain = self.cfg.device.readout.gain[self.cfg.expt.qubit[0]]
+        plt.axvline(gain, color="k", linestyle="--", label="Readout gain")
         plt.legend()
+        self.data['df_readout']=self.cfg.device.qubit.f_ge[self.cfg.expt.qubit[0]] - quadratic(gain, *self.data["popt"])
 
 
 # Define a quadratic function

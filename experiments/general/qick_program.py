@@ -195,7 +195,7 @@ class QickProgram(AveragerProgramV2):
         
         # Configure readout settings
         if self.adc_type == "dyn":
-            self.declare_readout(self.adc_ch, length=self.readout_length)  # Configure ADC for readout
+            self.declare_readout(self.adc_ch, length=self.readout_length+self.trig_offset-0.1)  # Configure ADC for readout
             self.add_readoutconfig(ch=self.adc_ch, name="readout", freq=self.frequency, gen_ch=self.res_ch)
         elif self.adc_type == "std":
             self.declare_readout(

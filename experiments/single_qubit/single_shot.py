@@ -147,7 +147,8 @@ class HistogramProgram(QickProgram):
         self.trigger(ros=[self.adc_ch], ddr4=True, pins=[0], t=self.trig_offset)
 
         if cfg.expt.active_reset:
-            self.reset2(cfg.expt.reset)
+            #self.reset2(cfg.expt.reset)
+            super().reset(cfg.expt.reset)
         if cfg.expt.remeas:
             self.repeated_measurement(5)
 
@@ -219,7 +220,7 @@ class HistogramProgram(QickProgram):
 
                 self.wait_auto(cfg.expt.read_wait)
                 # Add extra delay for stability
-            self.delay_auto(cfg.expt.read_wait + cfg.expt.extra_delay+10)
+            self.delay_auto(cfg.expt.read_wait + cfg.expt.extra_delay)
             
 
             # Read qubit state and conditionally apply π pulse
@@ -551,7 +552,7 @@ class HistogramExperiment(QickExperiment):
             data = self.data
 
         # Perform initial histogram analysis
-        params, _ = helpers.hist(data=data, plot=False, span=span, verbose=verbose)
+        params, _ = helpers.analyze_single_shot_histograms(data=data, plot=False, span=span, verbose=verbose)
         data.update(params)
 
         # Perform detailed single-shot analysis with fitting
@@ -628,7 +629,7 @@ class HistogramExperiment(QickExperiment):
             savefig = True
 
         # Create histogram plots
-        params, fig = helpers.hist(
+        params, fig = helpers.analyze_single_shot_histograms(
             data=data,
             plot=plot,
             verbose=verbose,
@@ -736,12 +737,12 @@ class HistogramExperiment(QickExperiment):
         None
         """
         # Create histograms with specified number of bins
-        nbins = 75
+        n_bins = 75
         fig, ax = plt.subplots(2, 1, figsize=(6, 7))
         fig.suptitle(f"Q{self.cfg.expt.qubit[0]}")
 
         # Create ground state histogram
-        vg, histg = helpers.make_hist(self.data["Ig"], nbins=nbins)
+        vg, histg = helpers.create_histogram(self.data["Ig"], n_bins=n_bins)
         max_g = np.max(histg)
         ax[0].semilogy(vg, histg/max_g, color=BLUE, linewidth=2)
         ax[1].semilogy(vg, histg/max_g, color=BLUE, linewidth=2)
@@ -750,7 +751,7 @@ class HistogramExperiment(QickExperiment):
         b = sns.color_palette("ch:s=-.2,r=.6", n_colors=len(self.data["Igr"]))
 
         # Create excited state histogram
-        ve, histe = helpers.make_hist(self.data["Ie"], nbins=nbins)
+        ve, histe = helpers.create_histogram(self.data["Ie"], n_bins=n_bins)
         max_e = np.max(histe)
         ax[1].semilogy(ve, histe/max_e, color=RED, linewidth=2)
         fig2, ax2 = plt.subplots(2, len(self.data["Igr"])+1, figsize=(17, 7), sharex=True, sharey=True)
@@ -760,11 +761,11 @@ class HistogramExperiment(QickExperiment):
         for i in range(len(self.data["Igr"])):
             ax2[0,i+1].plot(self.data['Igr'][i], self.data['Qgr'][i], '.', markersize=1)
             ax2[1,i+1].plot(self.data['Ier'][i], self.data['Qer'][i], '.', markersize=1)
-            v, hist = helpers.make_hist(self.data["Igr"][i], nbins=nbins)
+            v, hist = helpers.create_histogram(self.data["Igr"][i], n_bins=n_bins)
             ax[0].semilogy(v, hist/max_g, color=b[i], linewidth=1, label=f"{i+1}")
 
             # Plot reset histograms for excited state
-            v, hist = helpers.make_hist(self.data["Ier"][i], nbins=nbins)
+            v, hist = helpers.create_histogram(self.data["Ier"][i], n_bins=n_bins)
             ax[1].semilogy(v, hist/max_e, color=b[i], linewidth=1, label=f"{i+1}")
 
         ax[0].axhline(0.5, color="gray", linestyle="--", linewidth=1)

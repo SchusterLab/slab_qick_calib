@@ -10,7 +10,7 @@ alpha: [-148.2004, -150.9419, -147.0228, -200, -200, -200]
 g: [chi, chi, chi, chi, chi, chi]
 g_chi: [65.5533, 58.0229, 71.1882, -0.0, -0.0, -0.0]
 g_lamb: [null, 86.9932, 57.4783, 0.0, 0.0, 0.0]
-kappa_low: [null, null, null, null, null, null]
+kappa_low: [0.131, 0.1594, 0.1272, null, null, null]
 ng: [737.1017, 1062.0274, 616.1654, null, null, null]
 nqubits: 6
 ratio: [95.3015, 83.8805, 100.4092, 68.7895, 68.7895, 68.7895]

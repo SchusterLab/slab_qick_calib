@@ -541,6 +541,7 @@ def init_model_config(file_name, num_qubits):
         "kappa_low": init_array(None),
         "ratio": init_array(None),
         "ng": init_array(None),
+        "nreadout": init_array(None),
         "Q1": init_array(None),
         "T1_nopurcell": init_array(None),
         "Tphi": init_array(None),

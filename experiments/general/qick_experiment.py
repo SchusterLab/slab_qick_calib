@@ -415,8 +415,9 @@ class QickExperiment(Experiment):
     def _get_final_delay(self):
         """Get appropriate final delay based on active reset configuration."""
         if "active_reset" in self.cfg.expt and self.cfg.expt.active_reset:
-            return self.cfg.device.readout.readout_length[self.cfg.expt.qubit[0]]+4
+            #return self.cfg.device.readout.readout_length[self.cfg.expt.qubit[0]]+4
             #return 10
+            return 1
         else:
             return self.cfg.device.readout.final_delay[self.cfg.expt.qubit[0]]
 
@@ -815,7 +816,7 @@ class QickExperiment(Experiment):
         params_def = dict(
             threshold_v=self.cfg.device.readout.threshold[qi],
             read_wait=0.1,
-            extra_delay=0.2,
+            extra_delay=0.2 + 1.55/self.cfg.device.readout.kappa[qi],
             reset=self.cfg.device.readout.reset[qi],
         )
         self.cfg.expt = {**params_def, **self.cfg.expt}

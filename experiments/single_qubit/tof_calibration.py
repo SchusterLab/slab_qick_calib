@@ -280,6 +280,7 @@ class ToFCalibrationExperiment(QickExperiment):
 
         plt.plot(data["xpts"], data["i"], label="I")
         plt.plot(data["xpts"], data["q"], label="Q")
+        plt.plot(data["xpts"], data["amps"], label="Amplitude")
         plt.axvline(adc_trig_offset, c="k", ls="--")
         plt.legend()
         plt.show()
