@@ -623,9 +623,6 @@ class QickExperiment(Experiment):
             YamlNpEncoder.dump(self.cfg, f, default_flow_style=None)
 
 
-
-        
-
     def make_hist(self, prog, single=True):
         """
         Generate histogram of single-shot measurement results.
@@ -1243,7 +1240,7 @@ class QickExperiment2DSimple(QickExperiment2DBase):
     x-axis parameter is swept by a separate experiment instance.
     """
 
-    def __init__(self, cfg_dict=None, prefix="QickExp", progress=None, qi=0, live_plot=False):
+    def __init__(self, cfg_dict=None, prefix="QickExp", progress=None, qi=0, live_plot=False, auto_close_visdom=True):
         """
         Initialize the QickExperiment2DSimple.
 
@@ -1253,6 +1250,7 @@ class QickExperiment2DSimple(QickExperiment2DBase):
             progress: Whether to show progress bars
             qi: Qubit index to use for the experiment
             live_plot: Whether to enable live plotting with Visdom during acquisition
+            auto_close_visdom: Whether to automatically close visdom plots after experiment finishes
         """
         super().__init__(cfg_dict=cfg_dict, prefix=prefix, progress=progress, qi=qi)
 
@@ -1260,6 +1258,7 @@ class QickExperiment2DSimple(QickExperiment2DBase):
         self.save_interim=True
         self.viz = None
         self.viz_window = None
+        self.auto_close_visdom = auto_close_visdom
 
         if self.live_plot:
             try:
@@ -1318,6 +1317,10 @@ class QickExperiment2DSimple(QickExperiment2DBase):
         for k, a in data.items():
             data[k] = np.array(a)
         self.data = data
+
+        # Close visdom plot if auto_close_visdom is enabled
+        if self.auto_close_visdom and self.live_plot and self.viz is not None:
+            self._close_visdom_plots()
 
         return data
     
@@ -1379,6 +1382,20 @@ class QickExperiment2DSimple(QickExperiment2DBase):
 
         except Exception as e:
             print(f"[Visdom] Live plot failed: {e}")
+
+    def _close_visdom_plots(self):
+        """Close visdom plots after experiment completion."""
+        try:
+            if self.viz_window is not None:
+                # Close the specific window
+                self.viz.close(win=self.viz_window)
+                print("[Visdom] Closed experiment plot window")
+            else:
+                # If no specific window, close all windows in the current environment
+                self.viz.close(win=None)
+                print("[Visdom] Closed all visdom windows")
+        except Exception as e:
+            print(f"[Visdom] Failed to close plots: {e}")
 
 
 class QickExperiment2DSweep(QickExperiment2DBase):

@@ -28,6 +28,8 @@ In this framework, it's important to understand the distinction between a `QickP
 
 This separation of concerns allows for a modular and extensible framework where the high-level experiment logic is decoupled from the low-level hardware control.
 
+**For detailed information about writing QICK programs**, see the [QICK Demos and Documentation](https://github.com/meeg/qick_demos_sho/tree/main/tprocv2).
+
 ### Basic Configuration Setup
 
 To set up a new configuration or data folder:
@@ -789,6 +791,55 @@ t1_2q_cont = meas.T1Cont2QExperiment(cfg_dict, qi=[0, 1], params={'shots': 50000
    # Update optimized readout parameters
    shotopt.update()
    ```
+
+## Live Plotting with Visdom
+
+Real-time visualization for 2D experiments using Visdom. Useful for monitoring long-running experiments.
+
+### Setup
+
+Start the Visdom server before running experiments:
+```bash
+python -m visdom.server
+```
+Access the web interface at `http://localhost:8097` to view live plots.
+
+### Usage
+
+Enable live plotting in `QickExperiment2DSimple` with `live_plot=True`:
+
+```python
+# Basic live plotting
+exp_2d = QickExperiment2DSimple(cfg_dict=cfg_dict, live_plot=True, qi=0)
+y_sweep = [{"var": "wait_time", "pts": np.linspace(0, 50, 25)}]
+data = exp_2d.acquire(y_sweep)
+
+# Keep plots open after experiment
+exp_2d = QickExperiment2DSimple(cfg_dict=cfg_dict, live_plot=True, auto_close_visdom=False, qi=0)
+
+# T1 2D with live plotting
+t1_2d = T1_2D(cfg_dict=cfg_dict, qi=0, live_plot=True, params={'sweep_pts': 100})
+```
+
+### Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `live_plot` | Enable real-time visualization | `False` |
+| `auto_close_visdom` | Auto-close plots when done | `True` |
+
+### Features
+
+- **Real-time heatmaps**: Shows amplitude, phase, I, and Q quadratures
+- **Four-panel display**: Updates after each sweep point
+- **Automatic cleanup**: Plots close when experiments finish (if enabled)
+
+### Troubleshooting
+
+- **Server not running**: Run `python -m visdom.server` first
+- **Plots not updating**: Refresh browser or check console for errors
+- **Memory issues**: Use `auto_close_visdom=True` for long experiments
+- **Test setup**: Run `python test_visdom_cleanup.py` to verify functionality
 
 ## Parameter Reference
 
