@@ -69,8 +69,8 @@ class HistogramProgram(QickProgram):
         - `expt.active_reset` (optional): Boolean to enable active reset
     """
 
-    def __init__(self, soccfg, final_delay, cfg):
-        super().__init__(soccfg, final_delay=final_delay, cfg=cfg)
+    def __init__(self, soccfg, final_delay, cfg, final_wait=0):
+        super().__init__(soccfg, final_delay=final_delay, cfg=cfg, final_wait=final_wait)
 
     def _initialize(self, cfg):
         """
@@ -91,7 +91,7 @@ class HistogramProgram(QickProgram):
         self.frequency = cfg.expt.frequency
         self.gain = cfg.expt.gain
         # Set phase based on whether active reset is enabled
-        if cfg.expt.active_reset:
+        if cfg.expt.active_reset or cfg.expt.remeas:
             self.phase = cfg.device.readout.phase[cfg.expt.qubit[0]]
         else:
             self.phase = 0
@@ -101,9 +101,9 @@ class HistogramProgram(QickProgram):
         super()._initialize(cfg, readout="")
 
         # Define pi pulses for state preparation
-        super().make_pi_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
+        super().make_cfg_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
         if cfg.expt.pulse_f:
-            super().make_pi_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ef, "pi_ef")
+            super().make_cfg_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ef, "pi_ef")
 
         # Add initial delay for tProc setup
         self.delay(0.5)
@@ -124,6 +124,11 @@ class HistogramProgram(QickProgram):
         if self.adc_type == "dyn":
             self.send_readoutconfig(ch=self.adc_ch, name="readout", t=0)
 
+        # Perform active reset if enabled
+        # if cfg.expt.active_reset:
+        #     self.reset(cfg.expt.reset)
+            #self.delay_auto(10)
+
         # Apply pi pulse to prepare excited state if requested
         if cfg.expt.pulse_e:
             self.pulse(ch=self.qubit_ch, name="pi_ge", t=0)
@@ -141,9 +146,11 @@ class HistogramProgram(QickProgram):
             self.pulse(ch=self.lo_ch, name="mix_pulse", t=0.0)
         self.trigger(ros=[self.adc_ch], ddr4=True, pins=[0], t=self.trig_offset)
 
-        # Perform active reset if enabled
         if cfg.expt.active_reset:
-            self.reset(7)
+            #self.reset2(cfg.expt.reset)
+            super().reset(cfg.expt.reset)
+        if cfg.expt.remeas:
+            self.repeated_measurement(5)
 
     def reset(self, i):
         """
@@ -154,7 +161,107 @@ class HistogramProgram(QickProgram):
         i : int
             Reset index
         """
-        super().reset(i)
+        cfg = AttrDict(self.cfg)
+
+        # Perform reset sequence i times
+        for n in range(i):
+            # Apply readout pulse and trigger data acquisition
+            self.pulse(ch=self.res_ch, name="readout_pulse", t=0)
+            #if self.lo_ch is not None:
+            #    self.pulse(ch=self.lo_ch, name="mix_pulse", t=0.0)
+            self.trigger(ros=[self.adc_ch], ddr4=True, pins=[0], t=self.trig_offset)
+            # Wait for readout to complete
+            #self.wait(7)
+            #self.delay(14)
+            self.wait_auto(cfg.expt.read_wait)
+            # Add extra delay for stability
+            self.delay_auto(cfg.expt.read_wait + cfg.expt.extra_delay+10)
+            
+
+            # Read qubit state and conditionally apply π pulse
+            # If I < threshold (qubit in |1⟩), apply π pulse to return to |0⟩
+            # If I >= threshold (qubit in |0⟩), skip the π pulse
+            self.read_and_jump(
+                ro_ch=self.adc_ch,
+                component="I",  # Use I quadrature for state discrimination
+                threshold=cfg.expt.threshold,  # Threshold for state discrimination
+                test="<",  # Skip to end of no pulse if I < threshold
+                label=f"NOPULSE{n}",  # Jump to this label if I >= threshold
+            )
+
+            # Apply π pulse to flip qubit from |1⟩ to |0⟩
+            self.pulse(ch=self.qubit_ch, name="pi_ge", t=0)
+            # Small delay for pulse completion
+            self.delay_auto(0.01)
+
+            # Label for conditional jump target
+            self.label(f"NOPULSE{n}")
+
+    def reset2(self, i):
+        """
+        Reset the qubit to ground state.
+
+        Parameters
+        ----------
+        i : int
+            Reset index
+        """
+        cfg = AttrDict(self.cfg)
+
+        # Perform reset sequence i times
+        for n in range(i):
+            if i>0:
+            # Apply readout pulse and trigger data acquisition
+                self.pulse(ch=self.res_ch, name="readout_pulse", t=0)
+                #if self.lo_ch is not None:
+                #    self.pulse(ch=self.lo_ch, name="mix_pulse", t=0.0)
+                self.trigger(ros=[self.adc_ch], ddr4=True, pins=[0], t=self.trig_offset)
+                # Wait for readout to complete
+
+                self.wait_auto(cfg.expt.read_wait)
+                # Add extra delay for stability
+            self.delay_auto(cfg.expt.read_wait + cfg.expt.extra_delay)
+            
+
+            # Read qubit state and conditionally apply π pulse
+            # If I < threshold (qubit in |1⟩), apply π pulse to return to |0⟩
+            # If I >= threshold (qubit in |0⟩), skip the π pulse
+            self.read_and_jump(
+                ro_ch=self.adc_ch,
+                component="I",  # Use I quadrature for state discrimination
+                threshold=cfg.expt.threshold,  # Threshold for state discrimination
+                test="<",  # Skip to end of no pulse if I < threshold
+                label=f"NOPULSE{n}",  # Jump to this label if I >= threshold
+            )
+
+            # Apply π pulse to flip qubit from |1⟩ to |0⟩
+            self.pulse(ch=self.qubit_ch, name="pi_ge", t=0)
+            # Small delay for pulse completion
+            self.delay_auto(0.01)
+
+            # Label for conditional jump target
+            self.label(f"NOPULSE{n}")
+
+
+    def repeated_measurement(self, i):
+        """
+        Perform repeated measurement.
+
+        Parameters
+        ----------
+        i : int
+            Number of repetitions
+        """
+        cfg = AttrDict(self.cfg)
+        for n in range(i):
+            self.wait_auto(0.1)
+            self.delay_auto(0.3)
+            
+            self.trigger(ros=[self.adc_ch], pins=[0], t=self.trig_offset)
+            self.pulse(ch=self.res_ch, name="readout_pulse", t=0)
+            if self.lo_ch is not None:
+                self.pulse(ch=self.lo_ch, name="mix_pulse", t=0.0)
+            self.delay_auto(0.01)
 
     def collect_shots(self, offset=0):
         """
@@ -254,11 +361,14 @@ class HistogramExperiment(QickExperiment):
             frequency=self.cfg.device.readout.frequency[qi],  # Readout frequency
             gain=self.cfg.device.readout.gain[qi],  # Readout gain
             active_reset=False,  # Whether to use active reset
+            reset=7,  # Reset index
             check_e=True,  # Whether to measure excited state
             check_f=check_f,  # Whether to measure second excited state
             qubit=[qi],  # Qubit index list
             qubit_chan=self.cfg.hw.soc.adcs.readout.ch[qi],  # Readout channel
             ddr4=False,  # Whether to use DDR4 memory
+            remeas=False,  # Whether to do repeated measurement
+            final_delay=self.cfg.device.readout.readout_length[qi],  # Final delay
         )
 
         # Merge default and user-provided parameters
@@ -300,70 +410,68 @@ class HistogramExperiment(QickExperiment):
         if "setup_reset" in self.cfg.expt and self.cfg.expt.setup_reset:
             final_delay = self.cfg.device.readout.final_delay[self.cfg.expt.qubit[0]]
         elif self.cfg.expt.active_reset:
-            final_delay = self.cfg.expt.readout_length
+            #final_delay = self.cfg.expt.final_delay
+            final_delay=1
         else:
             final_delay = self.cfg.device.readout.final_delay[self.cfg.expt.qubit[0]]
 
-        # ----------------------------------------------------------------------
-        # Ground state measurements
-        # ----------------------------------------------------------------------
-        # Create configuration for ground state measurement
-        cfg2 = copy.deepcopy(dict(self.cfg))
-        cfg = AttrDict(cfg2)
-        cfg.expt.pulse_e = False
-        cfg.expt.pulse_f = False
-
-        # Create and configure histogram program
-        histpro = HistogramProgram(soccfg=self.soccfg, final_delay=final_delay, cfg=cfg)
-
-        # Configure DDR4 if enabled
+        # Configure DDR4 parameters if enabled
         if self.cfg.expt.ddr4:
             # Each transfer (burst) is 256 decimated samples
             n_transfers = 1500000
             nt = n_transfers
-            # Arm the DDR4 buffer
-            self.im[self.cfg.aliases.soc].arm_ddr4(
-                ch=self.cfg.expt.qubit_chan, nt=n_transfers
-            )
 
-        # Acquire ground state data
-        iq_list = histpro.acquire(
-            self.im[self.cfg.aliases.soc],
-            threshold=None,
-            progress=progress,
-        )
-
-        # Store ground state I/Q data
-        data["Ig"] = iq_list[0][0][:, 0]
-        data["Qg"] = iq_list[0][0][:, 1]
-
-        # Store reset data if active reset is enabled
-        if self.cfg.expt.active_reset:
-            data["Igr"] = iq_list[0][1:, :, 0]
-
-        # Get DDR4 data if enabled
-        if self.cfg.expt.ddr4:
-            iq_ddr4 = self.im[self.cfg.aliases.soc].get_ddr4(nt)
-            t = histpro.get_time_axis_ddr4(self.cfg.expt.qubit_chan, iq_ddr4)
-            data["t_g"] = t
-            data["iq_ddr4_g"] = iq_ddr4
-
-        # Collect raw shots
-        irawg, qrawg = histpro.collect_shots()
-
-        # ----------------------------------------------------------------------
-        # Excited state measurements
-        # ----------------------------------------------------------------------
+        # Define scan configurations for different quantum states
+        scan_configs = [
+            {
+                'name': 'ground',
+                'pulse_e': False,
+                'pulse_f': False,
+                'data_keys': ('Ig', 'Qg', 'Igr', 'Qgr', 't_g', 'iq_ddr4_g'),
+                'enabled': True,
+                'acquire_kwargs': {}
+            }
+        ]
+        
+        # Add excited state scan if enabled
         if self.cfg.expt.check_e:
-            # Create configuration for excited state measurement
-            cfg = AttrDict(self.cfg.copy())
-            cfg.expt.pulse_e = True
-            cfg.expt.pulse_f = False
+            scan_configs.append({
+                'name': 'excited',
+                'pulse_e': True,
+                'pulse_f': False,
+                'data_keys': ('Ie', 'Qe', 'Ier', 'Qer', 't_e', 'iq_ddr4_e'),
+                'enabled': True,
+                'acquire_kwargs': {}
+            })
+
+        # Add second excited state scan if enabled
+        self.check_f = self.cfg.expt.check_f
+        if self.check_f:
+            scan_configs.append({
+                'name': 'second_excited',
+                'pulse_e': True,
+                'pulse_f': True,
+                'data_keys': ('If', 'Qf', 'Ifr', 'Qfr', 't_f', 'iq_ddr4_f'),
+                'enabled': True,
+                'acquire_kwargs': {}
+            })
+
+        # Loop through each scan configuration
+        for scan_config in scan_configs:
+                
+            if debug:
+                print(f"Acquiring {scan_config['name']} state data...")
+
+            # Create configuration for this scan
+            cfg = AttrDict(copy.deepcopy(dict(self.cfg)))
+            cfg.expt.pulse_e = scan_config['pulse_e']
+            cfg.expt.pulse_f = scan_config['pulse_f']
 
             # Create and configure histogram program
-            histpro = HistogramProgram(
-                soccfg=self.soccfg, final_delay=final_delay, cfg=cfg
-            )
+            kwargs = {"soccfg": self.soccfg, "final_delay": final_delay, "cfg": cfg}
+            # if self.cfg.expt.active_reset: 
+            #     kwargs["final_wait"] = None
+            histpro = HistogramProgram(**kwargs)
 
             # Configure DDR4 if enabled
             if self.cfg.expt.ddr4:
@@ -371,54 +479,47 @@ class HistogramExperiment(QickExperiment):
                     ch=self.cfg.expt.qubit_chan, nt=n_transfers
                 )
 
-            # Acquire excited state data
+            # Acquire data for this scan
+            acquire_kwargs = {
+                'threshold': None,
+                'progress': progress,
+                **scan_config['acquire_kwargs']
+            }
+            
             iq_list = histpro.acquire(
                 self.im[self.cfg.aliases.soc],
-                threshold=None,
-                progress=progress,
+                **acquire_kwargs
             )
+
+            # Extract data keys for this scan
+            i_key, q_key, ir_key, qr_key, t_key, ddr4_key = scan_config['data_keys']
+
+            # Use for active reset first 
+            # # Store I/Q data
+            # data[i_key] = iq_list[0][-1][:, 0]
+            # data[q_key] = iq_list[0][-1][:, 1]
+
+            # # Store reset data if active reset is enabled
+            # if self.cfg.expt.active_reset or self.cfg.expt.remeas:
+            #     data[ir_key] = iq_list[0][0:-1, :, 0]
+            #     data[qr_key] = iq_list[0][0:-1, :, 1]
+
+            # Use for active reset at the end
+            # Store I/Q data
+            data[i_key] = iq_list[0][0][:, 0]
+            data[q_key] = iq_list[0][0][:, 1]
+
+            # Store reset data if active reset is enabled
+            if self.cfg.expt.active_reset or self.cfg.expt.remeas:
+                data[ir_key] = iq_list[0][1:, :, 0]
+                data[qr_key] = iq_list[0][1:, :, 1]
 
             # Get DDR4 data if enabled
             if self.cfg.expt.ddr4:
                 iq_ddr4 = self.im[self.cfg.aliases.soc].get_ddr4(nt)
                 t = histpro.get_time_axis_ddr4(self.cfg.expt.qubit_chan, iq_ddr4)
-                data["t_e"] = t
-                data["iq_ddr4_e"] = iq_ddr4
-
-            # Store excited state I/Q data
-            data["Ie"] = iq_list[0][0][:, 0]
-            data["Qe"] = iq_list[0][0][:, 1]
-
-            # Collect raw shots
-            irawe, qraw = histpro.collect_shots()
-
-            # Store reset data if active reset is enabled
-            if self.cfg.expt.active_reset:
-                data["Ier"] = iq_list[0][1:, :, 0]
-
-        # ----------------------------------------------------------------------
-        # Second excited state measurements
-        # ----------------------------------------------------------------------
-        self.check_f = self.cfg.expt.check_f
-        if self.check_f:
-            # Create configuration for second excited state measurement
-            cfg = AttrDict(self.cfg.copy())
-            cfg.expt.pulse_e = True
-            cfg.expt.pulse_f = True
-
-            # Create and configure histogram program
-            histpro = HistogramProgram(soccfg=self.soccfg, cfg=cfg)
-
-            # Acquire second excited state data
-            avgi, avgq = histpro.acquire(
-                self.im[self.cfg.aliases.soc],
-                threshold=None,
-                load_pulses=True,
-                progress=progress,
-            )
-
-            # Store second excited state I/Q data
-            data["If"], data["Qf"] = histpro.collect_shots()
+                data[t_key] = t
+                data[ddr4_key] = iq_ddr4
 
         # Store data and return
         self.data = data
@@ -451,7 +552,7 @@ class HistogramExperiment(QickExperiment):
             data = self.data
 
         # Perform initial histogram analysis
-        params, _ = helpers.hist(data=data, plot=False, span=span, verbose=verbose)
+        params, _ = helpers.analyze_single_shot_histograms(data=data, plot=False, span=span, verbose=verbose)
         data.update(params)
 
         # Perform detailed single-shot analysis with fitting
@@ -467,6 +568,12 @@ class HistogramExperiment(QickExperiment):
             data["histe"] = data2["histe"]
             data["paramsg"] = paramsg
             data["shots"] = self.cfg.expt.shots
+            data['e_mean'] = p['e_mean']
+            data['g_mean'] = p['g_mean']
+            dv = self.data['ve'] - self.data['vg']
+            data['e_norm'] = (self.data['e_mean']-self.data['vg'])/dv
+
+            data['g_norm'] = (self.data['g_mean']-self.data['vg'])/dv
         except Exception as e:
             print(f"Fits failed: {str(e)}")
 
@@ -522,7 +629,7 @@ class HistogramExperiment(QickExperiment):
             savefig = True
 
         # Create histogram plots
-        params, fig = helpers.hist(
+        params, fig = helpers.analyze_single_shot_histograms(
             data=data,
             plot=plot,
             verbose=verbose,
@@ -564,7 +671,7 @@ class HistogramExperiment(QickExperiment):
                 self.fname[0 : -len(imname)] + "images\\" + imname[0:-3] + ".png"
             )
 
-    def update(self, cfg_file, freq=True, fast=False, verbose=True):
+    def update(self, freq=True, fast=False, verbose=True):
         """
         Update configuration file with the results of the experiment.
 
@@ -587,6 +694,7 @@ class HistogramExperiment(QickExperiment):
         None
         """
         qi = self.cfg.expt.qubit[0]
+        cfg_file=self.config_file
 
         # Update readout parameters
         config.update_readout(
@@ -629,31 +737,39 @@ class HistogramExperiment(QickExperiment):
         None
         """
         # Create histograms with specified number of bins
-        nbins = 75
+        n_bins = 75
         fig, ax = plt.subplots(2, 1, figsize=(6, 7))
         fig.suptitle(f"Q{self.cfg.expt.qubit[0]}")
 
         # Create ground state histogram
-        vg, histg = helpers.make_hist(self.data["Ig"], nbins=nbins)
-        ax[0].semilogy(vg, histg, color=BLUE, linewidth=2)
-        ax[1].semilogy(vg, histg, color=BLUE, linewidth=2)
+        vg, histg = helpers.create_histogram(self.data["Ig"], n_bins=n_bins)
+        max_g = np.max(histg)
+        ax[0].semilogy(vg, histg/max_g, color=BLUE, linewidth=2)
+        ax[1].semilogy(vg, histg/max_g, color=BLUE, linewidth=2)
 
         # Create color palette for reset histograms
         b = sns.color_palette("ch:s=-.2,r=.6", n_colors=len(self.data["Igr"]))
 
         # Create excited state histogram
-        ve, histe = helpers.make_hist(self.data["Ie"], nbins=nbins)
-        ax[1].semilogy(ve, histe, color=RED, linewidth=2)
-
+        ve, histe = helpers.create_histogram(self.data["Ie"], n_bins=n_bins)
+        max_e = np.max(histe)
+        ax[1].semilogy(ve, histe/max_e, color=RED, linewidth=2)
+        fig2, ax2 = plt.subplots(2, len(self.data["Igr"])+1, figsize=(17, 7), sharex=True, sharey=True)
         # Plot reset histograms for ground state
+        ax2[0,0].plot(self.data['Ig'], self.data['Qg'], '.', markersize=1)
+        ax2[1,0].plot(self.data['Ie'], self.data['Qe'], '.', markersize=1)
         for i in range(len(self.data["Igr"])):
-            v, hist = helpers.make_hist(self.data["Igr"][i], nbins=nbins)
-            ax[0].semilogy(v, hist, color=b[i], linewidth=1, label=f"{i+1}")
+            ax2[0,i+1].plot(self.data['Igr'][i], self.data['Qgr'][i], '.', markersize=1)
+            ax2[1,i+1].plot(self.data['Ier'][i], self.data['Qer'][i], '.', markersize=1)
+            v, hist = helpers.create_histogram(self.data["Igr"][i], n_bins=n_bins)
+            ax[0].semilogy(v, hist/max_g, color=b[i], linewidth=1, label=f"{i+1}")
 
             # Plot reset histograms for excited state
-            v, hist = helpers.make_hist(self.data["Ier"][i], nbins=nbins)
-            ax[1].semilogy(v, hist, color=b[i], linewidth=1, label=f"{i+1}")
+            v, hist = helpers.create_histogram(self.data["Ier"][i], n_bins=n_bins)
+            ax[1].semilogy(v, hist/max_e, color=b[i], linewidth=1, label=f"{i+1}")
 
+        ax[0].axhline(0.5, color="gray", linestyle="--", linewidth=1)
+        ax[1].axhline(0.5, color="gray", linestyle="--", linewidth=1)
         # Helper function to find bin index closest to a value
         def find_bin_closest_to_value(bins, value):
             return np.argmin(np.abs(bins - value))
@@ -682,6 +798,7 @@ class HistogramExperiment(QickExperiment):
         ax[0].set_title("Ground state")
         ax[1].set_title("Excited state")
         plt.show()
+        self.save_fig(fig, "_reset_performance")
 
 
 # ====================================================== #

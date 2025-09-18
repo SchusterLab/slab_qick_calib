@@ -38,7 +38,7 @@ class T2Program(QickProgram):
     Additional options include AC Stark shift during wait time and EF transition measurements.
     """
 
-    def __init__(self, soccfg, final_delay, cfg):
+    def __init__(self, soccfg, final_delay, cfg, final_wait=0):
         """
         Initialize the T2 program.
 
@@ -47,7 +47,7 @@ class T2Program(QickProgram):
             final_delay: Delay after measurement before next experiment
             cfg: Configuration dictionary containing experiment parameters
         """
-        super().__init__(soccfg, final_delay=final_delay, cfg=cfg)
+        super().__init__(soccfg, final_delay=final_delay, cfg=cfg, final_wait=0)
 
     def _initialize(self, cfg):
         """
@@ -62,6 +62,9 @@ class T2Program(QickProgram):
             cfg: Configuration dictionary
         """
         cfg = AttrDict(self.cfg)
+
+        # Create loop for sweeping wait time
+        self.add_loop("wait_loop", cfg.expt.expts)
 
         # Initialize standard readout
         super()._initialize(cfg, readout="standard")
@@ -85,8 +88,7 @@ class T2Program(QickProgram):
         pulse["phase"] = cfg.expt.wait_time * 360 * cfg.expt.ramsey_freq
         super().make_pulse(pulse, "pi2_read")
 
-        # Create loop for sweeping wait time
-        self.add_loop("wait_loop", cfg.expt.expts)
+        
 
         # For AC Stark shift in Ramsey experiments
         if hasattr(cfg.expt, "acStark") and cfg.expt.acStark:
@@ -106,20 +108,20 @@ class T2Program(QickProgram):
             cfg.device.qubit.pulses.pi_ge.phase = 90 * np.ones(
                 len(cfg.device.qubit.f_ge)
             )
-            super().make_pi_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
+            super().make_cfg_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
         elif (
             cfg.expt.checkEF
             or cfg.expt.experiment_type == "echo"
             or cfg.expt.active_reset
         ):
-            super().make_pi_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
+            super().make_cfg_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
 
         if cfg.expt.checkEF and cfg.expt.experiment_type == "echo":
             # Create π pulse for EF transition check
-            super().make_pi_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ef, "pi_ef")
+            super().make_cfg_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ef, "pi_ef")
 
-        for i in range(1000):
-            self.nop()
+        # for i in range(1000):
+        #     self.nop()
 
     def _body(self, cfg):
         """
@@ -134,7 +136,6 @@ class T2Program(QickProgram):
             cfg: Configuration dictionary
         """
         cfg = AttrDict(self.cfg)
-
         # Configure readout
         if self.adc_type == "dyn":
             self.send_readoutconfig(ch=self.adc_ch, name="readout", t=0)
@@ -228,6 +229,7 @@ class T2Experiment(QickExperiment):
         max_err=None,
         display=True,
         print=False,
+        check_params=True,
     ):
         """
         Initialize the T2 experiment.
@@ -276,7 +278,7 @@ class T2Experiment(QickExperiment):
 
         # Initialize parent class
         super().__init__(
-            cfg_dict=cfg_dict, prefix=prefix, fname=fname, progress=progress, qi=qi
+            cfg_dict=cfg_dict, prefix=prefix, fname=fname, progress=progress, qi=qi, check_params=check_params
         )
 
         # Define default parameters
@@ -337,22 +339,21 @@ class T2Experiment(QickExperiment):
             params_def[key] = cfg_qub[key][qi]
 
         # Final parameter merge and assignment
-        params = {**params_def, **params}
-        self.cfg.expt = params
+        self.cfg.expt = {**params_def, **params}
 
         # Check for unexpected parameters
         super().check_params(params_def)
 
-        if go:
-            super().qubit_run(
-                qi=qi,
-                display=display,
-                progress=progress,
-                min_r2=min_r2,
-                max_err=max_err,
-                print=print,
-                disp_kwargs=disp_kwargs,
-            )
+        super().qubit_run(
+            qi=qi,
+            go=go,
+            display=display,
+            progress=progress,
+            min_r2=min_r2,
+            max_err=max_err,
+            print=print,
+            disp_kwargs=disp_kwargs,
+        )
 
     def acquire(self, progress=False):
         """
@@ -443,8 +444,6 @@ class T2Experiment(QickExperiment):
 
             # Perform the fit
             super().analyze(
-                fitfunc=self.fitfunc,
-                fitterfunc=self.fitterfunc,
                 data=data,
                 inds=inds,
                 **kwargs,
@@ -455,8 +454,6 @@ class T2Experiment(QickExperiment):
                 self.fitfunc = fitter.decaysin
                 self.fitterfunc = fitter.fitdecaysin
                 super().analyze(
-                    fitfunc=self.fitfunc,
-                    fitterfunc=self.fitterfunc,
                     data=data,
                     inds=inds,
                     **kwargs,

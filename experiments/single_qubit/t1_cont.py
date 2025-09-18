@@ -21,6 +21,10 @@ import numpy as np
 from qick import *
 import matplotlib.pyplot as plt
 from datetime import datetime
+from scipy.ndimage import uniform_filter1d
+from pathlib import Path
+from dataclasses import dataclass
+from typing import Optional, Tuple, Dict, Any
 
 from ...exp_handling.datamanagement import AttrDict
 from ..general.qick_experiment import QickExperiment, QickExperiment2D
@@ -28,6 +32,24 @@ from ..general.qick_program import QickProgram
 
 from ...exp_handling.datamanagement import AttrDict
 from ...analysis import time_series
+
+
+@dataclass
+class PlotConfig:
+    """Configuration parameters for plotting continuous T1 data."""
+    navg: int = 10  # Number of points to average, in addition to those within a single experiment. 
+    navgeg: int = 20  # Number of points to average for the ground state
+    marker_size: float = 0.2  # Size of plot markers
+    figure_size_raw: Tuple[float, float] = (15, 6)  # Raw data plot size
+    figure_size_smoothed: Tuple[float, float] = (15, 12)  # Smoothed data plot size
+    figure_size_t1: Tuple[float, float] = (15, 4)  # T1 estimate plot size
+    figure_size_combined: Tuple[float, float] = (15, 4)  # Combined plot size
+    figure_size_hist: Tuple[float, float] = (4, 4)  # Histogram plot size
+    
+    @property
+    def nred(self) -> int:
+        """Reduction factor for plotting."""
+        return int(np.floor(self.navg/4 ))
 
 
 class T1ContProgram(QickProgram):
@@ -69,7 +91,7 @@ class T1ContProgram(QickProgram):
         super()._initialize(cfg, readout="standard")
 
         # Create a π pulse to excite the qubit from |0⟩ to |1⟩
-        super().make_pi_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
+        super().make_cfg_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
 
     def _body(self, cfg):
         """
@@ -105,8 +127,8 @@ class T1ContProgram(QickProgram):
 
             # Handle active reset or standard delay
             if cfg.expt.active_reset:
-                self.reset(3, 0, i)  # Perform active reset
-                self.delay_auto(t=cfg.expt["readout"] + 0.01, tag=f"final_delay_0_{i}")
+                self.reset(cfg.expt.reset, 0, i)  # Perform active reset
+                self.delay_auto(t=cfg.expt["readout"] + 0.01+cfg.expt.ff, tag=f"final_delay_0_{i}")
             else:
                 # Standard delay between measurements
                 self.delay_auto(
@@ -124,8 +146,8 @@ class T1ContProgram(QickProgram):
 
             # Handle active reset or standard delay
             if cfg.expt.active_reset:
-                self.reset(3, 1, i)  # Perform active reset
-                self.delay_auto(t=cfg.expt["readout"] + 0.01, tag=f"final_delay_{i}")
+                self.reset(cfg.expt.reset, 1, i)  # Perform active reset
+                self.delay_auto(t=cfg.expt["readout"] + 0.01+cfg.expt.ff, tag=f"final_delay_{i}")
             else:
                 # Standard delay between measurements
                 self.delay_auto(
@@ -232,6 +254,7 @@ class T1ContExperiment(QickExperiment):
         min_r2=None,
         max_err=None,
         display=True,
+        analyze=True,
     ):
         """
         Initialize the continuous T1 experiment.
@@ -261,13 +284,10 @@ class T1ContExperiment(QickExperiment):
             "reps": 1,  # Number of repetitions
             "rounds": self.rounds,  # Number of software averages
             "wait_time": self.cfg.device.qubit.T1[qi],  # Wait time set to current T1
-            "active_reset": self.cfg.device.readout.active_reset[
-                qi
-            ],  # Use active reset if configured
+            "active_reset": self.cfg.device.readout.active_reset[qi],  # Use active reset if configured
             "final_delay": self.cfg.device.qubit.T1[qi] * 6,  # Final delay set to 6*T1
-            "readout": self.cfg.device.readout.readout_length[
-                qi
-            ],  # Readout pulse length
+            "readout": self.cfg.device.readout.readout_length[qi],  # Readout pulse length
+            'ff': 5,  # fudge factor for reset
             "n_g": 1,  # Number of ground state measurements
             "n_e": 2,  # Number of excited state measurements
             "n_t1": 7,  # Number of T1 measurements
@@ -294,6 +314,7 @@ class T1ContExperiment(QickExperiment):
             super().run(
                 display=display,
                 progress=progress,
+                analyze=analyze,
                 min_r2=min_r2,
                 max_err=max_err,
                 disp_kwargs=disp_kwargs,
@@ -320,7 +341,7 @@ class T1ContExperiment(QickExperiment):
 
         # Set appropriate final delay based on active reset setting
         if "active_reset" in self.cfg.expt and self.cfg.expt.active_reset:
-            final_delay = self.cfg.device.readout.readout_length[self.cfg.expt.qubit[0]]
+            final_delay = self.cfg.device.readout.readout_length[self.cfg.expt.qubit[0]]+self.cfg.expt.ff
         else:
             final_delay = self.cfg.device.readout.final_delay[self.cfg.expt.qubit[0]]
 
@@ -366,7 +387,7 @@ class T1ContExperiment(QickExperiment):
             start_ind = [
                 0,  # Start of ground state measurements
                 self.cfg.expt.n_g,  # Start of excited state measurements
-                self.cfg.expt.n_g + self.cfg.expt.n_e * 3,  # Start of T1 measurements
+                self.cfg.expt.n_g + self.cfg.expt.n_e * self.cfg.expt.reset,  # Start of T1 measurements
                 len(iq_list[0]),  # End of all measurements
             ]
         else:
@@ -388,7 +409,7 @@ class T1ContExperiment(QickExperiment):
             # Get indices for this measurement type
             if self.cfg.expt.active_reset:
                 # With active reset, skip reset measurements (every 3rd point)
-                inds = np.arange(start_ind[i], start_ind[i + 1], 3)
+                inds = np.arange(start_ind[i], start_ind[i + 1], self.cfg.expt.reset)
             else:
                 # Without active reset, use all points
                 inds = np.arange(start_ind[i], start_ind[i + 1])
@@ -430,17 +451,17 @@ class T1ContExperiment(QickExperiment):
         """
         if data is None:
             data = self.data
-
+        q = self.cfg.expt.qubit[0]
         nexp = self.cfg.expt.n_g + self.cfg.expt.n_e + self.cfg.expt.n_t1
         n_t1 = self.cfg.expt.n_t1
-        pi_time = 0.4  # Approximate π pulse time in μs
+        pi_time = self.cfg.device.qubit.pulses.pi_ge.sigma[q]*4  # Approximate π pulse time in μs
         # Calculate total pulse sequence length
         if self.cfg.expt.active_reset:
             # With active reset
-            n_reset = 3
+            n_reset = self.cfg.device.readout.reset[q]
             pulse_length = (
-                self.cfg.expt.readout
-                * (self.cfg.expt.n_g + n_reset * (self.cfg.expt.n_e + n_t1))
+                (self.cfg.expt.readout+0.3)
+                * (self.cfg.expt.n_g+1 + (n_reset+1) * (self.cfg.expt.n_e + n_t1))
                 + self.cfg.expt.wait_time * n_t1
                 + nexp * pi_time
             )
@@ -458,21 +479,504 @@ class T1ContExperiment(QickExperiment):
 
         return data
 
+    def _prepare_data_for_plotting(self, data: Dict[str, Any]) -> Dict[str, np.ndarray]:
+        """
+        Prepare and flatten data arrays for time series plotting.
+        
+        Args:
+            data: Raw measurement data dictionary
+            
+        Returns:
+            Dictionary containing flattened data arrays
+        """
+        return {
+            't1_data': data["avgi_t1"].transpose().flatten(),
+            'g_data': data["avgi_g"].transpose().flatten(),
+            'e_data': data["avgi_e"].transpose().flatten()
+        }
+    
+    def _smooth_data(self, flattened_data: Dict[str, np.ndarray], 
+                     plot_config: PlotConfig, 
+                     filter_type: str = 'uniform',
+                     npoints: int = None) -> Tuple[Dict[str, np.ndarray], np.ndarray]:
+        """
+        Apply filtering to smooth the time series data with multiple filter options.
+        
+        Args:
+            flattened_data: Dictionary of flattened data arrays
+            plot_config: Configuration for plotting parameters
+            filter_type: Type of filter to apply ('uniform', 'boxcar', or 'both')
+            npoints: Number of points for boxcar filter (if None, uses plot_config.navg)
+            
+        Returns:
+            Tuple of (smoothed_data_dict, time_array)
+        """
+        if npoints is None:
+            npoints = plot_config.navg
+            
+        smoothed = {}
+        
+        if filter_type == 'uniform':
+            # Apply uniform filter (original behavior)
+            smoothed['t1'] = uniform_filter1d(
+                flattened_data['t1_data'], 
+                size=plot_config.navg * self.cfg.expt.n_t1
+            )[::plot_config.nred * self.cfg.expt.n_t1]
+            
+            smoothed['g'] = uniform_filter1d(
+                flattened_data['g_data'], 
+                size=plot_config.navg * self.cfg.expt.n_g * plot_config.navgeg * 2
+            )[::plot_config.nred * self.cfg.expt.n_g]
+            
+            smoothed['e'] = uniform_filter1d(
+                flattened_data['e_data'], 
+                size=plot_config.navg * self.cfg.expt.n_e * plot_config.navgeg
+            )[::plot_config.nred * self.cfg.expt.n_e]
+            
+        elif filter_type == 'boxcar':
+            # Apply boxcar filter (simple averaging with data reduction)
+            smoothed['t1'] = self._apply_boxcar_filter(
+                flattened_data['t1_data'], 
+                npoints * self.cfg.expt.n_t1
+            )
+            
+            smoothed['g'] = uniform_filter1d(
+                flattened_data['g_data'], 
+                size=plot_config.navg * self.cfg.expt.n_g * plot_config.navgeg * 2
+            )
+            
+            smoothed['e'] = uniform_filter1d(
+                flattened_data['e_data'], 
+                size=plot_config.navg * self.cfg.expt.n_e * plot_config.navgeg
+            )
+
+            smoothed['g'] = self._apply_boxcar_filter(
+                smoothed['g'], 
+                npoints * self.cfg.expt.n_g
+            )
+            
+            smoothed['e'] = self._apply_boxcar_filter(
+                smoothed['e'], 
+                npoints * self.cfg.expt.n_e
+            )
+            
+        elif filter_type == 'both':
+            # Apply both filters and return both results
+            # First apply uniform filter
+            uniform_smoothed = {}
+            uniform_smoothed['t1'] = uniform_filter1d(
+                flattened_data['t1_data'], 
+                size=plot_config.navg * self.cfg.expt.n_t1
+            )[::plot_config.nred * self.cfg.expt.n_t1]
+            
+            uniform_smoothed['g'] = uniform_filter1d(
+                flattened_data['g_data'], 
+                size=plot_config.navg * self.cfg.expt.n_g * plot_config.navgeg * 2
+            )[::plot_config.nred * self.cfg.expt.n_g]
+            
+            uniform_smoothed['e'] = uniform_filter1d(
+                flattened_data['e_data'], 
+                size=plot_config.navg * self.cfg.expt.n_e * plot_config.navgeg
+            )[::plot_config.nred * self.cfg.expt.n_e]
+            
+            # Then apply boxcar filter
+            boxcar_smoothed = {}
+            boxcar_smoothed['t1'] = self._apply_boxcar_filter(
+                flattened_data['t1_data'], 
+                npoints * self.cfg.expt.n_t1
+            )
+            
+            boxcar_smoothed['g'] = self._apply_boxcar_filter(
+                flattened_data['g_data'], 
+                npoints * self.cfg.expt.n_g
+            )
+            
+            boxcar_smoothed['e'] = self._apply_boxcar_filter(
+                flattened_data['e_data'], 
+                npoints * self.cfg.expt.n_e
+            )
+            
+            # Return both in a nested dictionary
+            smoothed = {
+                'uniform': uniform_smoothed,
+                'boxcar': boxcar_smoothed
+            }
+            
+        else:
+            raise ValueError(f"Unknown filter_type: {filter_type}. Must be 'uniform', 'boxcar', or 'both'")
+        
+        # Generate time array based on the filter type
+        if filter_type == 'both':
+            # Use uniform filter length for time array when both filters are applied
+            npts = len(smoothed['uniform']['t1'])
+            times = np.arange(npts) * self.pulse_length * plot_config.nred
+        else:
+            npts = len(smoothed['t1'])
+            if filter_type == 'boxcar':
+                # For boxcar, time step is larger due to data reduction
+                times = np.arange(npts) * self.pulse_length * npoints
+            else:
+                times = np.arange(npts) * self.pulse_length * plot_config.nred
+        
+        return smoothed, times
+    
+    def _apply_boxcar_filter(self, data: np.ndarray, npoints: int) -> np.ndarray:
+        """
+        Apply boxcar filter by averaging npoints together and reducing data size.
+        
+        Args:
+            data: Input data array
+            npoints: Number of points to average together
+            
+        Returns:
+            Filtered and reduced data array
+        """
+        # Trim data to be divisible by npoints
+        n_trim = len(data) - (len(data) % npoints)
+        trimmed_data = data[:n_trim]
+        
+        # Reshape and average
+        reshaped = trimmed_data.reshape(-1, npoints)
+        return np.mean(reshaped, axis=1)
+    
+    def _calculate_t1(self, smoothed_data: Dict[str, np.ndarray]) -> np.ndarray:
+        """
+        Calculate T1 decay signal.
+        
+        Args:
+            smoothed_data: Dictionary of smoothed data arrays
+            
+        Returns:
+            Normalized T1 signal array
+        """
+        signal_difference = smoothed_data['e'] - smoothed_data['g']
+        norm_data = (smoothed_data['t1'] - smoothed_data['g']) / signal_difference
+        # Calculate T1 from normalized decay with error handling
+        with np.errstate(divide='ignore', invalid='ignore'):
+            t1_estimates = -1 / np.log(norm_data) * self.cfg.expt.wait_time
+
+        return norm_data, t1_estimates
+    
+    def _plot_histogram(self, data: Dict[str, Any], qubit: int) -> None:
+        """
+        Plot histogram of ground and excited state measurements.
+        
+        Args:
+            data: Measurement data dictionary
+            qubit: Qubit index for labeling
+        """
+        fig, ax = plt.subplots(1, 1, figsize=PlotConfig.figure_size_hist)
+        
+        hist_params = {'bins': 50, 'alpha': 0.6, 'density': True}
+        
+        ax.hist(data["avgi_g"].flatten(), label="Ground State", **hist_params)
+        ax.hist(data["avgi_e"].flatten(), label="Excited State", **hist_params)
+        
+        ax.set_xlabel("I [ADC units]")
+        ax.set_ylabel("Probability")
+        ax.legend()
+        ax.set_title(f"Qubit {qubit} State Histogram")
+        fig.tight_layout()
+        super().save_fig(fig, "_hist")
+    
+    def _plot_raw_data(self, data: Dict[str, Any], qubit: int, 
+                       plot_config: PlotConfig) -> None:
+        """
+        Plot raw I/Q data for all measurement types.
+        
+        Args:
+            data: Measurement data dictionary
+            qubit: Qubit index for labeling
+            plot_config: Configuration for plotting parameters
+        """
+        fig, axes = plt.subplots(2, 1, figsize=plot_config.figure_size_raw, sharex=True)
+        fig.suptitle(f"Qubit {qubit} Continuous T1 Measurement Raw Data")
+        
+        # Define data types and their plot properties
+        data_types = [
+            ('avgi_e', 'avgq_e', '.', 'Excited State'),
+            ('avgi_g', 'avgq_g', 'k.', 'Ground State'),
+            ('avgi_t1', 'avgq_t1', '.', 'T1 Measurement')
+        ]
+        
+        for i_key, q_key, marker, label in data_types:
+            for i in range(len(data[i_key])):
+                axes[0].plot(data[i_key][i], marker, markersize=plot_config.marker_size)
+                axes[1].plot(data[q_key][i], marker, markersize=plot_config.marker_size)
+        
+        axes[0].set_ylabel("I (ADC units)")
+        axes[1].set_ylabel("Q (ADC units)")
+        axes[1].set_xlabel("Shot number")
+        fig.tight_layout()
+        super().save_fig(fig, "_raw_data")
+    
+    def _plot_smoothed_data(self, smoothed_data: Dict[str, np.ndarray], times: np.ndarray,
+                           normalized_t1: np.ndarray, qubit: int, 
+                           plot_config: PlotConfig) -> plt.Figure:
+        """
+        Plot smoothed data and normalized T1 decay in a 4-panel figure.
+        
+        Args:
+            smoothed_data: Dictionary of smoothed data arrays
+            times: Time array for x-axis
+            normalized_t1: Normalized T1 signal
+            qubit: Qubit index for labeling
+            plot_config: Configuration for plotting parameters
+            
+        Returns:
+            Figure object for potential saving
+        """
+        fig, axes = plt.subplots(4, 1, figsize=plot_config.figure_size_smoothed, 
+                                sharex=True)
+        fig.suptitle(f"Qubit {qubit} Continuous T1 Measurement Analysis")
+        
+        # Plot parameters
+        plot_params = {
+            'linewidth': 0.1, 
+            'markersize': plot_config.marker_size,
+            'marker': '.',
+            'color': 'black'
+        }
+        
+        # Plot data for each measurement type
+        data_labels = [
+            ("T1 Data", "I (ADC), $T =T_1$"),
+            ("Ground State", "I (ADC), $g$ state"),
+            ("Excited State", "I (ADC), $e$ state"),
+            ("Normalized T1", "$(v_{t1}-v_g)/(v_e-v_g)$")
+        ]
+        
+        plot_data = [smoothed_data['t1'], smoothed_data['g'], 
+                     smoothed_data['e'], normalized_t1]
+        
+        for i, (data_array, (label, ylabel)) in enumerate(zip(plot_data, data_labels)):
+            axes[i].plot(times, data_array, label=f"Smoothed {label}", **plot_params)
+            axes[i].set_ylabel(ylabel)
+        
+        # Add reference line for e^-1 on normalized plot
+        axes[3].axhline(np.exp(-1), linestyle="--", color='red', 
+                       alpha=0.7, label="$e^{-1}$")
+        axes[3].legend()
+        axes[3].set_xlabel("Time (s)")
+        fig.tight_layout()
+        super().save_fig(fig, "_smoothed_data")
+        
+        return fig
+    
+    def _plot_t1_estimates(self, t1_estimates: np.ndarray, times: np.ndarray,
+                          qubit: int, plot_config: PlotConfig) -> None:
+        """
+        Plot calculated T1 values over time.
+        
+        Args:
+            normalized_t1: Normalized T1 signal
+            times: Time array for x-axis
+            qubit: Qubit index for labeling
+            plot_config: Configuration for plotting parameters
+        """
+        fig, ax = plt.subplots(1, 1, figsize=plot_config.figure_size_t1)
+        fig.suptitle(f"Qubit {qubit} Continuous T1 Estimate")
+
+        ax.plot(times, t1_estimates, "k.-", linewidth=0.1, 
+                markersize=plot_config.marker_size, label="T1 Data")
+        ax.set_xlabel("Time (s)")
+        ax.set_ylabel("$T_1$ (μs)")
+        super().save_fig(fig, "_t1")
+    
+    def _plot_combined_data(self, smoothed_data: Dict[str, np.ndarray], times: np.ndarray,
+                           qubit: int, plot_config: PlotConfig) -> None:
+        """
+        Create combined plot with all data types for jump detection.
+        
+        Args:
+            smoothed_data: Dictionary of smoothed data arrays
+            times: Time array for x-axis
+            qubit: Qubit index for labeling
+            plot_config: Configuration for plotting parameters
+        """
+        fig, ax = plt.subplots(1, 1, figsize=plot_config.figure_size_combined)
+        fig.suptitle(f"Qubit {qubit} Continuous T1 Measurement Combined Data")
+        
+        plot_params = {'linewidth': 0.1, 'markersize': plot_config.marker_size, 'marker': '.'}
+        
+        # Primary y-axis: T1 data
+        ax.plot(times, smoothed_data['t1'], color='black', 
+                label="Smoothed T1 Data", **plot_params)
+        ax.set_xlabel("Time (s)")
+        ax.set_ylabel("T1 Signal (ADC units)", color='black')
+        
+        # Secondary y-axes for excited and ground state data
+        ax2 = ax.twinx()
+        ax2.plot(times, smoothed_data['e'], color='blue',
+                 label="Smoothed e Data", **plot_params)
+        ax2.set_ylabel("Excited State (ADC units)", color='blue')
+        
+        ax3 = ax.twinx()
+        ax3.spines['right'].set_position(('outward', 60))
+        ax3.plot(times, smoothed_data['g'], color='red',
+                 label="Smoothed g Data", **plot_params)
+        ax3.set_ylabel("Ground State (ADC units)", color='red')
+        fig.tight_layout()
+        super().save_fig(fig, "_combo")
+    
+    def _plot_comparison_data(self, smoothed_data: Dict[str, Dict[str, np.ndarray]], 
+                             times: np.ndarray, normalized_t1: np.ndarray,
+                             qubit: int, plot_config: PlotConfig, filter_type: str) -> None:
+        """
+        Create comparison plots showing both uniform and boxcar filter results.
+        
+        Args:
+            smoothed_data: Dictionary containing both 'uniform' and 'boxcar' filter results
+            times: Time array for x-axis
+            normalized_t1: Normalized T1 signal
+            qubit: Qubit index for labeling
+            plot_config: Configuration for plotting parameters
+            filter_type: Should be 'both' when this method is called
+        """
+        # Create a large figure with subplots for comparison
+        fig, axes = plt.subplots(3, 2, figsize=(20, 12), sharex=True)
+        fig.suptitle(f"Qubit {qubit} Filter Comparison: Uniform vs Boxcar")
+        
+        plot_params = {
+            'linewidth': 0.1, 
+            'markersize': plot_config.marker_size,
+            'marker': '.',
+        }
+        
+        # Data types to plot
+        data_types = ['t1', 'g', 'e']
+        data_labels = ['T1 Data', 'Ground State', 'Excited State']
+        data_ylabels = ['I (ADC), $T =T_1$', 'I (ADC), $g$ state', 'I (ADC), $e$ state']
+        
+        # Plot uniform filter results (left column)
+        for i, (data_type, label, ylabel) in enumerate(zip(data_types, data_labels, data_ylabels)):
+            axes[i, 0].plot(times, smoothed_data['uniform'][data_type], 
+                           color='blue', label=f"Uniform {label}", **plot_params)
+            axes[i, 0].set_ylabel(ylabel)
+            axes[i, 0].set_title(f"Uniform Filter - {label}")
+            axes[i, 0].legend()
+        
+        # Calculate boxcar times (may be different due to different reduction factor)
+        boxcar_times = times  # Use same times for now, but could be different
+        if len(smoothed_data['boxcar']['t1']) != len(times):
+            # Recalculate times for boxcar if lengths don't match
+            npts_boxcar = len(smoothed_data['boxcar']['t1'])
+            boxcar_times = np.arange(npts_boxcar) * self.pulse_length * plot_config.navg
+        
+        # Plot boxcar filter results (right column)
+        for i, (data_type, label, ylabel) in enumerate(zip(data_types, data_labels, data_ylabels)):
+            axes[i, 1].plot(boxcar_times, smoothed_data['boxcar'][data_type], 
+                           color='red', label=f"Boxcar {label}", **plot_params)
+            axes[i, 1].set_ylabel(ylabel)
+            axes[i, 1].set_title(f"Boxcar Filter - {label}")
+            axes[i, 1].legend()
+        
+        # Set x-labels for bottom row
+        axes[2, 0].set_xlabel("Time (s)")
+        axes[2, 1].set_xlabel("Time (s)")
+        
+        fig.tight_layout()
+        super().save_fig(fig, "_filter_comparison")
+        
+        # Also create a normalized T1 comparison plot
+        self._plot_normalized_comparison(smoothed_data, times, boxcar_times, qubit, plot_config)
+    
+    def _plot_normalized_comparison(self, smoothed_data: Dict[str, Dict[str, np.ndarray]], 
+                                   uniform_times: np.ndarray, boxcar_times: np.ndarray,
+                                   qubit: int, plot_config: PlotConfig) -> None:
+        """
+        Create comparison plot of normalized T1 signals from both filters.
+        
+        Args:
+            smoothed_data: Dictionary containing both filter results
+            uniform_times: Time array for uniform filter
+            boxcar_times: Time array for boxcar filter
+            qubit: Qubit index for labeling
+            plot_config: Configuration for plotting parameters
+        """
+        fig, axes = plt.subplots(2, 1, figsize=(15, 8), sharex=True)
+        fig.suptitle(f"Qubit {qubit} Normalized T1 Comparison")
+        
+        plot_params = {'linewidth': 0.1, 'markersize': plot_config.marker_size, 'marker': '.'}
+        
+        # Calculate normalized T1 for both filters
+        uniform_norm_t1, uniform_t1_est = self._calculate_t1(smoothed_data['uniform'])
+        boxcar_norm_t1, boxcar_t1_est = self._calculate_t1(smoothed_data['boxcar'])
+        
+        # Plot normalized T1 signals
+        axes[0].plot(uniform_times, uniform_norm_t1, color='blue', 
+                    label="Uniform Filter", **plot_params)
+        axes[0].plot(boxcar_times, boxcar_norm_t1, color='red', 
+                    label="Boxcar Filter", **plot_params)
+        axes[0].axhline(np.exp(-1), linestyle="--", color='black', 
+                       alpha=0.7, label="$e^{-1}$")
+        axes[0].set_ylabel("$(v_{t1}-v_g)/(v_e-v_g)$")
+        axes[0].legend()
+        axes[0].set_title("Normalized T1 Signal")
+        
+        # Plot T1 estimates
+        axes[1].plot(uniform_times, uniform_t1_est, color='blue', 
+                    label="Uniform Filter", **plot_params)
+        axes[1].plot(boxcar_times, boxcar_t1_est, color='red', 
+                    label="Boxcar Filter", **plot_params)
+        axes[1].set_ylabel("$T_1$ (μs)")
+        axes[1].set_xlabel("Time (s)")
+        axes[1].legend()
+        axes[1].set_title("T1 Estimates")
+        
+        fig.tight_layout()
+        super().save_fig(fig, "_normalized_comparison")
+    
+    def _get_save_path(self) -> Optional[Path]:
+        """
+        Generate the save path for figures using modern path handling.
+        
+        Returns:
+            Path object for saving figures, or None if path cannot be determined
+        """
+        try:
+            fname_path = Path(self.fname)
+            images_dir = fname_path.parent / "images"
+            images_dir.mkdir(exist_ok=True)
+            return images_dir / f"{fname_path.stem}.png"
+        except (AttributeError, TypeError):
+            return None
+    
+    def _save_figure(self, fig: plt.Figure) -> None:
+        """
+        Save figure to disk with proper error handling.
+        
+        Args:
+            fig: Matplotlib figure to save
+        """
+        save_path = self._get_save_path()
+        if save_path:
+            try:
+                fig.tight_layout()
+                fig.savefig(save_path, dpi=150, bbox_inches='tight')
+                print(f"Figure saved to: {save_path}")
+            except Exception as e:
+                print(f"Warning: Could not save figure to {save_path}: {e}")
+        else:
+            print("Warning: Could not determine save path for figure")
+
     def display(
         self,
-        data=None,
-        fit=True,
-        plot_all=False,
-        ax=None,
-        show_hist=True,
-        rescale=False,
-        savefig=True,
+        data: Optional[Dict[str, Any]] = None,
+        fit: bool = True,
+        plot_all: bool = False,
+        ax = None,
+        show_hist: bool = True,
+        rescale: bool = False,
+        savefig: bool = True,
+        filter_type: str = 'uniform',
+        npoints: int = None,
         **kwargs,
-    ):
+    ) -> None:
         """
-        Display continuous T1 measurement results.
+        Display continuous T1 measurement results with improved organization and filter selection.
 
-        This method creates several plots:
+        Creates several plots:
         1. Histogram of ground and excited state measurements
         2. Raw I/Q data for all measurement types
         3. Smoothed data for T1, ground state, and excited state measurements
@@ -480,193 +984,87 @@ class T1ContExperiment(QickExperiment):
 
         Args:
             data: Data dictionary to display (uses self.data if None)
-            fit: Whether to show fit (not used)
-            plot_all: Whether to plot all data types (not used)
-            ax: Matplotlib axis to plot on (not used)
+            fit: Whether to show fit (legacy parameter, not used)
+            plot_all: Whether to plot all data types (legacy parameter, not used)
+            ax: Matplotlib axis to plot on (legacy parameter, not used)
             show_hist: Whether to show histogram of ground and excited states
-            rescale: Whether to rescale data (not used)
+            rescale: Whether to rescale data (legacy parameter, not used)
             savefig: Whether to save the figure to disk
-            **kwargs: Additional arguments passed to the display function
+            filter_type: Type of filter to apply ('uniform', 'boxcar', or 'both')
+            npoints: Number of points for boxcar filter (if None, uses plot_config.navg)
+            **kwargs: Additional arguments (for compatibility)
         """
-        if data is None:
-            data = self.data
-
-        # Get qubit index and calculate sequence parameters
+        data = data or self.data
         qubit = self.cfg.expt.qubit[0]
-
-        # Set smoothing parameters
-        navg = 100  # Number of points to average
-        nred = int(np.floor(navg / 10))  # Reduction factor for plotting
-
-        # Plot histogram of ground and excited states if requested
-        if show_hist:
-            fig2, ax = plt.subplots(1, 1, figsize=(3, 3))
-            ax.hist(
-                data["avgi_e"].flatten(),
-                bins=50,
-                alpha=0.6,
-                label="Excited State",
-                density=True,
+        plot_config = PlotConfig()
+        
+        # Prepare and process data
+        flattened_data = self._prepare_data_for_plotting(data)
+        self.data['smoothed_data'], self.data['times'] = self._smooth_data(
+            flattened_data, plot_config, filter_type=filter_type, npoints=npoints
+        )
+        
+        # Handle different filter types for T1 calculation and plotting
+        if filter_type == 'both':
+            # For 'both' filter type, use uniform filter results for T1 calculation by default
+            # but allow user to specify which one to use
+            filter_for_t1 = kwargs.get('t1_filter', 'uniform')  # Default to uniform for T1 calculation
+            
+            if filter_for_t1 in self.data['smoothed_data']:
+                self.data['normalized_t1'], self.data['t1_estimates'] = self._calculate_t1(
+                    self.data['smoothed_data'][filter_for_t1]
+                )
+            else:
+                # Fallback to uniform if specified filter not available
+                self.data['normalized_t1'], self.data['t1_estimates'] = self._calculate_t1(
+                    self.data['smoothed_data']['uniform']
+                )
+            
+            # Plot both filter results
+            self._plot_comparison_data(
+                self.data['smoothed_data'], self.data['times'], 
+                self.data['normalized_t1'], qubit, plot_config, filter_type
             )
-            ax.hist(
-                data["avgi_g"].flatten(),
-                bins=50,
-                alpha=0.6,
-                label="Ground State",
-                density=True,
+        else:
+            # Single filter type
+            self.data['normalized_t1'], self.data['t1_estimates'] = self._calculate_t1(
+                self.data['smoothed_data']
             )
-            # Commented out fit plot
-            # try:
-            #     ax.plot(data['bin_centers'], two_gaussians_decay(data['bin_centers'], *data['hist_fit']), label='Fit')
-            # except:
-            #     pass
-            ax.set_xlabel("I [ADC units]")
-            ax.set_ylabel("Probability")
+            
+            # Generate standard plots
+            if show_hist:
+                self._plot_histogram(data, qubit)
 
-        # Set marker size for plots
-        m = 0.2
-
-        # Plot raw I/Q data for all measurement types
-        fig, ax = plt.subplots(2, 1, figsize=(12, 6), sharex=True)
-        fig.suptitle(f"Qubit {qubit} Continuous T1 Measurement Raw Data")
-        # Plot excited state data
-        for i in range(len(data["avgi_e"])):
-            ax[0].plot(data["avgi_e"][i], ".", markersize=m)
-            ax[1].plot(data["avgq_e"][i], ".", markersize=m)
-
-        # Plot ground state data
-        for i in range(len(data["avgi_g"])):
-            ax[0].plot(data["avgi_g"][i], "k.", markersize=m)
-            ax[1].plot(data["avgq_g"][i], "k.", markersize=m)
-
-        # Plot T1 measurement data
-        for i in range(len(data["avgi_t1"])):
-            ax[0].plot(data["avgi_t1"][i], ".", markersize=m)
-            ax[1].plot(data["avgq_t1"][i], ".", markersize=m)
-
-        # Flatten and transpose data for time series analysis
-        t1_data = data["avgi_t1"].transpose().flatten()
-        g_data = data["avgi_g"].transpose().flatten()
-        e_data = data["avgi_e"].transpose().flatten()
-
-        # Create 4-panel plot for smoothed data and T1 calculation
-        fig, ax = plt.subplots(4, 1, figsize=(15, 12), sharex=True)
-
-        # Smooth T1 data and plot
-        smoothed_t1_data = uniform_filter1d(t1_data, size=navg * self.cfg.expt.n_t1)
-        smoothed_t1_data = smoothed_t1_data[:: nred * self.cfg.expt.n_t1]
-        npts = len(smoothed_t1_data)
-        times = np.arange(npts) * self.pulse_length * nred
-        ax[0].plot(
-            times,
-            smoothed_t1_data,
-            "k.-",
-            linewidth=0.1,
-            markersize=m,
-            label="Smoothed T1 Data",
-        )
-
-        # Smooth ground state data and plot
-        smoothed_g_data = uniform_filter1d(g_data, size=navg * self.cfg.expt.n_g)
-        smoothed_g_data = smoothed_g_data[:: nred * self.cfg.expt.n_g]
-        ax[1].plot(
-            times,
-            smoothed_g_data,
-            "k.-",
-            linewidth=0.1,
-            markersize=m,
-            label="Smoothed g Data",
-        )
-
-        # Smooth excited state data and plot
-        smoothed_e_data = uniform_filter1d(e_data, size=navg * self.cfg.expt.n_e)
-        smoothed_e_data = smoothed_e_data[:: nred * self.cfg.expt.n_e]
-        ax[2].plot(
-            times,
-            smoothed_e_data,
-            "k.-",
-            linewidth=0.1,
-            markersize=m,
-            label="Smoothed e Data",
-        )
-
-        # Calculate normalized T1 decay
-        dv = smoothed_e_data - smoothed_g_data  # Signal difference between |e⟩ and |g⟩
-        pt1 = (smoothed_t1_data - smoothed_g_data) / dv  # Normalized T1 signal
-        ax[3].plot(
-            times, pt1, "k.-", linewidth=0.1, markersize=m, label="Normalized T1 Data"
-        )
-        ax[3].axhline(
-            np.exp(-1), linestyle="--", label="$e^{-1}$"
-        )  # e^-1 line for T1 reference
-
-        # Set y-axis labels
-        ax[0].set_ylabel("I (ADC), $T =T_1$")
-        ax[1].set_ylabel("I (ADC), $g$ state")
-        ax[2].set_ylabel("I (ADC), $e$ state")
-        ax[3].set_ylabel("$(v_{t1}-v_g)/(v_e-v_g)$")
-
-        # Plot calculated T1 values over time
-        fig, ax = plt.subplots(1, 1, figsize=(15, 4))
-        fig.suptitle(f"Qubit {qubit} Continuous T1 Estimate")
-        t1m = (
-            -1 / np.log(pt1) * self.cfg.expt.wait_time
-        )  # Calculate T1 from normalized decay
-        ax.plot(times, t1m, "k.-", linewidth=0.1, markersize=m, label="T1 Data")
-        ax.set_xlabel("Time (s)")
-        ax.set_ylabel("$T_1$")
-
-        # Create combined plot with all data types, mostly for checking jumps
-        fig2, ax = plt.subplots(1, 1, figsize=(14, 4))
-        fig2.suptitle(f"Qubit {qubit} Continuous T1 Measurement Combined Data")
-        ax.plot(
-            times,
-            smoothed_t1_data,
-            "k.-",
-            linewidth=0.1,
-            markersize=m,
-            label="Smoothed T1 Data",
-        )
-        ax2 = ax.twinx()
-        ax2.plot(
-            times,
-            smoothed_e_data,
-            ".-",
-            linewidth=0.1,
-            markersize=m,
-            label="Smoothed e Data",
-        )
-        ax3 = ax.twinx()
-        ax3.plot(
-            times,
-            smoothed_g_data,
-            ".-",
-            linewidth=0.1,
-            markersize=m,
-            label="Smoothed g Data",
-        )
-
-        # Save figure if requested
-        if savefig:
-            fig.tight_layout()
-            imname = self.fname.split("\\")[-1]
-            fig.savefig(
-                self.fname[0 : -len(imname)] + "images\\" + imname[0:-3] + ".png"
+            if len(data["avgi_t1"]) < 100000:
+                self._plot_raw_data(data, qubit, plot_config)
+            
+            main_fig = self._plot_smoothed_data(
+                self.data['smoothed_data'], self.data['times'], 
+                self.data['normalized_t1'], qubit, plot_config
             )
-            plt.show()
 
-        # Commented out legend code
-        # ax[3].legend()
-        # ax.legend()
+            self._plot_t1_estimates(self.data['t1_estimates'], self.data['times'], qubit, plot_config)
+            self._plot_combined_data(self.data['smoothed_data'], self.data['times'], qubit, plot_config)
+
+        # Save main figure if requested
+        # if savefig:
+        #     self._save_figure(main_fig)
+        
+        plt.show()
+        
+        # Perform PSD analysis
+        self._perform_psd_analysis(flattened_data['t1_data'])
+
+    def _perform_psd_analysis(self, t1_data: np.ndarray) -> None:
+        """
+        Perform power spectral density analysis on T1 data.
+        
+        Args:
+            t1_data: Flattened T1 measurement data
+        """
+        sampling_rate = 1 / self.pulse_length * self.cfg.expt.n_t1
+        nperseg = min(2048, int(2 ** np.floor(np.log2(len(t1_data) / 4))))
+        
         time_series.analyze_qubit_psd(
-            t1_data,
-            fs=1 / self.pulse_length * self.cfg.expt.n_t1,
-            nperseg=int(2 ** np.floor(np.log2(7e6)) / 4),
-        )
-
-    def psd(self):
-        t1_data = self.data["avgi_t1"].transpose().flatten()
-
-        time_series.analyze_qubit_psd(
-            t1_data, fs=1 / self.pulse_length * self.cfg.expt.n_t1, nperseg=2048
+            t1_data, fs=sampling_rate, nperseg=nperseg
         )

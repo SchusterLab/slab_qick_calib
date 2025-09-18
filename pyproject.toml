@@ -10,12 +10,11 @@ readme = "README.md"
 requires-python = ">=3.6"
 license = {text = "MIT"}
 authors = [
-    {name = "", email = "circuitqed@gmail.com"}
+    {name = "SchusterLab", email = "circuitqed@gmail.com"}
 ]
 dependencies = [
     "numpy",
     "scipy",
-    "datetime",
     "seaborn", 
     "matplotlib",
     "qick",
@@ -24,7 +23,8 @@ dependencies = [
     "h5py",
     "Pyro4",
     "python-dateutil",
-    "ipywidgets",
+    "ipywidgets==7.7.2",
+    "visdom",
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
@@ -33,11 +33,17 @@ classifiers = [
 ]
 
 [project.urls]
-"Homepage" = "www.github.com/SchusterLab/slab_qick_calib"
-"Bug Tracker" = "www.github.com/SchusterLab/slab_qick_calib/issues"
+"Homepage" = "https://github.com/SchusterLab/slab_qick_calib"
+"Bug Tracker" = "https://github.com/SchusterLab/slab_qick_calib/issues"
+
+[project.scripts]
+instrument-manager = "slab_qick_calib.exp_handling.instrumentmanager:main"
+
+[project.entry-points."console_scripts"]
+instrument-manager = "slab_qick_calib.exp_handling.instrumentmanager:main"
 
 [tool.setuptools]
-packages = ["slab_qick_calib"]
+packages = ["slab_qick_calib", "slab_qick_calib.analysis", "slab_qick_calib.calib", "slab_qick_calib.exp_handling", "slab_qick_calib.experiments", "slab_qick_calib.experiments.general", "slab_qick_calib.experiments.single_qubit", "slab_qick_calib.experiments.two_qubit", "slab_qick_calib.helpers"]
 
 [tool.setuptools.package-dir]
 "slab_qick_calib" = "."

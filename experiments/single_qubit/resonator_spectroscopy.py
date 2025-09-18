@@ -26,11 +26,12 @@ from qick.asm_v2 import QickSweep1D
 from scipy.signal import find_peaks
 from scipy.ndimage import gaussian_filter1d
 
+
+XLABEL = "Readout Frequency (MHz)"
 from ...exp_handling.datamanagement import AttrDict
 from ..general.qick_experiment import (
     QickExperiment,
-    QickExperiment2DSimple,
-    QickExperimentLoop,
+    QickExperiment2DSimple
 )
 from ..general.qick_program import QickProgram
 
@@ -129,7 +130,7 @@ class ResSpecProgram(QickProgram):
 
         # Create pi pulse if needed for excited state measurement
         if cfg.expt.pulse_e:
-            super().make_pi_pulse(q, cfg.device.qubit.f_ge, "pi_ge")
+            super().make_cfg_pulse(q, cfg.device.qubit.f_ge, "pi_ge")
 
     def _body(self, cfg):
         """
@@ -203,6 +204,7 @@ class ResSpec(QickExperiment):
         go=True,
         params={},
         style="fine", 
+        disp_kwargs=None,
         print=False,
         check_params=True,
     ):
@@ -271,7 +273,7 @@ class ResSpec(QickExperiment):
         if params["length"] > 100:  # Can't be set directly to be greater than 100 on dynamic generator; may need to adapt for other generators. 
             params['long_pulse'] = True
 
-        # Handle special case for span
+        # Handle special case for span, using 7 linewidths as span (once have good value of kappa)
         if params["span"] == "kappa":
             params["span"] = float(7 * self.cfg.device.readout.kappa[qi])
         
@@ -294,7 +296,7 @@ class ResSpec(QickExperiment):
                 self.display(fit=False, peaks=True)
             else:
                 # For fine scans, run with standard analysis
-                super().run(display=display, progress=progress, save=save, analyze=analyze)
+                super().run(display=display, progress=progress, save=save, analyze=analyze, disp_kwargs=disp_kwargs)
 
     def acquire(self, progress=False):
         """
@@ -321,12 +323,7 @@ class ResSpec(QickExperiment):
             )
             super().acquire(ResSpecProgram, progress=progress)
         else:
-            # Loop acquisition with custom frequency points
-            cfg_dict = {'soc': self.soccfg, 'cfg_file': self.config_file, 'im': self.im, 'expt_path': 'dummy'}
-            exp = QickExperimentLoop(cfg_dict=cfg_dict, prefix='dummy', progress=progress, qi=q)
-            exp.cfg.expt = copy.deepcopy(self.cfg.expt)
-            exp.param = self.param
-            
+            # Loop acquisition with custom frequency points            
             # Generate frequency points
             if self.cfg.expt.phase_const:
                 # Use homophase frequency points for constant phase spacing
@@ -337,13 +334,10 @@ class ResSpec(QickExperiment):
                 self.cfg.expt.span = np.round(self.cfg.expt.span/df/(self.cfg.expt.expts-1))*df*(self.cfg.expt.expts-1)
                 freq_pts = np.linspace(self.cfg.expt.start, self.cfg.expt.start + self.cfg.expt.span, self.cfg.expt.expts)
                 
-            # Set up experiment with single point per loop
-            exp.cfg.expt.expts = 1  
             x_sweep = [{"pts": freq_pts, "var": 'frequency'}]
             
-            # Acquire data
-            data = exp.acquire(ResSpecProgram, x_sweep, progress=progress)
-            self.data = data
+            self.data = super().run_loop(ResSpecProgram, x_sweep, progress=progress)
+            
 
         return self.data
 
@@ -374,7 +368,7 @@ class ResSpec(QickExperiment):
         Returns:
             Analyzed data with fit parameters
         """
-        # Get frequency information
+        # Get frequency, correcting for LO
         super().get_freq(fit)
         
         if data is None:
@@ -408,19 +402,6 @@ class ResSpec(QickExperiment):
                
                 # Calculate resonator linewidth (kappa)
                 data["kappa"] = f0 * (1 / Qi + 1 / Qe) * 1e-4
-                
-                # Print detailed information if requested
-                if verbose:
-                    print(
-                        f"\nFreq with minimum transmission: {xdata[np.argmin(ydata)]}"
-                    )
-                    print("From fit:")
-                    print(f"\tf0: {f0}")
-                    print(f"\tQi: {Qi}")
-                    print(f"\tQe: {Qe}")
-                    print(f"\tQ0: {1/(1/Qi+1/Qe)}")
-                    print(f"\tkappa [MHz]: {f0*(1/Qi+1/Qe)}")
-                    print(f"\tphi (radians): {phi}")
                     
                 # Store fit results
                 data["freq_fit"] = copy.deepcopy(data["fit"])
@@ -440,9 +421,6 @@ class ResSpec(QickExperiment):
                 ]
                 data['freq_init'] = copy.deepcopy(fitparams)
                 data["fit"] = fitter.fitlor(xdata, ydata, fitparams=fitparams)
-                print("From Fit:")
-                print(f'\tf0: {data["lorentz_fit"][2]}')
-                print(f'\tkappa[MHz]: {data["lorentz_fit"][3]*2}')
                 
             # Update experiment status
             self.get_status()
@@ -454,7 +432,13 @@ class ResSpec(QickExperiment):
         data["phase_fix"] = np.unwrap(phs_fix)
         
         if peaks:
-            # Find peaks in the data (useful for coarse scans)
+            data=self.find_resonator(data, prom=prom, debug=debug)
+            
+        return data
+
+
+    def find_resonator(self, data, prom=0.1, debug=False): 
+        # Find peaks in the data (useful for coarse scans)
             xdata = data["xpts"][1:-1]
             ydata = data["amps"][1:-1]
             
@@ -497,8 +481,9 @@ class ResSpec(QickExperiment):
                 peak = coarse_peaks[i]
                 ax[0].axvline(data["freq"][peak], linestyle="--", color="0.2", linewidth=0.5)
                 ax[1].axvline(data["freq"][peak], linestyle="--", color="0.2", linewidth=0.5)
-            
-        return data
+
+            return data
+
 
     def display(
         self,
@@ -528,10 +513,7 @@ class ResSpec(QickExperiment):
             data = self.data
 
         # Determine whether to save the figure
-        if ax is not None:
-            savefig = False
-        else:
-            savefig = True
+        savefig = ax is None
 
         # Set up plot title
         qubit = self.cfg.expt.qubit[0]
@@ -547,6 +529,7 @@ class ResSpec(QickExperiment):
         # Plot amplitude data
         ax[0].set_ylabel("Amps (ADC units)")
         ax[0].plot(data["freq"][1:-1], data["amps"][1:-1], ".-")
+        ax[0].set_xlim(data["freq"][1], data["freq"][-1])
         
         # Plot fit if requested
         if fit:
@@ -593,20 +576,16 @@ class ResSpec(QickExperiment):
         # Complete the figure and save if needed
         if savefig:
             # Plot phase data
-            ax[1].set_xlabel("Readout Frequency (MHz)")
+            ax[1].set_xlabel(XLABEL)
             ax[1].set_ylabel("Phase (radians)")
             ax[1].plot(data["freq"][1:-1], data["phase_fix"], ".-")
             
             # Finalize and save
             fig.tight_layout()
             plt.show()
-            imname = self.fname.split("\\")[-1]
-            fig.savefig(
-                self.fname[0 : -len(imname)] + "images\\" + imname[0:-3] + ".png"
-            )
+            super().save_fig(fig)
         
-
-    def update(self, cfg_file, freq=True, fast=False, verbose=True):
+    def update(self, freq=True, fast=False, verbose=True):
         """
         Update the configuration file with the measured resonator parameters.
         
@@ -617,6 +596,7 @@ class ResSpec(QickExperiment):
             verbose: Whether to print update information
         """
         qi = self.cfg.expt.qubit[0]
+        cfg_file=self.config_file
         
         # Only update if experiment was successful
         if self.status: 
@@ -664,6 +644,7 @@ class ResSpecPower(QickExperiment2DSimple):
         progress=None,
         qi=0,
         go=True,
+        live_plot=False,
         params={},
     ):
         """
@@ -683,7 +664,7 @@ class ResSpecPower(QickExperiment2DSimple):
         # Generate standardized filename
         if not prefix:
             prefix = generate_filename('power', qi, state=state)
-        super().__init__(cfg_dict=cfg_dict, prefix=prefix, progress=progress, qi=qi, live_plot=params.get("live_plot", False))
+        super().__init__(cfg_dict=cfg_dict, prefix=prefix, progress=progress, qi=qi, live_plot=live_plot)
 
         # Default parameters
         params_def = {
@@ -767,6 +748,8 @@ class ResSpecPower(QickExperiment2DSimple):
         )
 
         # Acquire data
+        self.xlabel= XLABEL
+        self.ylabel = "Resonator Gain (DAC level)"
         super().acquire(y_sweep, progress=progress)
 
         return self.data
@@ -853,7 +836,7 @@ class ResSpecPower(QickExperiment2DSimple):
 
         # Create figure and plot 2D data
         fig, ax = plt.subplots(1, 1, figsize=(10, 8))
-        plt.pcolormesh(x_sweep, y_sweep, amps, cmap="viridis", shading="auto")
+        plt.pcolormesh(x_sweep, y_sweep, amps, cmap="viridis", shading="auto", rasterized=True)
         
         # Use logarithmic y-axis if requested
         if self.cfg.expt.get('log', False):
@@ -879,8 +862,8 @@ class ResSpecPower(QickExperiment2DSimple):
 
         # Set plot labels and title
         plt.title(f"Resonator Spectroscopy Power Sweep Q{qubit}")
-        plt.xlabel("Resonator Frequency [MHz]")
-        plt.ylabel("Resonator Gain [DAC level]")
+        plt.xlabel(self.xlabel)
+        plt.ylabel(self.ylabel)
         plt.colorbar(label="Normalized Amplitude")
         
         # Configure tick parameters and show plot
@@ -889,8 +872,7 @@ class ResSpecPower(QickExperiment2DSimple):
         plt.show()
         
         # Save figure
-        imname = self.fname.split("\\")[-1]
-        fig.savefig(self.fname[0 : -len(imname)] + "images\\" + imname[0:-3] + ".png")
+        super().save_fig(fig)
 
 class ResSpec2D(QickExperiment2DSimple):
     """
@@ -966,6 +948,8 @@ class ResSpec2D(QickExperiment2DSimple):
         y_sweep = [{"var": "npts", "pts": pts}]
         
         # Acquire data
+        self.xlabel = XLABEL
+        self.ylabel = "Repetition"
         super().acquire(y_sweep=y_sweep, progress=progress)
 
         # Store full data before averaging
@@ -1030,7 +1014,7 @@ class ResSpec2D(QickExperiment2DSimple):
         
         # Set title and labels
         fig.suptitle(f"Resonator Spectroscopy 2D Q{qubit}")
-        axes[0].set_xlabel("Readout Frequency (MHz)")
+        axes[0].set_xlabel(self.xlabel)
         axes[0].set_ylabel("Amplitude (ADC units)")
         
         # Plot amplitude data
@@ -1039,7 +1023,7 @@ class ResSpec2D(QickExperiment2DSimple):
         
         # Plot phase data if requested
         if plot_both:
-            axes[1].set_xlabel("Readout Frequency (MHz)")
+            axes[1].set_xlabel(self.xlabel)
             axes[1].set_ylabel("Phase (radians)")
             axes[1].plot(data["xpts"][1:-1], data["phases"][1:-1], ".-")
         

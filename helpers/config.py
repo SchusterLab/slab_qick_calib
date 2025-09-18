@@ -160,7 +160,7 @@ def update_config(
     cfg = load(file_name)
 
     # Skip if value is NaN
-    if np.isnan(value):
+    if value is None or np.isnan(value):
         return cfg
 
     # Format the value
@@ -232,7 +232,7 @@ def update_lo(file_name, field, value, qi, verbose=True, sig=4, rng_vals=None):
     )
 
 
-def init_config(file_name, num_qubits, type="full", t1=50, aliases="Qick001"):
+def init_config(file_name, num_qubits, type="full", t1=50, aliases="Qick001", ip=""):
     """
     Initialize a configuration file for quantum experiments with qubits.
 
@@ -242,6 +242,7 @@ def init_config(file_name, num_qubits, type="full", t1=50, aliases="Qick001"):
         type: Type of readout, default is "full"
         t1: Default T1 relaxation time in μs
         aliases: Identifier for the System-on-Chip (SoC)
+        ip: IP address for the device
 
     Returns:
         The created configuration
@@ -282,6 +283,7 @@ def init_config(file_name, num_qubits, type="full", t1=50, aliases="Qick001"):
                 "sigma": init_array(0.1),
                 "sigma_inc": init_array(5),
                 "type": init_array("gauss"),
+                "phase": init_array(0),
             }
         )
 
@@ -334,8 +336,7 @@ def init_config(file_name, num_qubits, type="full", t1=50, aliases="Qick001"):
             "trig_offset": init_array(0.5),
             "final_delay": init_array(t1 * 6),
             "active_reset": init_array(False),
-            "reset_e": init_array(0),
-            "reset_g": init_array(0),
+            "reset": init_array(3),
         }
     )
 
@@ -373,7 +374,7 @@ def init_config(file_name, num_qubits, type="full", t1=50, aliases="Qick001"):
     }
 
     # Assemble the complete configuration
-    auto_cfg = {"device": device, "hw": {"soc": soc}, "aliases": {"soc": aliases}}
+    auto_cfg = {"device": device, "hw": {"soc": soc}, "aliases": {"soc": aliases, "ip": ip}}
 
     # Convert to YAML and save
     cfg_yaml = yaml.safe_dump(auto_cfg, default_flow_style=None)
@@ -534,25 +535,38 @@ def init_model_config(file_name, num_qubits):
         "Sum": init_array(None),
         "alpha": init_array(None),
         "T1_purcell": init_array(None),
-        "T1_mean": init_array(None),
-        "T1_max": init_array(None),
-        "T2E_mean": init_array(None),
-        "T2E_max": init_array(None),
-        "T2R_mean": init_array(None),
-        "T2R_max": init_array(None),
-        "T1mean_nopurcell": init_array(None),
-        "T1max_nopurcell": init_array(None),
         "g_lamb": init_array(None),
         "g_chi": init_array(None),
+        "g": init_array("chi"),
         "kappa_low": init_array(None),
-        "Q1_mean": init_array(None),
-        "Q1_max": init_array(None),
         "ratio": init_array(None),
         "ng": init_array(None),
+        "nreadout": init_array(None),
         "Q1": init_array(None),
         "T1_nopurcell": init_array(None),
         "Tphi": init_array(None),
     }
+
+    stats_cfg = {
+        "t1_mean": init_array(None),
+        "t1_max": init_array(None),
+        "q1_mean": init_array(None),
+        "q1_max": init_array(None),
+        "t2e_mean": init_array(None),
+        "t2e_max": init_array(None),
+        "t2r_mean": init_array(None),
+        "t2r_max": init_array(None),
+        "tphi_mean": init_array(None),
+        "tphi_max": init_array(None),
+        "t1mean_nopurcell": init_array(None),
+        "t1max_nopurcell": init_array(None),
+        "t1_std": init_array(None),
+        "q1_std": init_array(None),
+        "t2e_std": init_array(None),
+        "t2r_std": init_array(None),
+        "tphi_std": init_array(None),
+    }
+    auto_cfg["stats"] = stats_cfg
 
     # Convert to YAML and save
     cfg_yaml = yaml.safe_dump(auto_cfg, default_flow_style=None)

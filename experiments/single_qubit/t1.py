@@ -8,7 +8,9 @@ from ...exp_handling.datamanagement import AttrDict
 from ..general.qick_experiment import QickExperiment, QickExperiment2DSimple
 from ..general.qick_program import QickProgram
 
-
+FIT_FUNC = fitter.expfunc
+FITTER_FUNC = fitter.fitexp
+XLABEL = "Wait Time ($\mu$s)"
 """
 T1 Experiment Module
 
@@ -65,13 +67,14 @@ class T1Program(QickProgram):
         super()._initialize(cfg, readout="standard")
 
         # Create a π pulse to excite the qubit from |0⟩ to |1⟩
-        super().make_pi_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
+        super().make_cfg_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
 
         # If AC Stark shift is enabled, create a constant pulse to apply during wait time
         if cfg.expt.acStark:
             pulse = {
-                "sigma": cfg.expt.wait_time,  # Duration of the pulse
-                "sigma_inc": 0,  # No increment in duration
+                "length": cfg.expt.wait_time,  # Duration of the pulse
+                "ramp_sigma": 0.035,  # No increment in duration
+                "ramp_sigma_inc":4,
                 "freq": cfg.expt.stark_freq,  # Frequency of the AC Stark pulse
                 "gain": cfg.expt.stark_gain,  # Amplitude of the AC Stark pulse
                 "phase": 0,  # Phase of the pulse
@@ -163,7 +166,7 @@ class T1Experiment(QickExperiment):
         max_err=None,
         display=True,
         print=False,
-        check_params=True,
+        check_params=True,                                                                                                
     ):
         """
         Initialize the T1 experiment
@@ -196,7 +199,7 @@ class T1Experiment(QickExperiment):
 
         # Define default parameters
         params_def = {
-            "reps": 2 * self.reps,  # Number of repetitions (inner loop)
+            "reps": int(1.5*self.reps),  # Number of repetitions (inner loop)
             "rounds": self.rounds,  # Number of averages (outer loop)
             "expts": 60,  # Number of wait time points
             "start": 0,  # Start time for wait sweep (μs)
@@ -260,12 +263,6 @@ class T1Experiment(QickExperiment):
             "wait_loop", self.cfg.expt.start, self.cfg.expt.start + self.cfg.expt.span
         )
 
-        # Commented out code for readout length sweep
-        # qi = self.cfg.expt.qubit[0]
-        # self.cfg.expt.readout_length = QickSweep1D(
-        #     "wait_loop", self.cfg.expt.start+self.cfg.device.readout.readout_length[qi], self.cfg.expt.start + self.cfg.expt.span+self.cfg.device.readout.readout_length[qi]
-        # )
-
         # Run the T1Program to acquire data
         super().acquire(T1Program, progress=progress)
 
@@ -287,9 +284,9 @@ class T1Experiment(QickExperiment):
 
         # Fit to exponential decay function
         # fitparams=[y-offset, amp, x-offset, decay rate]
-        self.fitfunc = fitter.expfunc  # Exponential decay function
-        self.fitterfunc = fitter.fitexp  # Fitting function for exponential decay
-        super().analyze(self.fitfunc, self.fitterfunc, data, **kwargs)
+        self.fitfunc = FIT_FUNC  # Exponential decay function
+        self.fitterfunc = FITTER_FUNC  # Fitting function for exponential decay
+        super().analyze(data, **kwargs)
 
         # Extract T1 time from fit parameters
         data["new_t1"] = data["best_fit"][2]  # T1 from combined I/Q fit
@@ -323,7 +320,6 @@ class T1Experiment(QickExperiment):
         # Get qubit index for plot title
         qubit = self.cfg.expt.qubit[0]
         title = f"$T_1$ Q{qubit}"
-        xlabel = "Wait Time ($\mu$s)"
 
         # Define caption parameters to display T1 fit result
         caption_params = [
@@ -336,7 +332,7 @@ class T1Experiment(QickExperiment):
             ax=ax,
             plot_all=plot_all,
             title=title,
-            xlabel=xlabel,
+            xlabel=XLABEL,
             fit=fit,
             show_hist=show_hist,
             fitfunc=self.fitfunc,
@@ -344,11 +340,11 @@ class T1Experiment(QickExperiment):
             rescale=rescale,
         )
 
-    def update(self, cfg_file, rng_vals=[1, 500], first_time=False, verbose=True):
+    def update(self, rng_vals=[1, 500], first_time=False, verbose=True):
         qi = self.cfg.expt.qubit[0]
         if self.status:
             config.update_qubit(
-                cfg_file,
+                self.config_file,
                 "T1",
                 self.data["new_t1_i"],
                 qi,
@@ -357,7 +353,7 @@ class T1Experiment(QickExperiment):
                 verbose=verbose,
             )
             config.update_readout(
-                cfg_file,
+                self.config_file,
                 "final_delay",
                 6 * self.data["new_t1_i"],
                 qi,
@@ -367,7 +363,7 @@ class T1Experiment(QickExperiment):
             )
             if first_time:
                 config.update_qubit(
-                    cfg_file,
+                    self.config_file,
                     "T2r",
                     self.data["new_t1_i"],
                     qi,
@@ -376,7 +372,7 @@ class T1Experiment(QickExperiment):
                     verbose=verbose,
                 )
                 config.update_qubit(
-                    cfg_file,
+                    self.config_file,
                     "T2e",
                     2 * self.data["new_t1_i"],
                     qi,
@@ -441,9 +437,8 @@ class T1_2D(QickExperiment2DSimple):
         # Merge default parameters with user-provided parameters
         exp_name = T1Experiment
         self.expt = exp_name(cfg_dict, qi, go=False, params=params, check_params=False)
-        params = {**params_def, **params}
         params = {**self.expt.cfg.expt, **params}
-        self.cfg.expt = params
+        self.cfg.expt = {**params_def, **params}
 
         # Run the experiment if go=True
         if go:
@@ -488,9 +483,9 @@ class T1_2D(QickExperiment2DSimple):
             data = self.data
 
         # Use exponential decay function and fitter
-        fitfunc = fitter.expfunc
-        fitterfunc = fitter.fitexp
-        super().analyze(fitfunc, fitterfunc, data)
+        self.fitfunc = fitter.expfunc
+        self.fitterfunc = fitter.fitexp
+        super().analyze(data)
 
     def display(self, data=None, fit=True, ax=None, **kwargs):
         """

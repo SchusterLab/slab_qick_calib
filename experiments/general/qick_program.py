@@ -1,7 +1,6 @@
 from qick.asm_v2 import AveragerProgramV2
 from ...exp_handling.datamanagement import AttrDict
 from qick import *
-import numpy as np
 
 """
 QICK Program Module
@@ -31,7 +30,8 @@ class QickProgram(AveragerProgramV2):
     that override the _body method to define the experiment sequence.
     """
 
-    def __init__(self, soccfg, final_delay=50, cfg={}):
+    def __init__(self, soccfg, final_delay=50,  cfg=None,final_wait=0,):
+
         """
         Initialize the QickProgram with hardware configuration and experiment parameters.
 
@@ -40,24 +40,15 @@ class QickProgram(AveragerProgramV2):
             final_delay: Delay time (in ns) after each experiment repetition
             cfg: Configuration dictionary containing experiment parameters
         """
+        if cfg is None:
+            cfg = {}
         self.cfg = AttrDict(cfg)  # Convert to attribute dictionary for easier access
 
         # Update configuration with experiment-specific parameters
         self.cfg.update(self.cfg.expt)
-        super().__init__(soccfg, self.cfg.expt.reps, final_delay, cfg=cfg)
+        super().__init__(soccfg, self.cfg.expt.reps, final_delay, final_wait=final_wait, cfg=cfg)
 
-    def _initialize(self, cfg, readout="standard"):
-        """
-        Initialize hardware channels and configure pulses for the experiment.
-
-        This method sets up the ADC (analog-to-digital converter) and DAC
-        (digital-to-analog converter) channels for qubit control and readout.
-        It also configures the readout pulse and qubit control channels.
-
-        Args:
-            cfg: Configuration dictionary
-            readout: Readout configuration type (default: "standard")
-        """
+    def save_params(self, readout='standard'):
         cfg = AttrDict(self.cfg)
 
         # Get qubit index from configuration
@@ -102,11 +93,31 @@ class QickProgram(AveragerProgramV2):
             self.lo_nqz = cfg.hw.soc.lo.nyquist[q]
             self.mixer_freq = cfg.hw.soc.lo.mixer_freq[q]
             self.lo_gain = cfg.hw.soc.lo.gain[q]
+        else:
+            self.lo_ch = None  # No LO channel available
 
-            # Declare LO signal generator with offset from mixer frequency
-            self.declare_gen(
-                ch=self.lo_ch, nqz=self.lo_nqz, mixer_freq=self.mixer_freq - 500
-            )
+    def _initialize(self, cfg, readout="standard"):
+        """
+        Initialize hardware channels and configure pulses for the experiment.
+
+        This method sets up the ADC (analog-to-digital converter) and DAC
+        (digital-to-analog converter) channels for qubit control and readout.
+        It also configures the readout pulse and qubit control channels.
+
+        Args:
+            cfg: Configuration dictionary
+            readout: Readout configuration type (default: "standard")
+        """
+        self.save_params(readout)  # Save parameters for the experiment
+        cfg = AttrDict(self.cfg)
+
+        q = self.qubits[0]  # Single qubit index
+
+        # Configure local oscillator (LO) if available
+        if ("lo" in cfg.hw.soc and "ch" in cfg.hw.soc.lo and cfg.hw.soc.lo.ch[q] != "None"):
+            
+            # Declare LO signal generator with offset from mixer frequency, this assumes it is using int generator
+            self.declare_gen(ch=self.lo_ch, nqz=self.lo_nqz, mixer_freq=self.mixer_freq - 500)
 
             # Create LO pulse for readout
             self.add_pulse(
@@ -118,10 +129,9 @@ class QickProgram(AveragerProgramV2):
                 phase=0,
                 gain=self.lo_gain,
             )
-        else:
-            self.lo_ch = None  # No LO channel available
 
-        if "aves" in cfg.expt:
+
+        if "aves" in cfg.expt: # Used to make a 2D scan from a 1D scan
             self.add_loop("ave_loop", cfg.expt.aves)
 
         # Set up readout generator
@@ -148,7 +158,6 @@ class QickProgram(AveragerProgramV2):
                 pulse_args["length"] = self.readout_length
             self.add_pulse(**pulse_args)
         elif self.type == "mux":
-
             self.declare_gen(
                 ch=self.res_ch,
                 nqz=self.res_nqz,
@@ -183,17 +192,11 @@ class QickProgram(AveragerProgramV2):
                 phase=self.phase,
                 gain=self.gain,
             )
-
+        
         # Configure readout settings
         if self.adc_type == "dyn":
-            self.declare_readout(
-                self.adc_ch, length=self.readout_length
-            )  # Configure ADC for readout
-
-            self.add_readoutconfig(
-                ch=self.adc_ch, name="readout", freq=self.frequency, gen_ch=self.res_ch
-            )
-
+            self.declare_readout(self.adc_ch, length=self.readout_length+self.trig_offset-0.1)  # Configure ADC for readout
+            self.add_readoutconfig(ch=self.adc_ch, name="readout", freq=self.frequency, gen_ch=self.res_ch)
         elif self.adc_type == "std":
             self.declare_readout(
                 ch=self.adc_ch,
@@ -256,7 +259,7 @@ class QickProgram(AveragerProgramV2):
         )
         # Perform active reset if enabled
         if cfg.expt.active_reset:
-            self.reset(3)  # Reset qubit state 2 times
+            self.reset(cfg.expt.reset)  # Reset qubit state 3 times
 
     def make_pulse(self, pulse, name):
         """
@@ -353,9 +356,9 @@ class QickProgram(AveragerProgramV2):
         pulse_args["style"] = style
         self.add_pulse(**pulse_args)
 
-    def make_pi_pulse(self, q, freq, name):
+    def make_cfg_pulse(self, q, freq, name):
         """
-        Create a π pulse for the specified qubit.
+        Create a pulse for the specified qubit based on definition in cfg file; usually this will be a pi pulse. 
 
         A π pulse rotates the qubit state by 180 degrees around the X-axis,
         flipping the state between |0⟩ and |1⟩.
@@ -379,7 +382,7 @@ class QickProgram(AveragerProgramV2):
         self.make_pulse(pulse, name)
         return pulse
 
-    def collect_shots(self, offset=0, single=True):
+    def collect_shots(self, offset=0):
         """
         Collect raw measurement data from the ADC.
 
@@ -392,29 +395,22 @@ class QickProgram(AveragerProgramV2):
         Returns:
             Tuple of (i_shots, q_shots) containing the I and Q quadrature data
         """
-        # Process each readout channel
-        if not single:
-            i_shots = []
-            q_shots = []
+        # Should we get multiple offsets for multiple channels?
+        iq_raw = self.get_raw()  # Get raw ADC data for all channels
+        i_shots_list = []
+        q_shots_list = []
         for i, (ch, rocfg) in enumerate(self.ro_chs.items()):
             nsamp = rocfg["length"]  # Number of samples
-            iq_raw = self.get_raw()  # Get raw ADC data
 
-            # Extract and normalize I quadrature data
-            # indices are : channel, # reps, expts,readout # in pulse, i/q
-
+            # Extract and normalize I quadrature data for this channel
             i_shots_vec = iq_raw[i][:, :, :, 0] / nsamp - offset
-            # Extract and normalize Q quadrature data
+            # Extract and normalize Q quadrature data for this channel
             q_shots_vec = iq_raw[i][:, :, :, 1] / nsamp - offset
-            if single:
-                i_shots = i_shots_vec.flatten()  # Flatten to 1D array
-                q_shots = q_shots_vec.flatten()  # Flatten to 1D array
-            else:
-                for j in range(i_shots_vec.shape[1]):
-                    i_shots.append(i_shots_vec[:, j, :])
-                    q_shots.append(q_shots_vec[:, j, :])
 
-        return i_shots, q_shots
+            i_shots_list.append(i_shots_vec)
+            q_shots_list.append(q_shots_vec)
+
+        return i_shots_list, q_shots_list
 
     def reset(self, i):
         """
@@ -444,9 +440,10 @@ class QickProgram(AveragerProgramV2):
                 ro_ch=self.adc_ch,
                 component="I",  # Use I quadrature for state discrimination
                 threshold=cfg.expt.threshold,  # Threshold for state discrimination
-                test="<",  # Apply pulse if I < threshold
+                test="<",  # Skip to end of no pulse if I < threshold
                 label=f"NOPULSE{n}",  # Jump to this label if I >= threshold
             )
+            #print(cfg.expt.threshold)
 
             # Apply π pulse to flip qubit from |1⟩ to |0⟩
             self.pulse(ch=self.qubit_ch, name="pi_ge", t=0)
@@ -457,15 +454,18 @@ class QickProgram(AveragerProgramV2):
 
             # For all but the last iteration, perform another measurement
             if n < i - 1:
-                # Trigger readout
-                self.trigger(ros=[self.adc_ch], pins=[0], t=self.trig_offset)
+                
                 # Apply readout pulse
                 self.pulse(ch=self.res_ch, name="readout_pulse", t=0)
+                # Trigger readout
+                self.trigger(ros=[self.adc_ch], pins=[0], t=self.trig_offset)
                 # Apply LO pulse if available
                 if self.lo_ch is not None:
                     self.pulse(ch=self.lo_ch, name="mix_pulse", t=0.0)
                 # Small delay before next iteration
-                self.delay_auto(0.01)
+                # self.delay_auto(0.01)
+            # else:
+            #     self.delay_auto(0.01)  # Final small delay after last iteration
 
     def cond_reset(self, i):
         """
@@ -764,7 +764,7 @@ class QickProgram2Q(AveragerProgramV2):
         pulse_args["style"] = style
         self.add_pulse(**pulse_args)
 
-    def make_pi_pulse(self, q, i, freq, name):
+    def make_cfg_pulse(self, q, i, freq, name):
         """
         Create a π pulse for the specified qubit.
 

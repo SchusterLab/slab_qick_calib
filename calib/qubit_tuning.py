@@ -90,13 +90,13 @@ def tune_up_qubit(
     # Step 1: Resonator spectroscopy to find/verify resonator frequency
     rspec = meas.ResSpec(cfg_dict, qi=qi, params={"span": "kappa"})
     if update:
-        rspec.update(cfg_path, freq=readout)
+        rspec.update(freq=readout)
 
     # Step 2: If not first time, check histogram to verify readout
     if not first_time:
         shot = meas.HistogramExperiment(cfg_dict, qi=qi, params={"shots": 20000})
         if update:
-            shot.update(cfg_path)
+            shot.update()
 
     # Step 3: Fine qubit spectroscopy to find/verify qubit frequency
     qspec = meas.QubitSpec(
@@ -129,12 +129,12 @@ def tune_up_qubit(
         # Initial T1 measurement to get coherence time estimate
         t1 = meas.T1Experiment(cfg_dict, qi=qi)
         if update:
-            t1.update(cfg_path, first_time=True)
+            t1.update(first_time=True)
 
         # Run single shot optimization to improve readout
         shot = meas.HistogramExperiment(cfg_dict, qi=qi, params={"shots": 20000})
         if update:
-            shot.update(cfg_path)
+            shot.update()
 
     # Step 6: Run Ramsey to center qubit frequency
     if first_time:
@@ -149,6 +149,11 @@ def tune_up_qubit(
             cfg_path, ("pulses", "pi_ge", "gain"), amp_rabi.data["pi_length"], qi
         )
 
+    amp_rabi = meas.RabiExperiment(cfg_dict,qi=qi, params={'n_pulses':15})
+    if update and amp_rabi.status:
+        ind = np.argmax(amp_rabi.fitfunc(amp_rabi.data['xpts'], *amp_rabi.data['best_fit']))
+        config.update_qubit(cfg_path, ('pulses','pi_ge','gain'), amp_rabi.data['xpts'][ind], qi);
+
     # Step 8: Optimize single-shot readout if requested
     if single:
         params = {"expts_f": 1, "expts_gain": 7, "expts_len": 5}
@@ -157,7 +162,7 @@ def tune_up_qubit(
     # Step 9: Verify readout with histogram
     shot = meas.HistogramExperiment(cfg_dict, qi=qi, params={"shots": 20000})
     if update:
-        shot.update(cfg_path)
+        shot.update()
 
     # Step 10: Measure coherence times
     # Ramsey (T2*)
@@ -679,7 +684,7 @@ def set_up_qubit(qi, cfg_dict):
 
     # Optimize readout
     shot = meas.HistogramExperiment(cfg_dict, qi=qi)
-    shot.update(cfg_path, fast=True)
+    shot.update(fast=True)
 
     # Check if basic setup was successful
     if shot.data["fids"][0] > 0.1 and amp_rabi.status:
@@ -757,7 +762,7 @@ def meas_opt(
 
         
         shot=meas.HistogramExperiment(cfg_dict, qi=qi)
-        shot.update(cfg_path)
+        shot.update()
 
 
 def run_res(cfg_dict, qi):
@@ -776,4 +781,4 @@ def run_res(cfg_dict, qi):
     None
     """
     rspec = meas.ResSpec(cfg_dict, qi=qi, params={"span": "kappa"})
-    rspec.update(cfg_dict["cfg_file"], freq=True)
+    rspec.update(freq=True)

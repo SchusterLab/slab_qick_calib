@@ -318,32 +318,48 @@ class StarkSpec(QickExperiment2DSweep):
         # Fit the data to a Lorentzian model
         self.fitterfunc = fitter.fitlor
         self.fitfunc = fitter.lorfunc
-        super().analyze(self.fitfunc, self.fitterfunc, use_i=True)
+        ydata_lab = ["avgi"]  # Typically only fit I quadrature for speed
+
+        # Fit each row (y value) separately
+        for i, ydata in enumerate(ydata_lab):
+            data["fit_" + ydata] = []
+            data["fit_err_" + ydata] = []
+
+            # Iterate through each y value
+            for j in range(len(data["ypts"])):
+                # Fit this row to the model function
+                fit_pars, fit_err, init = self.fitterfunc(
+                    data["xpts"], data[ydata][j], fitparams=None
+                )
+                # Store fit parameters and errors
+                data["fit_" + ydata].append(fit_pars)
+                data["fit_err_" + ydata].append(fit_err)
 
         # fit frequency of resonance moving
         f = [self.data["fit_avgi"][i][2] for i in range(len(self.data["fit_avgi"]))]
+        self.data['f'] = f
 
         # Fit the data
         try:
             popt, pcov = curve_fit(quadratic, self.data["stark_gain"], f)
-            self.popt = popt
+            self.data["popt"] = popt
             Delta = (
                 self.cfg.device.qubit.f_ge[self.cfg.expt.qubit[0]]
                 - self.cfg.device.readout.frequency[self.cfg.expt.qubit[0]]
             )
             ng2 = popt[0] / 2 * Delta
-            self.ng2 = ng2
-            print(f"ng2: {ng2}")
-            self.f = f
+            self.data["ng2"] = ng2
+            print(f"ng2: {ng2}") # This is n photons * g**2
+            
         except:
-            pass
+            print('Fit failed')
 
         # Store the fitted qubit frequency
         #        data["new_freq"] = data["best_fit"][2]
 
         return self.data
 
-    def display(self, fit=True, ax=None, plot_all=True, **kwargs):
+    def display(self, data=None, fit=True, ax=None, plot_all=True, **kwargs):
         """
         Display the results of the Stark spectroscopy experiment.
 
@@ -380,13 +396,20 @@ class StarkSpec(QickExperiment2DSweep):
         )
 
         # Plot the fitted curve
+        plt.plot(self.data["stark_gain"], self.data["f"], "o")
         x_fit = np.linspace(
             min(self.data["stark_gain"]), max(self.data["stark_gain"]), 100
         )
-        y_fit = quadratic(x_fit, *self.popt)
-        plt.plot(self.data["stark_gain"], self.f, "o")
-        plt.plot(x_fit, y_fit, label="Quadratic Fit")
+        try:
+            y_fit = quadratic(x_fit, *self.data["popt"])
+
+            plt.plot(x_fit, y_fit, label="Quadratic Fit")
+        except:
+            print('No fit to plot')
+        gain = self.cfg.device.readout.gain[self.cfg.expt.qubit[0]]
+        plt.axvline(gain, color="k", linestyle="--", label="Readout gain")
         plt.legend()
+        self.data['df_readout']=self.cfg.device.qubit.f_ge[self.cfg.expt.qubit[0]] - quadratic(gain, *self.data["popt"])
 
 
 # Define a quadratic function

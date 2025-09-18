@@ -19,12 +19,16 @@ import numpy as np
 from qick import *
 from qick.asm_v2 import QickSweep1D
 
+
 from ...exp_handling.datamanagement import AttrDict
 from ..general.qick_experiment import QickExperiment, QickExperiment2DSimple
 from ..general.qick_program import QickProgram
 
 from ...analysis import fitting as fitter
-
+FIT_FUNC = fitter.lorfunc
+FITTER_FUNC = fitter.fitlor
+XLABEL = "Qubit Frequency (MHz)"
+YLABEL = "Qubit Gain (DAC level)"
 
 class QubitSpecProgram(QickProgram):
     """
@@ -82,7 +86,7 @@ class QubitSpecProgram(QickProgram):
 
         # If checking EF transition, create a pi pulse for |g>-|e> transition
         if cfg.expt.checkEF:
-            super().make_pi_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
+            super().make_cfg_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
 
     def _body(self, cfg):
         """
@@ -353,9 +357,9 @@ class QubitSpec(QickExperiment):
 
         if fit:
             # Fit the data to a Lorentzian model
-            fitterfunc = fitter.fitlor
-            fitfunc = fitter.lorfunc
-            super().analyze(fitfunc, fitterfunc, use_i=False)
+            self.fitterfunc = FITTER_FUNC
+            self.fitfunc = FIT_FUNC
+            super().analyze(use_i=False)
 
             # Store the fitted qubit frequency
             data["new_freq"] = data["best_fit"][2]
@@ -373,7 +377,7 @@ class QubitSpec(QickExperiment):
             **kwargs: Additional arguments for the display
         """
         # Set up fit function and labels
-        fitfunc = fitter.lorfunc
+        fitfunc = self.fitfunc 
         xlabel = "Qubit Frequency (MHz)"
 
         # Set up plot title
@@ -446,6 +450,7 @@ class QubitSpecPower(QickExperiment2DSimple):
         display=True,
         min_r2=None,
         max_err=None,
+        live_plot=False,
     ):
         """
         Initialize the 2D pulse probe spectroscopy experiment.
@@ -465,7 +470,7 @@ class QubitSpecPower(QickExperiment2DSimple):
         # Set prefix based on whether we're checking EF transition
         ef = "ef_" if "checkEF" in params and params["checkEF"] else ""
         prefix = f"qubit_spectroscopy_power_{ef}{style}_qubit{qi}"
-        super().__init__(cfg_dict=cfg_dict, prefix=prefix, progress=progress)
+        super().__init__(cfg_dict=cfg_dict, prefix=prefix, progress=progress, live_plot=live_plot)
 
         # Set style-specific parameters
         if style == "coarse":
@@ -545,11 +550,13 @@ class QubitSpecPower(QickExperiment2DSimple):
         # )
 
         # Acquire data
+        self.xlabel = XLABEL
+        self.ylabel = YLABEL
         super().acquire(ysweep, progress=progress)
 
         return self.data
 
-    def analyze(self, fit=True, **kwargs):
+    def analyze(self, data=None, fit=True, **kwargs):
         """
         Analyze the acquired data.
 
@@ -565,8 +572,7 @@ class QubitSpecPower(QickExperiment2DSimple):
         """
         if fit:
             # Fit each frequency slice to a Lorentzian model
-            fitterfunc = fitter.fitlor
-            super().analyze(fitterfunc=fitterfunc)
+            super().analyze(fitterfunc=FITTER_FUNC, fitfunc=FIT_FUNC)
 
         return self.data
 
@@ -590,8 +596,7 @@ class QubitSpecPower(QickExperiment2DSimple):
             title = f"EF " + title
 
         # Set axis labels
-        xlabel = "Qubit Frequency (MHz)"
-        ylabel = "Qubit Gain (DAC level)"
+        
 
         # Display the 2D plot
         super().display(
@@ -599,8 +604,8 @@ class QubitSpecPower(QickExperiment2DSimple):
             ax=ax,
             plot_amps=plot_amps,
             title=title,
-            xlabel=xlabel,
-            ylabel=ylabel,
+            xlabel=XLABEL,
+            ylabel=YLABEL,
             fit=fit,
             **kwargs,
         )

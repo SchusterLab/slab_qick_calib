@@ -28,6 +28,8 @@ In this framework, it's important to understand the distinction between a `QickP
 
 This separation of concerns allows for a modular and extensible framework where the high-level experiment logic is decoupled from the low-level hardware control.
 
+**For detailed information about writing QICK programs**, see the [QICK Demos and Documentation](https://github.com/meeg/qick_demos_sho/tree/main/tprocv2).
+
 ### Basic Configuration Setup
 
 To set up a new configuration or data folder:
@@ -716,7 +718,7 @@ t1_2q_cont = meas.T1Cont2QExperiment(cfg_dict, qi=[0, 1], params={'shots': 50000
    rspec = meas.ResSpec(cfg_dict, qi=0, params={'span': 5})
    
    # Update configuration with resonator frequency
-   rspec.update(cfg_dict['cfg_file'])
+   rspec.update()
    ```
 
 3. **Resonator Power Spectroscopy**:
@@ -750,7 +752,7 @@ t1_2q_cont = meas.T1Cont2QExperiment(cfg_dict, qi=[0, 1], params={'shots': 50000
    t1 = meas.T1Experiment(cfg_dict, qi=0)
    
    # Update T1 value
-   t1.update(cfg_path)
+   t1.update()
    ```
 
 3. **T2 Ramsey Measurement**:
@@ -779,7 +781,7 @@ t1_2q_cont = meas.T1Cont2QExperiment(cfg_dict, qi=[0, 1], params={'shots': 50000
    shot = meas.HistogramExperiment(cfg_dict, qi=0, params={'shots': 20000})
    
    # Update readout parameters
-   shot.update(cfg_path)
+   shot.update()
    ```
 
 2. **Single Shot Optimization**:
@@ -787,8 +789,57 @@ t1_2q_cont = meas.T1Cont2QExperiment(cfg_dict, qi=[0, 1], params={'shots': 50000
    shotopt = meas.SingleShotOptExperiment(cfg_dict, qi=0, params={'expts_f': 5, 'expts_gain': 7, 'expts_len': 5})
    
    # Update optimized readout parameters
-   shotopt.update(cfg_dict['cfg_file'])
+   shotopt.update()
    ```
+
+## Live Plotting with Visdom
+
+Real-time visualization for 2D experiments using Visdom. Useful for monitoring long-running experiments.
+
+### Setup
+
+Start the Visdom server before running experiments:
+```bash
+python -m visdom.server
+```
+Access the web interface at `http://localhost:8097` to view live plots.
+
+### Usage
+
+Enable live plotting in `QickExperiment2DSimple` with `live_plot=True`:
+
+```python
+# Basic live plotting
+exp_2d = QickExperiment2DSimple(cfg_dict=cfg_dict, live_plot=True, qi=0)
+y_sweep = [{"var": "wait_time", "pts": np.linspace(0, 50, 25)}]
+data = exp_2d.acquire(y_sweep)
+
+# Keep plots open after experiment
+exp_2d = QickExperiment2DSimple(cfg_dict=cfg_dict, live_plot=True, auto_close_visdom=False, qi=0)
+
+# T1 2D with live plotting
+t1_2d = T1_2D(cfg_dict=cfg_dict, qi=0, live_plot=True, params={'sweep_pts': 100})
+```
+
+### Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `live_plot` | Enable real-time visualization | `False` |
+| `auto_close_visdom` | Auto-close plots when done | `True` |
+
+### Features
+
+- **Real-time heatmaps**: Shows amplitude, phase, I, and Q quadratures
+- **Four-panel display**: Updates after each sweep point
+- **Automatic cleanup**: Plots close when experiments finish (if enabled)
+
+### Troubleshooting
+
+- **Server not running**: Run `python -m visdom.server` first
+- **Plots not updating**: Refresh browser or check console for errors
+- **Memory issues**: Use `auto_close_visdom=True` for long experiments
+- **Test setup**: Run `python test_visdom_cleanup.py` to verify functionality
 
 ## Parameter Reference
 
@@ -843,10 +894,10 @@ Many experiments provide an `update()` method to automatically update the config
 
 ```python
 # Example: Update resonator frequency after measurement
-rspec.update(cfg_path, freq=True)
+rspec.update(freq=True)
 
 # Example: Update T1 time and related parameters
-t1.update(cfg_path, rng_vals=[1, 500], first_time=True)
+t1.update(rng_vals=[1, 500], first_time=True)
 
 # Example: Update qubit frequency after Ramsey measurement
 if t2r.status:

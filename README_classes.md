@@ -23,7 +23,7 @@ The `QickProgram` class is the base for single-qubit experiments. It extends `Av
 - `_body(cfg)`: Defines the main experiment sequence. This method should be overridden in subclasses.
 - `measure(cfg)`: Implements the standard measurement sequence, including readout, LO pulse application, and optional active reset.
 - `make_pulse(pulse, name)`: Creates a pulse (Gaussian, flat-top, or constant) and adds it to the program.
-- `make_pi_pulse(q, freq, name)`: Creates a π pulse for a specified qubit.
+- `make_cfg_pulse(q, freq, name)`: Creates a π pulse for a specified qubit.
 - `collect_shots(offset=0, single=True)`: Retrieves raw I/Q data from the ADC.
 - `reset(i)`: Performs active qubit reset by measuring the qubit state and applying a conditional π pulse.
 
@@ -37,71 +37,166 @@ The `QickProgram2Q` class is the base for two-qubit experiments, extending `Aver
 - `_initialize(cfg, readout="standard")`: Sets up hardware channels for all qubits involved in the experiment.
 - `_body(cfg)`: Defines the main experiment sequence. This method should be overridden in subclasses.
 - `make_pulse(q, pulse, name)`: Creates a pulse for a specified qubit.
-- `make_pi_pulse(q, i, freq, name)`: Creates a π pulse for a specified qubit.
+- `make_cfg_pulse(q, i, freq, name)`: Creates a π pulse for a specified qubit.
 - `collect_shots(offset=[0, 0])`: Retrieves raw I/Q data from all ADCs.
 - `reset(i)`: Performs active qubit reset for multiple qubits in parallel.
 
+---
+
 ## QickExperiment
 
-The `QickExperiment` class is the base for running quantum experiments on QICK hardware. It handles experiment configuration, data acquisition, analysis, and visualization.
+The `QickExperiment` class is the base class for quantum experiments using the QICK framework. This class extends the Experiment base class to provide specialized functionality for quantum experiments on QICK hardware. It handles experiment configuration, data acquisition, analysis, visualization, and data storage.
+
+The class is designed to be extended by specific experiment implementations that override methods like `acquire()`, `analyze()`, and `display()` to implement specific experiment types (e.g., T1, T2, Rabi oscillations).
+
+### Key Features
+
+- **Data Acquisition**: Runs quantum programs on QICK hardware and processes raw measurement data
+- **Analysis**: Fits experimental data to theoretical models with automatic error estimation
+- **Visualization**: Creates plots with optional fit curves and parameter displays
+- **Data Management**: Saves experiment data and metadata to disk
+- **Active Reset Support**: Configures and handles active qubit reset protocols
+- **Single-shot Analysis**: Generates histograms for readout fidelity analysis
+- **Parameter Validation**: Checks for unexpected parameters to catch configuration errors
 
 ### Methods
 
-- `__init__(cfg_dict, qi=0, prefix="QickExp", fname=None, progress=None, check_params=True)`: Initializes the experiment with configuration parameters.
-- `acquire(prog_name, progress=True, get_hist=True, single=True, compact=False)`: Acquires data by running a specified `QickProgram`.
-- `analyze(fitfunc, fitterfunc, data=None, fit=True, use_i=None, get_hist=True, verbose=True, inds=None, **kwargs)`: Analyzes measurement data by fitting it to a theoretical model.
-- `display(data=None, ax=None, plot_all=False, title="", xlabel="", fit=True, show_hist=False, rescale=False, fitfunc=None, caption_params=[], debug=False, **kwargs)`: Displays measurement results with optional fit curves.
-- `make_hist(prog, single=True)`: Generates a histogram of single-shot measurement results.
-- `qubit_run(qi=0, progress=True, analyze=True, display=True, save=True, print=False, min_r2=0.1, max_err=1, disp_kwargs=None, **kwargs)`: A wrapper for `run` that handles qubit-specific configurations.
-- `run(progress=True, analyze=True, display=True, save=True, min_r2=0.1, max_err=1, disp_kwargs=None, **kwargs)`: Runs the complete experiment workflow.
-- `save_data(data=None, verbose=False)`: Saves experiment data to disk.
+#### Core Methods
+
+- `__init__(cfg_dict, qi=0, prefix="QickExp", fname=None, progress=None, check_params=True)`: Initializes the experiment with hardware configuration and experiment parameters.
+
+- `acquire(prog_name, progress=True, get_hist=True, single=True, compact=False)`: Acquires measurement data by running the specified quantum program. Returns a dictionary containing measurement data including xpts, avgi/avgq, amps/phases, and optional histogram data.
+
+- `analyze(data=None, fit=True, use_i=None, get_hist=True, verbose=True, inds=None, **kwargs)`: Analyzes measurement data by fitting to theoretical models. Determines the best fit parameters, error estimates, and goodness-of-fit metrics (R²). Optionally scales data based on histogram analysis.
+
+- `display(data=None, ax=None, plot_all=False, title="", xlabel="", fit=True, show_hist=False, rescale=False, fitfunc=None, caption_params=[], debug=False, **kwargs)`: Displays measurement results with optional fit curves. Can display single quadrature (I) or all quadratures (I, Q, amplitude), fit curves with parameter values, histograms, and rescaled data.
+
+#### Utility Methods
+
+- `make_hist(prog, single=True)`: Generates histogram of single-shot measurement results. Returns tuple of (bin_centers, hist) containing histogram data.
+
+- `qubit_run(qi=0, progress=True, analyze=True, display=True, save=True, print=False, min_r2=0.1, max_err=1, disp_kwargs=None, **kwargs)`: Wrapper for `run()` that handles qubit-specific configurations including active reset and display options.
+
+- `run(progress=True, analyze=True, display=True, save=True, min_r2=0.1, max_err=1, disp_kwargs=None, **kwargs)`: Runs the complete experiment workflow: acquire data, analyze results, display plots, save data, and determine success.
+
+- `save_data(data=None, verbose=False)`: Saves experiment data to disk and returns the filename.
+
 - `print()`: Prints the experimental configuration.
-- `get_status(max_err=1, min_r2=0.1)`: Determines if the experiment was successful based on fit quality.
-- `get_params(prog)`: Gets swept parameter values from the program.
-- `check_params(params_def)`: Checks for unexpected parameters in the configuration.
-- `configure_reset()`: Configures parameters for active reset.
-- `get_freq(fit=True)`: Calculates the correct frequency when using mixers.
-- `scale_ge()`: Scales data to represent excited state probability (0 to 1) based on histogram analysis.
+
+- `get_status(max_err=1, min_r2=0.1)`: Determines if experiment was successful based on fit quality metrics.
+
+- `get_params(prog)`: Gets swept parameter values from the program. Requires `self.param` to be set with parameter metadata.
+
+- `check_params(params_def)`: Checks for unexpected parameters in the configuration to catch typos.
+
+- `configure_reset()`: Configures parameters for active reset including threshold calculations.
+
+- `run_loop(prog, x_sweep, progress=True)`: Runs loop acquisition with custom parameter points using QickExperimentLoop.
+
+- `get_freq(fit=True)`: Provides correct frequency accounting for mixer frequencies from QICK or external sources.
+
+- `scale_ge()`: Scales measurement data to represent excited state probability (0-1) based on histogram analysis.
+
+---
 
 ## QickExperimentLoop
 
-The `QickExperimentLoop` class extends `QickExperiment` for loop-based parameter sweeps, generally because some parameters can't be adjusted with QickSweeps -- primarily for nonlinear sweep, or parameters that can't be swept that way (as with Gaussian pulses)
+The `QickExperimentLoop` class extends `QickExperiment` for loop-based parameter sweeps. This is used when parameters can't be adjusted with QickSweeps—primarily for nonlinear sweeps, or parameters that can't be swept with the standard QICK sweep functionality (such as Gaussian pulse parameters).
+
+### Key Features
+
+- **Custom Parameter Sweeps**: Handles parameters that can't be swept using standard QICK sweep functions
+- **Nonlinear Sweeps**: Supports arbitrary parameter point distributions
+- **Single-shot Data Collection**: Collects individual measurement shots for each sweep point
+- **Flexible Parameter Updates**: Can update any configuration parameter between sweep points
 
 ### Methods
 
 - `__init__(cfg_dict=None, prefix="QickExp", progress=False, qi=0)`: Initializes the QickExperimentLoop.
-- `acquire(prog_name, x_sweep, progress=True, hist=False)`: Acquires data by running the program for each point in a parameter sweep.
-- `stow_data(iq_list, data)`: Processes and stores I/Q data from a measurement.
-- `make_hist(shots_i)`: Generates a histogram from collected shots.
+
+- `acquire(prog_name, x_sweep, progress=True, hist=False)`: Acquires data by running the program for each point in the parameter sweep. The `x_sweep` parameter is a list of dictionaries defining the parameter sweep, where each dict contains 'var' (parameter name) and 'pts' (values).
+
+- `stow_data(iq_list, data)`: Processes and stores I/Q data from a measurement, calculating amplitude and phase.
+
+- `make_hist(shots_i)`: Generates histogram from collected shots across all sweep points.
+
+---
 
 ## QickExperiment2D
 
-The `QickExperiment2D` class extends `QickExperimentLoop` for 2D parameter sweeps with maximum generality, remaking the program for each line of the y-sweep. 
+The `QickExperiment2D` class extends `QickExperimentLoop` for 2D parameter sweeps with maximum generality. It remakes the program for each line of the y-sweep, providing full flexibility for complex parameter dependencies.
+
+### Key Features
+
+- **Maximum Flexibility**: Can handle any parameter combinations since the program is recreated for each y-sweep point
+- **Complex Dependencies**: Supports cases where y-parameter changes affect the pulse sequence structure
+- **2D Visualization**: Creates heatmap plots of the 2D parameter space
+- **Row-wise Analysis**: Fits each row of 2D data independently
 
 ### Methods
 
 - `__init__(cfg_dict=None, prefix="QickExp", progress=None, qi=0)`: Initializes the QickExperiment2D.
-- `acquire(prog_name, y_sweep, progress=True)`: Acquires data for a 2D parameter sweep.
-- `analyze(fitfunc, fitterfunc, data=None, fit=False, **kwargs)`: Analyzes 2D data by fitting each row to a model function.
-- `display(data=None, ax=None, plot_both=False, plot_amps=False, title="", xlabel="", ylabel="", **kwargs)`: Displays 2D results as a heatmap.
+
+- `acquire(prog_name, y_sweep, progress=True)`: Acquires data for a 2D parameter sweep. For each y-axis point, runs the program which sweeps the x-axis parameter.
+
+- `analyze(fitfunc=None, fitterfunc=None, data=None, fit=False, **kwargs)`: Analyzes 2D data by fitting each row (y value) to the specified model function.
+
+- `display(data=None, ax=None, plot_both=False, plot_amps=False, title="", xlabel="", ylabel="", **kwargs)`: Displays 2D results as heatmaps. Can show single quadrature (I), both quadratures (I and Q), or amplitude and phase.
+
+---
 
 ## QickExperiment2DSimple
 
-The `QickExperiment2DSimple` class is a simplified version of `QickExperiment2D` for experiments where the program is made once, and in each line of the y-sweep aspects of the cfg.expt list of params are changed. 
+The `QickExperiment2DSimple` class is a simplified version of `QickExperiment2D` for experiments where the program is created once, and only configuration parameters are changed for each y-sweep point. This is more efficient when the pulse sequence doesn't need to change.
+
+### Key Features
+
+- **Nested Experiments**: Uses existing single-parameter experiment implementations
+- **Efficiency**: More efficient than QickExperiment2D since the program isn't recreated
+- **Live Plotting**: Optional real-time visualization using Visdom
+- **Time-based Sweeps**: Special handling for stability measurements over time
 
 ### Methods
 
-- `__init__(cfg_dict=None, prefix="QickExp", progress=None, qi=0)`: Initializes the QickExperiment2DSimple.
-- `acquire(y_sweep, progress=False)`: Acquires data for a 2D parameter sweep using a nested experiment.
+- `__init__(cfg_dict=None, prefix="QickExp", progress=None, qi=0, live_plot=False)`: Initializes the QickExperiment2DSimple with optional live plotting capability.
+
+- `acquire(y_sweep, progress=False)`: Acquires data for a 2D parameter sweep using a nested experiment. If 'var' is 'count', the y-axis represents time for stability measurements.
+
+### Live Plotting Feature
+
+When `live_plot=True` is enabled, the experiment provides real-time visualization using Visdom:
+
+- **Real-time Updates**: Updates the plot after each y-sweep point
+- **Multi-panel Display**: Shows amplitude, phase, I, and Q quadratures simultaneously
+- **Automatic Setup**: Automatically initializes Visdom connection
+- **Error Handling**: Gracefully handles Visdom connection failures
+
+**Usage Example**:
+```python
+# Enable live plotting for real-time visualization
+exp_2d = QickExperiment2DSimple(cfg_dict, live_plot=True)
+```
+
+**Requirements**: Visdom server must be running (`python -m visdom.server`)
+
+---
 
 ## QickExperiment2DSweep
 
-The `QickExperiment2DSweep` class extends `QickExperiment` for 2D parameter sweeps where both dimension of sweep are performed on the QICK, instead of the y-axis being swept in python. 
+The `QickExperiment2DSweep` class extends `QickExperiment` for 2D parameter sweeps where both dimensions are performed on the QICK hardware, instead of the y-axis being swept in Python. This provides the fastest execution but is limited to parameters that can be swept by the QICK hardware.
+
+### Key Features
+
+- **Hardware-Accelerated**: Both sweep dimensions run entirely on QICK hardware
+- **Maximum Speed**: Fastest 2D sweep implementation
+- **Limited Flexibility**: Only works with QICK-sweepable parameters
+- **Single Program Execution**: Entire 2D sweep runs as one program
 
 ### Methods
 
-- `analyze(fitfunc, fitterfunc, data=None, fit=False, **kwargs)`: Analyzes 2D data by fitting each row to a model function.
-- `display(data=None, ax=None, plot_both=False, plot_amps=False, title="", xlabel="", ylabel="", **kwargs)`: Displays 2D results as a heatmap.
+- `analyze(fitfunc=None, fitterfunc=None, data=None, fit=False, **kwargs)`: Analyzes 2D data by fitting each row to a model function.
+
+- `display(data=None, ax=None, plot_both=False, plot_amps=False, title="", xlabel="", ylabel="", **kwargs)`: Displays 2D results as heatmaps with automatic image saving.
 
 ---
 
@@ -140,7 +235,7 @@ class MyExperimentProgram(QickProgram):
         super()._initialize(cfg, readout="standard")
         
         # Create any custom pulses
-        super().make_pi_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
+        super().make_cfg_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
 
     def _body(self, cfg):
         cfg = AttrDict(self.cfg)
@@ -207,10 +302,10 @@ class MyExperiment(QickExperiment):
             data = self.data
         
         # Choose appropriate fitting function
-        fitfunc = fitter.expfunc  # or fitter.sinefunc, etc.
-        fitterfunc = fitter.fitexp  # or fitter.fitsine, etc.
+        self.fitfunc = fitter.expfunc  # or fitter.sinefunc, etc.
+        self.fitterfunc = fitter.fitexp  # or fitter.fitsine, etc.
         
-        super().analyze(fitfunc, fitterfunc, data, **kwargs)
+        super().analyze(self.fitfunc, self.fitterfunc, data, **kwargs)
         return data
 
     def display(self, data=None, fit=True, **kwargs):
@@ -233,9 +328,10 @@ class MyExperiment(QickExperiment):
 - **Parameter Sweeps**: Use `QickSweep1D` for parameters swept on the QICK hardware
 - **Configuration**: Always define `params_def` with sensible defaults
 - **Parameter Validation**: Call `super().check_params(params_def)` to catch typos
-- **Metadata**: Set `self.param` to describe what parameter is being swept, so that QICK will return the sweep points used. 
+- **Metadata**: Set `self.param` to describe what parameter is being swept, so that QICK will return the sweep points used
 - **Fitting**: Choose appropriate fitting functions from the `fitter` module
 - **Display**: Provide meaningful titles, labels, and caption parameters
+- **Active Reset**: Configure active reset if needed using `self.configure_reset()`
 
 ---
 
@@ -256,6 +352,7 @@ class MyExperiment(QickExperiment):
 - **Characteristics**: Uses nested experiments, changes `cfg.expt` parameters
 - **Examples**: T1 vs. time, parameter vs. power
 - **Performance**: Moderate speed, good for stability measurements
+- **Special Features**: Live plotting capability, optimized for time-based sweeps
 
 ### QickExperiment2DSweep
 - **Use when**: Both parameters can be swept on QICK hardware
@@ -308,8 +405,8 @@ class MyExperiment2D(QickExperiment2D):
 
 ```python
 class MyExperiment2DSimple(QickExperiment2DSimple):
-    def __init__(self, cfg_dict, qi=0, go=True, params={}, **kwargs):
-        super().__init__(cfg_dict=cfg_dict, **kwargs)
+    def __init__(self, cfg_dict, qi=0, go=True, params={}, live_plot=False, **kwargs):
+        super().__init__(cfg_dict=cfg_dict, live_plot=live_plot, **kwargs)
         
         # Create nested experiment
         self.expt = MyExperiment(cfg_dict, qi, go=False, params=params)
@@ -333,6 +430,18 @@ class MyExperiment2DSimple(QickExperiment2DSimple):
         
         super().acquire(y_sweep, progress=progress)
         return self.data
+```
+
+### Live Plotting Example
+
+```python
+# Enable live plotting with Visdom
+exp_2d = MyExperiment2DSimple(
+    cfg_dict, 
+    qi=0, 
+    live_plot=True,  # Enable real-time visualization
+    params={"sweep_pts": 100}
+)
 ```
 
 ## Common 2D Experiment Patterns
@@ -458,12 +567,13 @@ class RabiExperiment(QickExperiment):
         )
 ```
 
-## Example 2: 2D T1 Stability Measurement
+## Example 2: 2D T1 Stability Measurement with Live Plotting
 
 ```python
 class T1_2D(QickExperiment2DSimple):
-    def __init__(self, cfg_dict, qi=0, go=True, params={}, **kwargs):
-        super().__init__(cfg_dict=cfg_dict, prefix=f"t1_2d_qubit{qi}", **kwargs)
+    def __init__(self, cfg_dict, qi=0, go=True, params={}, live_plot=False, **kwargs):
+        super().__init__(cfg_dict=cfg_dict, prefix=f"t1_2d_qubit{qi}", 
+                        live_plot=live_plot, **kwargs)
         
         # Create nested T1 experiment
         from .t1 import T1Experiment
@@ -493,9 +603,9 @@ class T1_2D(QickExperiment2DSimple):
         if data is None:
             data = self.data
         
-        fitfunc = fitter.expfunc
-        fitterfunc = fitter.fitexp
-        super().analyze(fitfunc, fitterfunc, data)
+        self.fitfunc = fitter.expfunc
+        self.fitterfunc = fitter.fitexp
+        super().analyze(self.fitfunc, self.fitterfunc, data)
         return data
 
     def display(self, data=None, **kwargs):
@@ -506,6 +616,12 @@ class T1_2D(QickExperiment2DSimple):
         super().display(
             data=data, title=title, xlabel=xlabel, ylabel=ylabel, **kwargs
         )
+```
+
+Usage with live plotting:
+```python
+# Monitor T1 stability with real-time visualization
+t1_2d = T1_2D(cfg_dict, qi=0, live_plot=True, params={'sweep_pts': 100})
 ```
 
 ---
@@ -605,6 +721,8 @@ def analyze(self, data=None, **kwargs):
         data = self.data
     
     # Standard fitting
+    self.fitfunc = fitter.expfunc
+    self.fitterfunc = fitter.fitexp
     super().analyze(self.fitfunc, self.fitterfunc, data, **kwargs)
     
     # Extract derived parameters
@@ -650,4 +768,77 @@ super().display(data=data, plot_both=True, ...)
 super().display(data=data, plot_amps=True, ...)
 ```
 
-This comprehensive guide should help you implement new experiments efficiently while following established patterns and best practices.
+## Advanced Features
+
+### Active Reset Configuration
+```python
+def configure_reset(self):
+    """Configure active reset parameters automatically"""
+    qi = self.cfg.expt.qubit[0]
+    params_def = dict(
+        threshold_v=self.cfg.device.readout.threshold[qi],
+        read_wait=0.1,
+        extra_delay=0.2,
+    )
+    self.cfg.expt = {**params_def, **self.cfg.expt}
+    
+    # Convert voltage threshold to ADC counts
+    adc = self.cfg.hw.socs.adcs[qi]
+    self.cfg.expt["threshold"] = int(
+        self.cfg.expt["threshold_v"]
+        * self.cfg.device.readout.readout_length[qi]
+        * self.soccfg._get_ch_cfg(ro_ch=adc)['f_fabric']
+    )
+```
+
+### Histogram-based Data Scaling
+```python
+def scale_ge(self):
+    """Scale measurement data to excited state probability (0-1)"""
+    hist = self.data["hist"]
+    bin_centers = self.data["bin_centers"]
+    
+    # Fit histogram to two Gaussians
+    v_rng = np.max(bin_centers) - np.min(bin_centers)
+    p0 = [0.5, np.min(bin_centers) + v_rng / 3, 0.5, v_rng / 10, 
+          np.max(bin_centers) - v_rng / 3]
+    
+    try:
+        popt, pcov = curve_fit(helpers.two_gaussians, bin_centers, hist, p0=p0)
+        vg, ve = popt[1], popt[4]  # Ground and excited state centroids
+        dv = ve - vg
+        
+        # Scale data: (I - vg) / (ve - vg)
+        self.data["scale_data"] = (self.data["avgi"] - vg) / dv
+        self.data["hist_fit"] = popt
+    except:
+        # Fallback: use raw data if fitting fails
+        self.data["scale_data"] = self.data["avgi"]
+```
+
+### Loop-based Acquisition
+```python
+def run_loop(self, prog, x_sweep, progress=True):
+    """Run acquisition with custom parameter sweep using QickExperimentLoop"""
+    cfg_dict = {
+        "soc": self.soccfg,
+        "cfg_file": self.config_file,
+        "im": self.im,
+        "expt_path": "dummy",
+    }
+    exp = QickExperimentLoop(
+        cfg_dict=cfg_dict,
+        prefix="dummy",
+        progress=progress,
+        qi=self.cfg.expt.qubit[0],
+    )
+    exp.cfg.expt = copy.deepcopy(self.cfg.expt)
+    exp.param = self.param
+    exp.cfg.expt.expts = 1
+    
+    # Acquire data with custom sweep
+    data = exp.acquire(prog, x_sweep, progress=progress)
+    return data
+```
+
+This comprehensive guide should help you implement new experiments efficiently while following established patterns and best practices. The QICK experiment framework provides a robust foundation for quantum control experiments with built-in data analysis, visualization, and management capabilities.

@@ -63,7 +63,7 @@ class LoopbackProgram(QickProgram):
 
         # Create a π pulse to excite the qubit from |0⟩ to |1⟩
         if cfg.expt.check_e:
-            super().make_pi_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
+            super().make_cfg_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
 
     def _body(self, cfg):
         """
@@ -280,17 +280,14 @@ class ToFCalibrationExperiment(QickExperiment):
 
         plt.plot(data["xpts"], data["i"], label="I")
         plt.plot(data["xpts"], data["q"], label="Q")
+        plt.plot(data["xpts"], data["amps"], label="Amplitude")
         plt.axvline(adc_trig_offset, c="k", ls="--")
         plt.legend()
         plt.show()
 
         # Save figure if requested
         if save_fig:
-            imname = self.fname.split("\\")[-1]
-            fig.tight_layout()
-            fig.savefig(
-                self.fname[0 : -len(imname)] + "images\\" + imname[0:-3] + ".png"
-            )
+            super().save_fig(fig)
 
 
 class ToF2D(QickExperiment2DSimple):

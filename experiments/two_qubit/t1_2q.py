@@ -18,7 +18,7 @@ class T1_2Q_Program(QickProgram2Q):
 
         super()._initialize(cfg, readout="standard")
         for i, q in enumerate(cfg.expt.qubit):
-            super().make_pi_pulse(cfg.expt.qubit[i], i, cfg.device.qubit.f_ge, "pi_ge")
+            super().make_cfg_pulse(cfg.expt.qubit[i], i, cfg.device.qubit.f_ge, "pi_ge")
 
             if cfg.expt.acStark:
                 pulse = {
