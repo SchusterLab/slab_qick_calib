@@ -49,12 +49,12 @@ device:
     sigma: [1.7434, 1.1516, 1.1366, 0]
     threshold: [3.851, 1.0795, -0.5359, 10]
     tm: [-0.0355, 0.4363, -0.0172, 0]
-    trig_offset: [0.65, 0.65, 0.65, 0.5]
+    trig_offset: [0.5, 0.5, 0.5, 0.5]
 hw:
   soc:
     adcs:
       readout:
-        ch: [1, 0, 0, 0]
+        ch: [10, 10, 10, 10]
         type: [dyn, dyn, dyn, dyn]
     dacs:
       qubit:
@@ -62,6 +62,6 @@ hw:
         nyquist: [1, 1, 1, 1]
         type: [full, full, full, full]
       readout:
-        ch: [0, 2, 2, 2]
+        ch: [1, 1, 1, 1]
         nyquist: [2, 2, 2, 2]
         type: [full, full, full, full]
