@@ -992,7 +992,7 @@ class Rabi2D(QickExperiment2DSimple):
 
 # Helper functions for fitting the chevron pattern
 
-def chevron_freq(x, w0):
+def chevron_freq(x, w0, x0):
     """
     Calculate the Rabi frequency as a function of detuning.
 
@@ -1006,10 +1006,10 @@ def chevron_freq(x, w0):
     Returns:
         Rabi frequency
     """
-    return np.sqrt(w0**2 + x**2)
+    return np.sqrt(w0**2 + (x-x0)**2)
 
 
-def chevron_amp(x, w0, a):
+def chevron_amp(x, w0, a, x0):
     """
     Calculate the Rabi oscillation amplitude as a function of detuning.
 
@@ -1025,4 +1025,4 @@ def chevron_amp(x, w0, a):
     Returns:
         Oscillation amplitude
     """
-    return a / (1 + (x / w0) ** 2)
+    return a / (1 + ((x-x0) / w0) ** 2)

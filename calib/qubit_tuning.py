@@ -94,7 +94,7 @@ def tune_up_qubit(
 
     # Step 2: If not first time, check histogram to verify readout
     if not first_time:
-        shot = meas.HistogramExperiment(cfg_dict, qi=qi, params={"shots": 20000})
+        shot = meas.HistogramExperiment(cfg_dict, qi=qi, params={"shots": 20000}, display=False)
         if update:
             shot.update()
 
@@ -132,7 +132,7 @@ def tune_up_qubit(
             t1.update(first_time=True)
 
         # Run single shot optimization to improve readout
-        shot = meas.HistogramExperiment(cfg_dict, qi=qi, params={"shots": 20000})
+        shot = meas.HistogramExperiment(cfg_dict, qi=qi, params={"shots": 20000}, display=False)
         if update:
             shot.update()
 
@@ -160,7 +160,7 @@ def tune_up_qubit(
         meas_opt(cfg_dict, [qi], params, do_res=True, start_coarse=start_coarse)
 
     # Step 9: Verify readout with histogram
-    shot = meas.HistogramExperiment(cfg_dict, qi=qi, params={"shots": 20000})
+    shot = meas.HistogramExperiment(cfg_dict, qi=qi, params={"shots": 20000}, display=False)
     if update:
         shot.update()
 
@@ -285,7 +285,7 @@ def make_summary_figure(cfg_dict, progs, qi):
 
     # Save figure
     datestr = datetime.now().strftime("%Y%m%d_%H%M")
-    fname = cfg_dict["expt_path"] + f"images\\summary\\qubit{qi}_measure_func_{datestr}.png"
+    fname = cfg_dict["expt_path"] + f"\\images\\summary\\qubit{qi}_measure_func_{datestr}.png"
     print(fname)
     fig.savefig(fname, dpi=150, bbox_inches="tight")
 

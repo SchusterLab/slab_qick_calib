@@ -333,27 +333,31 @@ def measure_setup(qi, cfg_dict):
     t1, t2r = measure_fast(qi, cfg_dict, i, t1, t2r)
 
 
-def measure_fast(qi, cfg_dict, i, tdir, t1_val, t2_val):
+def measure_fast(qi, cfg_dict, i, tdir, t1_val, t2_val, display=False,t2_type='T2r'):
     fname = os.path.join(tdir, f"t1_qubit{qi}_{i:05d}")
     t1 = meas.T1Experiment(
         cfg_dict,
         qi=qi,
         fname=fname,
-        display=False,
+        display=display,
         progress=False,
         style="fast",
         params={"span": 3.7 * t1_val},
     )
 
-    fname = os.path.join(tdir, f"t2e_qubit{qi}_{i:05d}")
+    fname = os.path.join(tdir, f"{t2_type}_qubit{qi}_{i:05d}")
+    if t2_type=='T2r':
+        params = {"span": 3.2 * t2_val, 'experiment_type': 'ramsey'}
+    else:
+        params = {"span": 3.2 * t2_val, 'experiment_type': 'echo'}
     t2 = meas.T2Experiment(
         cfg_dict,
         qi=qi,
         fname=fname,
-        display=False,
+        display=display,
         progress=False,
         style="fast",
-        params={"span": 3.2 * t2_val, 'experiment_type': 'echo'},
+        params=params,
     )
 
     qubit_dict = set_up_dict(t1, t2)
@@ -429,12 +433,18 @@ def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True)
             # Measure qubit parameters
             if fast:
                 if i == 0:
+                    t2 = 'T2e'
                     auto_cfg = config.load(cfg_dict["cfg_file"])
                     t1_val = auto_cfg["device"]["qubit"]["T1"][qi]
-                    t2_val = auto_cfg["device"]["qubit"]["T2e"][qi]
+                    t2_val = auto_cfg["device"]["qubit"][t2][qi]
+                else:
+                    t1_val = tracking_data[j]["t1"][-1]
+                    t2_val = tracking_data[j]["t2"][-1]
+                    
+                
 
                 # cfg_dict['cfg_file']=None
-                d = measure_fast(qi, cfg_dict, i, tracking_path, t1_val, t2_val)
+                d = measure_fast(qi, cfg_dict, i, tracking_path, t1_val, t2_val, display=display, t2_type=t2)
                 t1_val = d["t1"]
                 t2_val = d["t2"]
                 # d = measure_cohere(qi, cfg_dict, display=display)
@@ -447,7 +457,7 @@ def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True)
             d["elapsed"] = elapsed
 
             # Store data for this iteration
-            if i == 0:
+            if i == 0 and j == 0:
                 # Initialize storage dictionary for each qubit on first iteration
                 tracking_data = [
                     {key: [] for key in d.keys()} for _ in range(len(qubit_list))

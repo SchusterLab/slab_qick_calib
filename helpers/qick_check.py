@@ -157,9 +157,11 @@ def check_resonances(cfg_dict):
 
     # Print results
     print("Configured resonator frequencies (MHz):")
-    print(freq)
+    for f in freq:
+        print(f)
     print("Aliased resonator frequencies (MHz):")
-    print(alt_freq)
+    for f in alt_freq:
+        print(f)
 
 
 def check_adc(cfg_dict):
