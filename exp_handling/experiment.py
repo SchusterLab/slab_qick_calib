@@ -429,7 +429,11 @@ class Experiment:
         if overwrite:
             with self.datafile(swmr=True) as f:  # swmr=True uses write mode
                 for k, d in data.items():
-                    f.add(k, np.array(d))
+                    try:
+                        f.add(k, np.array(d))
+                    except Exception as e:
+                        #np.array(d).astype(np.float64)
+                        print(f"Error saving dataset '{k}': {e}")
         else:
             # Use append mode for non-overwrite case
             with self.datafile() as f:

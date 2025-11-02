@@ -220,7 +220,7 @@ class DisplayManager:
             debug: Whether to show debug info
         """
         # Plot data points (excluding first and last points)
-        ax.plot(data["xpts"][1:-1], data[ydata][1:-1], "o-")
+        ax.plot(data["xpts"][1:-1], data[ydata][1:-1], "o-", rasterized=True)
         
         if fit_params is not None and fitfunc is not None:
             p = fit_params
@@ -247,7 +247,7 @@ class DisplayManager:
                         )
             
             # Plot fit curve
-            ax.plot(data["xpts"][1:-1], fitfunc(data["xpts"][1:-1], *p), label=caption)
+            ax.plot(data["xpts"][1:-1], fitfunc(data["xpts"][1:-1], *p), label=caption, rasterized=True)
             ax.legend()
         
         # Set axis labels
@@ -257,7 +257,7 @@ class DisplayManager:
         # Show initial guess if in debug mode
         if debug and "fit_init_" + ydata in data:
             pinit = data["fit_init_" + ydata]
-            ax.plot(data["xpts"], fitfunc(data["xpts"], *pinit), label="Initial Guess")
+            ax.plot(data["xpts"], fitfunc(data["xpts"], *pinit), label="Initial Guess", rasterized=True)
 
 
 """
@@ -589,12 +589,12 @@ class QickExperiment(Experiment):
     def _show_histogram(self, data):
         """Display histogram plot."""
         fig2, ax = plt.subplots(1, 1, figsize=(3, 3))
-        ax.plot(data["bin_centers"], data["hist"], "o-")
+        ax.plot(data["bin_centers"], data["hist"], "o-", rasterized=True)
         try:
             ax.plot(
                 data["bin_centers"],
                 helpers.two_gaussians_decay(data["bin_centers"], *data["hist_fit"]),
-                label="Fit",
+                label="Fit", rasterized=True
             )
         except:
             pass

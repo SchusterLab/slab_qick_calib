@@ -423,6 +423,7 @@ class SingleShotOptExperiment(QickExperiment):
                     color=blue,
                     alpha=0.2,
                     markersize=m,
+                    rasterized=True,
                 )
                 ax[i].plot(
                     return_dim(self.data["Ie"], inds, i),
@@ -431,6 +432,7 @@ class SingleShotOptExperiment(QickExperiment):
                     color=red,
                     alpha=0.2,
                     markersize=m,
+                    rasterized=True,
                 )
 
                 ax[i].set_title(f"{labs[inds[0]]} {data[sweep_var[0]][i]:.2f}")
@@ -448,6 +450,7 @@ class SingleShotOptExperiment(QickExperiment):
                         color=blue,
                         alpha=0.2,
                         markersize=m,
+                        rasterized=True,
                     )
                     ax[i, j].plot(
                         return_dim(self.data["Ie"], inds, [i, j]),
@@ -456,6 +459,7 @@ class SingleShotOptExperiment(QickExperiment):
                         color=red,
                         alpha=0.2,
                         markersize=m,
+                        rasterized=True,
                     )
 
                     if i == npts[0] - 1:
@@ -481,6 +485,7 @@ class SingleShotOptExperiment(QickExperiment):
                             color=blue,
                             alpha=0.2,
                             markersize=m,
+                            rasterized=True,
                         )
                         ax[i, j].plot(
                             self.data["Ie"][i, j, k, :],
@@ -489,6 +494,7 @@ class SingleShotOptExperiment(QickExperiment):
                             color=red,
                             alpha=0.2,
                             markersize=m,
+                            rasterized=True,
                         )
                 fig.suptitle(title)
                 fig.tight_layout()

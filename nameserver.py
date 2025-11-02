@@ -8,4 +8,6 @@ def start_nameserver(host_ip, ns_port=9090):
     Pyro4.naming.startNSloop(host=host_ip, port=ns_port)
 
 # Replace with your nameserver IP
-start_nameserver(host_ip='10.108.30.23', ns_port=9090)
+ip = '192.168.137.1'
+#ip = '10.108.30.23'
+start_nameserver(host_ip=ip, ns_port=8888)

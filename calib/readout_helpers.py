@@ -750,10 +750,10 @@ def analyze_single_shot_histograms(data: IQData, plot: bool = True, span: Option
             ax = [axs[0,1], axs[1,0]]
             
             # Plot unrotated IQ data
-            axs[0, 0].plot(Ig, Qg, ".", label="g", color=COLORS['ground'], alpha=a, markersize=m)
-            axs[0, 0].plot(Ie, Qe, ".", label="e", color=COLORS['excited'], alpha=a, markersize=m)
+            axs[0, 0].plot(Ig, Qg, ".", label="g", color=COLORS['ground'], alpha=a, markersize=m, rasterized=True)
+            axs[0, 0].plot(Ie, Qe, ".", label="e", color=COLORS['excited'], alpha=a, markersize=m, rasterized=True)
             if plot_f:
-                axs[0, 0].plot(If, Qf, ".", label="f", color=COLORS['f_state'], alpha=a, markersize=m)
+                axs[0, 0].plot(If, Qf, ".", label="f", color=COLORS['f_state'], alpha=a, markersize=m, rasterized=True)
             
             # Mark median positions
             axs[0, 0].plot(xg, yg, color="k", marker="o")
@@ -785,10 +785,10 @@ def analyze_single_shot_histograms(data: IQData, plot: bool = True, span: Option
             fig = None
         
         # Plot rotated IQ data
-        ax[0].plot(Ig_new, Qg_new, ".", label="g", color=COLORS['ground'], alpha=a, markersize=m)
-        ax[0].plot(Ie_new, Qe_new, ".", label="e", color=COLORS['excited'], alpha=a, markersize=m)
+        ax[0].plot(Ig_new, Qg_new, ".", label="g", color=COLORS['ground'], alpha=a, markersize=m, rasterized=True)
+        ax[0].plot(Ie_new, Qe_new, ".", label="e", color=COLORS['excited'], alpha=a, markersize=m, rasterized=True)
         if plot_f:
-            ax[0].plot(If_new, Qf_new, ".", label="f", color=COLORS['f_state'], alpha=a, markersize=m)
+            ax[0].plot(If_new, Qf_new, ".", label="f", color=COLORS['f_state'], alpha=a, markersize=m, rasterized=True)
         
         # Add text annotation with state positions
         ax[0].text(0.95, 0.95, f'g: {xg_new:.2f}\ne: {xe_new:.2f}', 

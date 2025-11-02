@@ -756,17 +756,17 @@ class HistogramExperiment(QickExperiment):
         ax[1].semilogy(ve, histe/max_e, color=RED, linewidth=2)
         fig2, ax2 = plt.subplots(2, len(self.data["Igr"])+1, figsize=(17, 7), sharex=True, sharey=True)
         # Plot reset histograms for ground state
-        ax2[0,0].plot(self.data['Ig'], self.data['Qg'], '.', markersize=1)
-        ax2[1,0].plot(self.data['Ie'], self.data['Qe'], '.', markersize=1)
+        ax2[0,0].plot(self.data['Ig'], self.data['Qg'], '.', markersize=1, rasterized=True)
+        ax2[1,0].plot(self.data['Ie'], self.data['Qe'], '.', markersize=1, rasterized=True)
         for i in range(len(self.data["Igr"])):
-            ax2[0,i+1].plot(self.data['Igr'][i], self.data['Qgr'][i], '.', markersize=1)
-            ax2[1,i+1].plot(self.data['Ier'][i], self.data['Qer'][i], '.', markersize=1)
+            ax2[0,i+1].plot(self.data['Igr'][i], self.data['Qgr'][i], '.', markersize=1, rasterized=True)
+            ax2[1,i+1].plot(self.data['Ier'][i], self.data['Qer'][i], '.', markersize=1, rasterized=True)
             v, hist = helpers.create_histogram(self.data["Igr"][i], n_bins=n_bins)
-            ax[0].semilogy(v, hist/max_g, color=b[i], linewidth=1, label=f"{i+1}")
+            ax[0].semilogy(v, hist/max_g, color=b[i], linewidth=1, label=f"{i+1}", rasterized=True)
 
             # Plot reset histograms for excited state
             v, hist = helpers.create_histogram(self.data["Ier"][i], n_bins=n_bins)
-            ax[1].semilogy(v, hist/max_e, color=b[i], linewidth=1, label=f"{i+1}")
+            ax[1].semilogy(v, hist/max_e, color=b[i], linewidth=1, label=f"{i+1}", rasterized=True)
 
         ax[0].axhline(0.5, color="gray", linestyle="--", linewidth=1)
         ax[1].axhline(0.5, color="gray", linestyle="--", linewidth=1)
