@@ -8,6 +8,109 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 import pandas as pd
 import os
+
+def get_parameter_config():
+    """
+    Get the parameter configuration dictionary that maps parameter keys to their properties.
+    
+    Returns:
+    --------
+    dict
+        Dictionary mapping parameter keys to configuration with 'key', 'r2_scan', and 'label' fields
+    """
+    return {
+        "t1": {
+            "key": "t1",
+            "r2_scan": "t1_r2",
+            "label": "$T_1$ ($\mu$s)"
+        },
+        "t2r": {
+            "key": "t2r",
+            "r2_scan": "t2r_r2",
+            "label": "$T_{2,R}$ ($\mu$s)"
+        },
+        "t2": {
+            "key": "t2",
+            "r2_scan": "t2_r2",
+            "label": "$T_{2,E}$ ($\mu$s)"
+        },
+        "f_ge": {
+            "key": "f_ge",
+            "r2_scan": "t2_r2",
+            "label": "$f-\overline{f}$ (kHz), Qubit "
+        },
+        "fidelity": {
+            "key": "fidelity",
+            "r2_scan": None,
+            "label": "Log(1 -Readout Fidelity)"
+        },
+        "kappa": {
+            "key": "kappa",
+            "r2_scan": "rspec_r2",
+            "label": "Resonator $\kappa$ (MHz)"
+        },
+        "frequency": {
+            "key": "frequency",
+            "r2_scan": "rspec_r2",
+            "label": "$f-\overline{f}$ (kHz), Resonator "
+        },
+        "pi_length": {
+            "key": "pi_length",
+            "r2_scan": "amp_rabi_r2",
+            "label": "$\pi_{gain}/\overline{\pi_{gain}}$"
+        },
+        "tphi": {
+            "key": "tphi",
+            "r2_scan": "t2_r2",
+            "label": "$T_{\phi}$ ($\mu$s)"
+        },
+        "tsphi": {
+            "key": "tsphi",
+            "r2_scan": "t2_r2",
+            "label": "$T_{\phi,R}$ ($\mu$s)"
+        },
+        "t2_r2": {
+            "key": "t2_r2",
+            "r2_scan": None,
+            "label": "$T_2 \, R^2$"
+        },
+        "t2et1": {
+            "key": "t2et1",
+            "r2_scan": "t2_r2",
+            "label": "$T_{2,E}/2 T_1$"
+        },
+        "t1_off": {
+            "key": "t1_off",
+            "r2_scan": "t1_r2",
+            "label": "$T_1$ offset"
+        },
+        "t1_amp": {
+            "key": "t1_amp",
+            "r2_scan": "t1_r2",
+            "label": "$T_1$ amplitude"
+        },
+        "t2r_off": {
+            "key": "t2r_off",
+            "r2_scan": "t2r_r2",
+            "label": "$T_{2,R}$ offset"
+        },
+        "t2r_amp": {
+            "key": "t2r_amp",
+            "r2_scan": "t2r_r2",
+            "label": "$T_{2,R}$ amplitude"
+        },
+        "q": {
+            "key": "q",
+            "r2_scan": "t1_r2",
+            "label": "$Q_1$"
+        },
+        "phase": {
+            "key": "phase",
+            "r2_scan": None,
+            "label": "Phase"
+        }
+    }
+
 def process_data(tt, qubit_list=None):
 
     if qubit_list is None:
@@ -47,75 +150,16 @@ def process_data(tt, qubit_list=None):
     return tt, b
 
 
-def plot_all(tt, qubit_list=None, fname='def', data_inds=None, use_mean=False, nbins=40, plot_time=False):
+def plot_all(tt, qubit_list=None, fname='def', param_keys=None, use_mean=False, nbins=40, plot_time=False):
 
     if qubit_list is None:
         qubit_list = [i for i in range(len(tt))]
-    if data_inds is None:
-        data_inds = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-    nrows, ncols, sz = calculate_subplot_layout(len(data_inds))
-
-    key_list = [
-        "t1",
-        "t2r",
-        "t2",
-        "f_ge",
-        "fidelity",
-        "kappa",
-        "frequency",
-        "pi_length",
-        "tphi",
-        "tsphi",
-        "t2_r2",
-        "t2et1",
-        "t1_off",
-        "t1_amp",
-        "t2r_off",
-        "t2r_amp",
-        "q",
-        "phase",
-    ]
-
-    r2_scan = [
-        "t1_r2",
-        "t2r_r2",
-        "t2_r2",
-        "t2_r2",
-        None,
-        "rspec_r2",
-        "rspec_r2",
-        "amp_rabi_r2",
-        "t2_r2",
-        "t2_r2",
-        None,
-        "t2_r2",
-        "t1_r2",
-        "t1_r2",
-        "t2r_r2",
-        "t2r_r2",
-        "t1_r2",
-        None,
-    ]
-    labels = [
-        "$T_1$ ($\mu$s)",
-        "$T_{2,R}$ ($\mu$s)",
-        "$T_{2,E}$ ($\mu$s)",
-        "$f-\overline{f}$ (kHz), Qubit ",
-        "Log(1 -Readout Fidelity)",
-        "Resonator $\kappa$ (MHz)",
-        "$f-\overline{f}$ (kHz), Resonator ",
-        "$\pi_{gain}/\overline{\pi_{gain}}$",
-        "$T_{\phi}$ ($\mu$s)",
-        "$T_{\phi,R}$ ($\mu$s)",
-        "$T_2 \, R^2$",
-        "$T_{2,E}/2 T_1$",
-        "$T_1$ offset",
-        "$T_1$ amplitude",
-        "$T_{2,R}$ offset",
-        "$T_{2,R}$ amplitude",
-        "$Q_1$",
-        "Phase",
-    ]
+    if param_keys is None:
+        param_keys = ["t1", "t2r", "t2", "f_ge", "fidelity", "kappa", "frequency", "pi_length", "tphi", "tsphi", "t2_r2"]
+    
+    parameter_config = get_parameter_config()
+    
+    nrows, ncols, sz = calculate_subplot_layout(len(param_keys))
     mpl.rcParams["lines.markersize"] = 1
     mpl.rcParams.update({"font.size": 11})
 
@@ -135,13 +179,23 @@ def plot_all(tt, qubit_list=None, fname='def', data_inds=None, use_mean=False, n
             fig.suptitle(f"Qubit {qi}")
         i = 0
 
-        for k in data_inds:
-            key = key_list[k]
-            # print(k)
+        for param_key in param_keys:
+            if param_key not in parameter_config:
+                print(f"Warning: Parameter '{param_key}' not found in configuration")
+                continue
+                
+            config = parameter_config[param_key]
+            key = config["key"]
+            r2_key = config["r2_scan"]
+            
+            # Skip if key doesn't exist in data
+            if key not in tt[j]:
+                continue
+                
             # Remove outliers, those with values far away from mean or small r^2
-            if r2_scan[k] is not None:
+            if r2_key is not None and r2_key in tt[j]:
                 # Ignore data at least 0.08 lower r2 than mean and 4 std away from mean
-                inds = (tt[j][r2_scan[k]] > np.nanmean(np.array(tt[j][r2_scan[k]])) - 0.08) 
+                inds = (tt[j][r2_key] > np.nanmean(np.array(tt[j][r2_key])) - 0.08) 
                 inds2 = (np.abs(tt[j][key] - np.nanmean(tt[j][key])) < np.nanstd(tt[j][key]) * 4)
                 inds_true = np.logical_and(inds, inds2)
 
@@ -180,12 +234,12 @@ def plot_all(tt, qubit_list=None, fname='def', data_inds=None, use_mean=False, n
                 )  # , label=leg_list[k])
                 # ax[k].legend()
 
-                ax[i].set_ylabel(labels[k])
+                ax[i].set_ylabel(config["label"])
                 ax[i].set_xlabel("Time (hr)")
 
             # Histogram plot
             ax2[i].hist(np.array(y), bins=nbins, label=int(qi), density=True)
-            ax2[i].set_xlabel(labels[k])
+            ax2[i].set_xlabel(config["label"])
 
             # if key == "t1":
             #     ax3.plot(
@@ -306,7 +360,7 @@ def nice_dates():
     return locator
 
 
-def plot_violin(tt, qubit_list=None, fname='def', data_inds=None, use_mean=False):
+def plot_violin(tt, qubit_list=None, fname='def', param_keys=None, use_mean=False):
     """
     Create violin plots for tracking data parameters across qubits.
     
@@ -318,89 +372,35 @@ def plot_violin(tt, qubit_list=None, fname='def', data_inds=None, use_mean=False
         List of qubit indices to plot
     fname : str, optional
         Filename prefix for saving plots
-    data_inds : list, optional
-        Indices of parameters to plot
+    param_keys : list, optional
+        List of parameter keys to plot
     use_mean : bool, optional
         Whether to normalize by mean values
     """
     
     if qubit_list is None:
         qubit_list = [i for i in range(len(tt))]
-    if data_inds is None:
-        data_inds = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+    if param_keys is None:
+        param_keys = ["t1", "t2r", "t2", "f_ge", "fidelity", "kappa", "frequency", "pi_length", "tphi", "tsphi", "t2_r2", "t2et1", "t1_off", "t1_amp", "t2r_off", "t2r_amp", "q", "phase"]
     
-    nrows, ncols, sz = calculate_subplot_layout(len(data_inds))
-
-    key_list = [
-        "t1",
-        "t2r", 
-        "t2",
-        "f_ge",
-        "fidelity",
-        "kappa",
-        "frequency",
-        "pi_length",
-        "tphi",
-        "tsphi",
-        "t2_r2",
-        "t2et1",
-        "t1_off",
-        "t1_amp",
-        "t2r_off",
-        "t2r_amp",
-        "q",
-        "phase",
-    ]
-
-    r2_scan = [
-        "t1_r2",
-        "t2r_r2",
-        "t2_r2",
-        "t2_r2",
-        None,
-        "rspec_r2",
-        "rspec_r2",
-        "amp_rabi_r2",
-        "t2_r2",
-        "t2_r2",
-        None,
-        "t2_r2",
-        "t1_r2",
-        "t1_r2",
-        "t2r_r2",
-        "t2r_r2",
-        "t1_r2",
-        None,
-    ]
+    parameter_config = get_parameter_config()
     
-    labels = [
-        "$T_1$ ($\mu$s)",
-        "$T_{2,R}$ ($\mu$s)",
-        "$T_{2,E}$ ($\mu$s)",
-        "$f-\overline{f}$ (kHz), Qubit ",
-        "Log(1 -Readout Fidelity)",
-        "Resonator $\kappa$ (MHz)",
-        "$f-\overline{f}$ (kHz), Resonator ",
-        "$\pi_{gain}/\overline{\pi_{gain}}$",
-        "$T_{\phi}$ ($\mu$s)",
-        "$T_{\phi,R}$ ($\mu$s)",
-        "$T_2 \, R^2$",
-        "$T_{2,E}/2 T_1$",
-        "$T_1$ offset",
-        "$T_1$ amplitude",
-        "$T_{2,R}$ offset",
-        "$T_{2,R}$ amplitude",
-        "$Q_1$",
-        "Phase",
-    ]
+    nrows, ncols, sz = calculate_subplot_layout(len(param_keys))
     
     # Collect data for all qubits and parameters
     violin_data = []
     qubit_labels = []
     param_labels = []
     
-    for k in data_inds:
-        key = key_list[k]
+    for param_key in param_keys:
+        if param_key not in parameter_config:
+            print(f"Warning: Parameter '{param_key}' not found in configuration")
+            continue
+            
+        config = parameter_config[param_key]
+        key = config["key"]
+        r2_key = config["r2_scan"]
+        
         param_data = []
         param_qubit_labels = []
         
@@ -409,25 +409,25 @@ def plot_violin(tt, qubit_list=None, fname='def', data_inds=None, use_mean=False
                 continue
                 
             # Remove outliers, same logic as plot_all
-            if r2_scan[k] is not None:
-                inds = (tt[qi][r2_scan[k]] > np.nanmean(np.array(tt[qi][r2_scan[k]])) - 0.08) 
-                inds2 = (np.abs(tt[qi][key] - np.nanmean(tt[qi][key])) < np.nanstd(tt[qi][key]) * 4)
+            if r2_key is not None and r2_key in tt[j]:
+                inds = (tt[j][r2_key] > np.nanmean(np.array(tt[j][r2_key])) - 0.08) 
+                inds2 = (np.abs(tt[j][key] - np.nanmean(tt[j][key])) < np.nanstd(tt[j][key]) * 4)
                 inds_true = np.logical_and(inds, inds2)
                 inds = np.where(inds_true)[0]
             else:
-                inds = np.arange(len(tt[qi][key]))
+                inds = np.arange(len(tt[j][key]))
             
             # Process data same as plot_all
             if key in ["f_ge", "frequency"]:
-                y = 1e3 * (tt[qi][key][inds] - np.nanmean(tt[qi][key][inds]))
+                y = 1e3 * (tt[j][key][inds] - np.nanmean(tt[j][key][inds]))
             elif key in ["pi_length"] or use_mean:
-                y = tt[qi][key][inds] / np.nanmean(tt[qi][key][inds])
+                y = tt[j][key][inds] / np.nanmean(tt[j][key][inds])
             elif key in ["t2r_amp", "t1_amp"]:
-                y = np.abs(tt[qi][key][inds])
+                y = np.abs(tt[j][key][inds])
             elif key in ["fidelity"]:
-                y = np.log10(1 - tt[qi][key][inds])
+                y = np.log10(1 - tt[j][key][inds])
             else:
-                y = tt[qi][key][inds]
+                y = tt[j][key][inds]
 
             # Remove NaN values
             y_clean = y[~np.isnan(y)]
@@ -438,7 +438,7 @@ def plot_violin(tt, qubit_list=None, fname='def', data_inds=None, use_mean=False
         if len(param_data) > 0:
             violin_data.append(param_data)
             qubit_labels.append(param_qubit_labels)
-            param_labels.append(labels[k])
+            param_labels.append(config["label"])
     
     # Create violin plots
     fig, axes = plt.subplots(nrows, ncols, figsize=sz)
