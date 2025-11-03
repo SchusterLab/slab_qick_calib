@@ -108,7 +108,37 @@ def get_parameter_config():
             "key": "phase",
             "r2_scan": None,
             "label": "Phase"
-        }
+        }, 
+        "Gamma1": {
+            "key": "Gamma1",
+            "r2_scan": "t1_r2",
+            "label": "$\Gamma_1$ (ms$^{-1}$)"
+        },
+        "Gamma2r": {
+            "key": "Gamma2r",
+            "r2_scan": "t2r_r2",
+            "label": "$\Gamma_{2,R}$ (ms$^{-1}$)"
+        },
+        "Gamma2": {
+            "key": "Gamma2",
+            "r2_scan": "t2_r2",
+            "label": "$\Gamma_{2,E}$ (ms$^{-1}$)"
+        },
+        "Gamma2e": {
+            "key": "Gamma2e",
+            "r2_scan": "t2_r2",
+            "label": "$\Gamma_{2,E}$ (ms$^{-1}$)"
+        }, 
+        "Gammaphi": {
+            "key": "Gammaphi",
+            "r2_scan": "t2_r2",
+            "label": "$\Gamma_{\phi}$ (ms$^{-1}$)"
+        },
+        "Gammasphi": {
+            "key": "Gammasphi",
+            "r2_scan": "t2_r2",
+            "label": "$\Gamma_{\phi,R}$ (ms$^{-1}$)"
+        },
     }
 
 def process_data(tt, qubit_list=None):
@@ -405,29 +435,29 @@ def plot_violin(tt, qubit_list=None, fname='def', param_keys=None, use_mean=Fals
         param_qubit_labels = []
         
         for j, qi in enumerate(qubit_list):
-            if key not in tt[j]:
+            if key not in tt[qi]:
                 continue
                 
             # Remove outliers, same logic as plot_all
-            if r2_key is not None and r2_key in tt[j]:
-                inds = (tt[j][r2_key] > np.nanmean(np.array(tt[j][r2_key])) - 0.08) 
-                inds2 = (np.abs(tt[j][key] - np.nanmean(tt[j][key])) < np.nanstd(tt[j][key]) * 4)
+            if r2_key is not None and r2_key in tt[qi]:
+                inds = (tt[qi][r2_key] > np.nanmean(np.array(tt[qi][r2_key])) - 0.08)
+                inds2 = (np.abs(tt[qi][key] - np.nanmean(tt[qi][key])) < np.nanstd(tt[qi][key]) * 4)
                 inds_true = np.logical_and(inds, inds2)
                 inds = np.where(inds_true)[0]
             else:
-                inds = np.arange(len(tt[j][key]))
+                inds = np.arange(len(tt[qi][key]))
             
             # Process data same as plot_all
             if key in ["f_ge", "frequency"]:
-                y = 1e3 * (tt[j][key][inds] - np.nanmean(tt[j][key][inds]))
+                y = 1e3 * (tt[qi][key][inds] - np.nanmean(tt[qi][key][inds]))
             elif key in ["pi_length"] or use_mean:
-                y = tt[j][key][inds] / np.nanmean(tt[j][key][inds])
+                y = tt[qi][key][inds] / np.nanmean(tt[qi][key][inds])
             elif key in ["t2r_amp", "t1_amp"]:
-                y = np.abs(tt[j][key][inds])
+                y = np.abs(tt[qi][key][inds])
             elif key in ["fidelity"]:
-                y = np.log10(1 - tt[j][key][inds])
+                y = np.log10(1 - tt[qi][key][inds])
             else:
-                y = tt[j][key][inds]
+                y = tt[qi][key][inds]
 
             # Remove NaN values
             y_clean = y[~np.isnan(y)]
@@ -466,12 +496,12 @@ def plot_violin(tt, qubit_list=None, fname='def', param_keys=None, use_mean=Fals
         axes[i].set_xlabel('Qubit')
         axes[i].tick_params(axis='x', rotation=45)
         
-        # Add mean markers
-        for qubit in df['Qubit'].unique():
-            qubit_data = df[df['Qubit'] == qubit]['Value']
-            mean_val = qubit_data.mean()
-            x_pos = df['Qubit'].unique().tolist().index(qubit)
-            axes[i].plot(x_pos, mean_val, 'ro', markersize=4)
+        # # Add mean markers
+        # for qubit in df['Qubit'].unique():
+        #     qubit_data = df[df['Qubit'] == qubit]['Value']
+        #     mean_val = qubit_data.mean()
+        #     x_pos = df['Qubit'].unique().tolist().index(qubit)
+        #     axes[i].plot(x_pos, mean_val, 'ro', markersize=4)
     
     # Hide unused subplots
     for i in range(len(violin_data), len(axes)):
@@ -513,3 +543,13 @@ def plot_sets(d, xvals, yvals, cols=4, nrep=10, fit_func=None, params=None):
 
     fig.tight_layout()
     return fig, ax
+
+
+def add_losses(tt): 
+    par_list = ['t1','t2r','t2','t2e', 'tphi', 'tsphi']
+    for j in range(len(tt)):
+        for par in par_list:
+            if par in tt[j].keys():
+                tt[j]['Gamma' + par[1:]] = 1000 / tt[j][par]
+    return tt
+        
