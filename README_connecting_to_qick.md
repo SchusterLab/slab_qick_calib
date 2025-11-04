@@ -34,14 +34,8 @@ The nameserver acts as a directory service that allows instruments and clients t
 3. Set the host to your nameserver computer's IP address. If you have issues with procedure, can try changing port number. 
 4. Run the notebook cell to start the nameserver
 
-**Option B: Command line**
-```bash
-python -m Pyro4.naming -n <NAMESERVER_IP> -p 9090
-```
 
-
-
-**Option C: Python script**
+**Option B: Python script**
 ```python
 import Pyro4
 import Pyro4.naming
