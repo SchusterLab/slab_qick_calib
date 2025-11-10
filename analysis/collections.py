@@ -8,6 +8,8 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 import pandas as pd
 import os
+from pathlib import Path
+
 
 def get_parameter_config():
     """
@@ -390,7 +392,7 @@ def nice_dates():
     return locator
 
 
-def plot_violin(tt, qubit_list=None, fname='def', param_keys=None, use_mean=False):
+def plot_violin(tt, qubit_list=None, fname='def', param_keys=None, use_mean=False, csv_path="data.csv"):
     """
     Create violin plots for tracking data parameters across qubits.
     
@@ -441,8 +443,9 @@ def plot_violin(tt, qubit_list=None, fname='def', param_keys=None, use_mean=Fals
             # Remove outliers, same logic as plot_all
             if r2_key is not None and r2_key in tt[qi]:
                 inds = (tt[qi][r2_key] > np.nanmean(np.array(tt[qi][r2_key])) - 0.08)
-                inds2 = (np.abs(tt[qi][key] - np.nanmean(tt[qi][key])) < np.nanstd(tt[qi][key]) * 4)
-                inds_true = np.logical_and(inds, inds2)
+                #inds2 = (np.abs(tt[qi][key] - np.nanmean(tt[qi][key])) < np.nanstd(tt[qi][key]) * 4)
+                #inds_true = np.logical_and(inds, inds2)
+                inds_true = inds
                 inds = np.where(inds_true)[0]
             else:
                 inds = np.arange(len(tt[qi][key]))
@@ -473,6 +476,7 @@ def plot_violin(tt, qubit_list=None, fname='def', param_keys=None, use_mean=Fals
     # Create violin plots
     fig, axes = plt.subplots(nrows, ncols, figsize=sz)
     
+
     if nrows == 1 and ncols == 1:
         axes = [axes]
     elif nrows == 1 or ncols == 1:
@@ -508,8 +512,18 @@ def plot_violin(tt, qubit_list=None, fname='def', param_keys=None, use_mean=Fals
         axes[i].set_visible(False)
     
     fig.tight_layout()
-    #fig.savefig(os.path.join("images", f"violin_plots_{fname}.png"), dpi=150, bbox_inches='tight')
-    
+
+    # Save plots
+    #file_path = Path(filename)
+    qlist = [str(q) for q in qubit_list]
+    qstr = ",".join(qlist)
+    plist = ",".join(param_keys)
+    pstr = plist.replace(" ", "")
+    file_path = Path(csv_path)
+
+    new_filename = file_path.name.rsplit(".", 1)[0] + "_violin" + qstr + "_" + pstr + ".png"
+    fig.savefig(file_path.parent / "images" / new_filename)
+
     return fig, axes
 
 

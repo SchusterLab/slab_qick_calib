@@ -24,6 +24,9 @@ def combined_model(tau, A, alpha, B, tau0):
 def combined_model_two(tau, A, alpha, B, tau0, C, tau1):
         return power_law(tau, A, alpha) + lorentzian(tau, B, tau0) + lorentzian(tau, C, tau1)
 
+def lorentz_model_two(tau, B, tau0, C, tau1):
+        return lorentzian(tau, B, tau0) + lorentzian(tau, C, tau1)
+
 def fit_power_law(tau, allan_dev):
     """Fit Allan deviation to a power law: A * tau^alpha."""
 
@@ -61,6 +64,16 @@ def fit_combined_model_two(tau, allan_dev):
     )
     return popt, pcov
 
+def fit_lorentz_model_two(tau, allan_dev):
+    """Fit Allan deviation to a combined model: power law + Lorentzian"""
+
+    popt, pcov = curve_fit(
+        lorentz_model_two,
+        tau,
+        allan_dev,
+        p0=[np.max(allan_dev)/2, 1500, np.max(allan_dev)/2, 3000],
+    )
+    return popt, pcov
 
 def calculate_allan_variance(data, tau_values):
     """
@@ -148,11 +161,11 @@ def perform_analysis(tt,fname='def', param='t1', qubit_list=None):
     par_mean =[]
     par_std =[]
     for i in qubit_list:
-        times_filtered = np.array(tt[i]['time'])
+        times_filtered = np.array(tt[i]['time'])-np.min(np.array(tt[i]['time']))
         par_filtered = np.array(tt[i][param])
 
         # Plot T1 vs time
-        axes[0].plot(times_filtered * 3600, par_filtered, "o", markersize=2, linewidth=1, label=f"{i}")
+        axes[0].plot(times_filtered , par_filtered, "o", markersize=1, linewidth=1, label=f"{i}")
 
         # Calculate tau values for Allan variance (logarithmically spaced)
         min_tau = 1
@@ -222,12 +235,22 @@ def perform_analysis(tt,fname='def', param='t1', qubit_list=None):
         try:
             popt_combined, pcov_combined = fit_combined_model_two(tau_seconds, np.sqrt(overlap_allan_var))
             A_combined, alpha_combined, B_combined, tau0_combined, C_combined, tau1_combined = popt_combined
-            axes[1].loglog(tau_seconds, combined_model_two(tau_seconds, *popt_combined), "k-",
-                label=f"α={alpha_combined:.2f}, $τ_0$={tau0_combined:.2f}, C={C_combined:.2f}, $τ_1$={tau1_combined:.2f}",
-            )
+            # axes[1].loglog(tau_seconds, combined_model_two(tau_seconds, *popt_combined), "k-",
+            #     label=f"α={alpha_combined:.2f}, $τ_0$={tau0_combined:.2f}, C={C_combined:.2f}, $τ_1$={tau1_combined:.2f}",
+            # )
             # label=f"Combined: A={A_combined:.2e}, α={alpha_combined:.2f}, B={B_combined:.2e}, τ0={tau0_combined:.2f}",
         except Exception as e:
              print(f"Combined fit failed: {e}")
+
+        try:
+            popt_combined, pcov_combined = fit_lorentz_model_two(tau_seconds, np.sqrt(overlap_allan_var))
+            B_combined, tau0_combined, C_combined, tau1_combined = popt_combined
+            axes[1].loglog(tau_seconds, lorentz_model_two(tau_seconds, *popt_combined), "k-",
+                label=f"$τ_0$={tau0_combined:.2f}, C={C_combined:.2f}, $τ_1$={tau1_combined:.2f}",
+            )
+                # label=f"Combined: A={A_combined:.2e}, α={alpha_combined:.2f}, B={B_combined:.2e}, τ0={tau0_combined:.2f}",
+        except Exception as e:
+              print(f"Combined fit failed: {e}")
 
         # Print some statistics
         par_mean.append(np.mean(par_filtered))
@@ -272,7 +295,7 @@ def perform_analysis(tt,fname='def', param='t1', qubit_list=None):
 
     axes[1].set_xlabel("$\\tau$ (s)")
     axes[1].set_ylabel("Normalized Overlapping Allan Deviation")
-    axes[1].legend()
+    axes[1].legend(fontsize=8)
     plt.tight_layout()
     
     par_mean = np.array(par_mean)
