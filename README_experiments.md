@@ -613,6 +613,22 @@ t1_cont = meas.T1Cont(cfg_dict, qi=0, params={'t1_expts': 100})
 t1_stark = meas.T1Stark(cfg_dict, qi=0, params={'stark_gain': 0.1, 'stark_freq': 4900})
 ```
 
+#### T1 Stark Complex Measurement
+
+**File**: `experiments/single_qubit/t1_stark_complex.py`
+
+**Description**: This experiment performs more complex T1 measurements with multiple Stark tones and advanced pulse sequences. It enables detailed characterization of how different Stark drive configurations affect qubit relaxation, including multi-tone interference effects and complex drive patterns.
+
+**Key Parameters**:
+- Similar to T1 Stark, with additional parameters for multiple tone configurations
+- Supports complex pulse sequencing for advanced Stark shift studies
+- Enables investigation of multi-photon processes and higher-order effects
+
+**Example**:
+```python
+t1_stark_complex = meas.T1StarkComplex(cfg_dict, qi=0, params={'stark_gain': 0.1, 'stark_freq': 4900})
+```
+
 #### T2 Ramsey Stark Measurement
 
 **File**: `experiments/single_qubit/t2_ramsey_stark.py`
