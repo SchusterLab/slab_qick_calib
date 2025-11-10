@@ -1,10 +1,17 @@
 # Manual for `config.py`
 
-This manual explains the parameters and functions in the `config.py` module and how they are used in various quantum experiments.
+This manual explains the parameters and functions in the `config.py` module and how they are used in various quantum experiments with superconducting qubits.
 
 ## Overview
 
-The `config.py` module provides a set of functions to initialize, load, save, and update configuration files for quantum experiments with superconducting qubits. It creates YAML configuration files with parameters for qubits, readout resonators, and hardware settings. This configuration is used by various experiments in the `experiments` folder.
+The `config.py` module provides a comprehensive set of functions to initialize, load, save, and update configuration files for quantum experiments with superconducting qubits. It creates YAML configuration files with parameters for qubits, readout resonators, and hardware settings.
+
+The configuration structure has three main sections:
+- **`device.qubit`**: Qubit parameters (frequencies, coherence times, pulse settings)
+- **`device.readout`**: Readout resonator parameters (frequency, gain, timing)
+- **`hw.soc`**: Hardware configuration (ADC/DAC channels and settings)
+
+Configuration files are stored in YAML format and loaded as `AttrDict` objects, allowing dictionary keys to be accessed as attributes (e.g., `cfg.device.qubit.T1`). This configuration system serves as the central hub that connects hardware settings, qubit properties, and experimental parameters, enabling automated tuning and optimization of quantum devices.
 
 ## Configuration Management Functions
 
@@ -47,6 +54,43 @@ Initializes a configuration file specifically for resonator experiments. This co
 
 ### `init_model_config(file_name, num_qubits)`
 Initializes a model configuration file for storing theoretical and fitting parameters related to the quantum device. This is used for more advanced analysis and modeling.
+
+**Parameters:**
+- `file_name`: Path where the configuration will be saved (a new file with "_model" suffix is created)
+- `num_qubits`: Number of qubits to configure
+
+**Returns:** The YAML configuration string that was saved
+
+**Note:** Creates a new file with "_model" appended before the extension (e.g., "config.yml" → "config_model.yml"). All parameters are initialized to None and filled during analysis.
+
+### `init_stark_section(file_name, num_qubits)`
+Adds a Stark shift section to an existing configuration file. Adds parameters for characterizing AC Stark shifts from drive tones, useful for experiments measuring and compensating Stark effects.
+
+**Parameters:**
+- `file_name`: Path to the configuration file
+- `num_qubits`: Number of qubits (determines array lengths)
+
+**Returns:** The updated configuration object
+
+**Note:** Parameters represent Stark shift coefficients:
+- `q`, `l`, `o`: Quadratic, linear, offset terms
+- `qneg`, `lneg`, `oneg`: Negative detuning versions
+- `f`, `fneg`: Frequency shifts at positive/negative detuning
+
+### `add_pulse(file_name, pulse_name, pulse_type="gauss")`
+Adds a new pulse definition to the configuration under `device.qubit.pulses`. Useful for defining custom pulse sequences beyond the default `pi_ge` and `pi_ef` pulses.
+
+**Parameters:**
+- `file_name`: Path to the configuration file
+- `pulse_name`: Name for the new pulse (e.g., "pi_half", "echo", "drag")
+- `pulse_type`: Type of pulse shape - "gauss", "const", or "flat_top" (default: "gauss")
+
+**Returns:** The updated configuration object
+
+**Default pulse parameters:**
+- **gauss**: `gain`=0.15, `sigma`=0.1, `sigma_inc`=4
+- **const**: `gain`=0.15, `length`=1
+- **flat_top**: `gain`=0.15, `length`=0.1, `ramp_sigma`=0.02, `ramp_sigma_inc`=4
 
 ## Configuration Structure
 

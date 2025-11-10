@@ -2,8 +2,16 @@
 Configuration module for quantum experiments.
 
 This module provides functions for loading, saving, and updating configuration files
-for quantum experiments. It also includes functions for initializing default configurations
-for different types of experiments.
+for quantum experiments with superconducting qubits. It creates YAML configuration 
+files with parameters for qubits, readout resonators, and hardware settings.
+
+The configuration structure has three main sections:
+    - device.qubit: Qubit parameters (frequencies, coherence times, pulse settings)
+    - device.readout: Readout resonator parameters (frequency, gain, timing)
+    - hw.soc: Hardware configuration (ADC/DAC channels and settings)
+
+Configuration files are stored in YAML format and loaded as AttrDict objects,
+allowing dictionary keys to be accessed as attributes (e.g., cfg.device.qubit.T1).
 """
 
 import yaml
@@ -15,14 +23,35 @@ from ..exp_handling.datamanagement import AttrDict
 
 
 def nested_set(dic, keys, value):
-    """Set a nested dictionary value using a list of keys."""
+    """
+    Set a value in a nested dictionary using a list of keys.
+    
+    This function navigates through nested dictionary levels using the provided
+    keys, creating intermediate dictionaries as needed, and sets the final value.
+    
+    Args:
+        dic: The dictionary to modify
+        keys: List of keys defining the path to the target value
+        value: The value to set at the target location
+        
+    Example:
+        nested_set(cfg, ['device', 'qubit', 'T1'], 50) sets cfg['device']['qubit']['T1'] = 50
+    """
     for key in keys[:-1]:
         dic = dic.setdefault(key, {})
     dic[keys[-1]] = value
 
 
 def load(file_name):
-    """Load a YAML configuration file and return it as an AttrDict."""
+    """
+    Load a YAML configuration file and return it as an AttrDict.
+    
+    Args:
+        file_name: Path to the YAML configuration file
+        
+    Returns:
+        AttrDict: Configuration object with dictionary keys accessible as attributes
+    """
     with open(file_name, "r") as file:
         auto_cfg = AttrDict(yaml.safe_load(file))
     return auto_cfg
@@ -35,10 +64,11 @@ def save(cfg, file_name, reload=True):
     Args:
         cfg: Configuration object to save
         file_name: Path to save the configuration
-        reload: Whether to reload the file after saving (default: True)
+        reload: Whether to reload the file after saving (default: True).
+                This ensures the returned config matches the saved file format.
 
     Returns:
-        The saved configuration as an AttrDict if reload=True, otherwise None
+        AttrDict: The saved configuration if reload=True, otherwise None
     """
     # Convert to YAML format
     cfg_yaml = yaml.safe_dump(cfg.to_dict(), default_flow_style=None)
@@ -56,14 +86,19 @@ def save(cfg, file_name, reload=True):
 
 def save_copy(file_name):
     """
-
-    Save a copy of a configuration file with a timestamp in the filename.
+    Save a timestamped copy of a configuration file.
+    
+    Creates a backup copy with the current timestamp appended to the filename.
+    Useful for preserving configuration history before making changes.
 
     Args:
         file_name: Path to the original configuration file
 
     Returns:
-        The saved configuration as an AttrDict
+        AttrDict: The saved configuration
+        
+    Example:
+        If file_name is "config.yml", creates "config_20250109_173000.yml"
     """
     # Load the configuration
     cfg = load(file_name)
@@ -83,20 +118,32 @@ def save_copy(file_name):
 
 
 def recursive_get(d, keys):
-    """Get a value from a nested dictionary using a list of keys."""
+    """
+    Get a value from a nested dictionary using a list of keys.
+    
+    Args:
+        d: The dictionary to search
+        keys: List of keys defining the path to the target value
+        
+    Returns:
+        The value at the specified path, or empty dict if path doesn't exist
+    """
     return reduce(lambda c, k: c.get(k, {}), keys, d)
 
 
 def in_rng(val, rng_vals):
     """
-    Ensure a value is within a specified range.
+    Clamp a value to a specified range.
 
     Args:
         val: The value to check
         rng_vals: A tuple/list of (min, max) values
 
     Returns:
-        The value, clamped to the specified range
+        float: The value, clamped to the specified range
+        
+    Note:
+        Prints a message if the value is clamped
     """
     if val < rng_vals[0]:
         print("Val is out of range, setting to min")
@@ -111,14 +158,17 @@ def in_rng(val, rng_vals):
 def format_value(value, sig=4, rng_vals=None):
     """
     Format a value for storage in the configuration.
+    
+    Handles rounding of floats and range clamping. NaN values and non-numeric
+    types (int, str, bool) are preserved without modification.
 
     Args:
         value: The value to format
-        sig: Number of significant digits for floating point values
+        sig: Number of significant digits for floating point values (default: 4)
         rng_vals: Optional range limits (min, max)
 
     Returns:
-        The formatted value
+        The formatted value with appropriate type and precision
     """
     # Skip formatting for NaN values
     if np.isnan(value):
@@ -141,20 +191,27 @@ def update_config(
     """
     Update a value in a configuration file.
 
-    This is a general-purpose update function that can update any part of the configuration.
+    This is a general-purpose update function that can update any part of the 
+    configuration, including nested fields and array elements. The file is 
+    automatically saved after updating.
 
     Args:
         file_name: Path to the configuration file
-        path: Path to the parameter section (e.g., "device.qubit", "hw.soc.lo")
-        field: Field name to update
-        value: New value
-        index: Optional index for array values
-        verbose: Whether to print update information
-        sig: Number of significant digits for floating point values
-        rng_vals: Optional range limits (min, max)
+        path: Dot-separated path to the parameter section (e.g., "device.qubit", 
+              "hw.soc.dacs"). Use None for top-level fields.
+        field: Field name to update. Can be a string or tuple for nested fields.
+        value: New value to set
+        index: Optional index for array values (e.g., qubit index)
+        verbose: Whether to print update information (default: True)
+        sig: Number of significant digits for floating point values (default: 4)
+        rng_vals: Optional range limits (min, max) to clamp the value
 
     Returns:
-        The updated configuration
+        AttrDict: The updated configuration
+        
+    Examples:
+        update_config("cfg.yml", "device.qubit", "T1", 50.5, index=0)
+        update_config("cfg.yml", "hw.soc.dacs", "ch", 3, index=1)
     """
     # Load the configuration
     cfg = load(file_name)
@@ -176,6 +233,7 @@ def update_config(
             section = section[part]
     else:
         section = cfg
+        
     # Update the value
     if isinstance(field, tuple):  # For nested fields
         v = recursive_get(section, field)
@@ -203,7 +261,23 @@ def update_config(
 
 
 def update_qubit(file_name, field, value, qubit_i, verbose=True, sig=4, rng_vals=None):
-    """Update a qubit parameter in the configuration."""
+    """
+    Update a qubit parameter in the configuration.
+    
+    Convenience wrapper for update_config that targets device.qubit parameters.
+
+    Args:
+        file_name: Path to the configuration file
+        field: Qubit parameter field name (e.g., "T1", "f_ge")
+        value: New value
+        qubit_i: Qubit index
+        verbose: Whether to print update information (default: True)
+        sig: Number of significant digits (default: 4)
+        rng_vals: Optional range limits (min, max)
+
+    Returns:
+        AttrDict: The updated configuration
+    """
     return update_config(
         file_name, "device.qubit", field, value, qubit_i, verbose, sig, rng_vals
     )
@@ -212,21 +286,69 @@ def update_qubit(file_name, field, value, qubit_i, verbose=True, sig=4, rng_vals
 def update_readout(
     file_name, field, value, qubit_i, verbose=True, sig=4, rng_vals=None
 ):
-    """Update a readout parameter in the configuration."""
+    """
+    Update a readout parameter in the configuration.
+    
+    Convenience wrapper for update_config that targets device.readout parameters.
+
+    Args:
+        file_name: Path to the configuration file
+        field: Readout parameter field name (e.g., "frequency", "gain")
+        value: New value
+        qubit_i: Qubit index
+        verbose: Whether to print update information (default: True)
+        sig: Number of significant digits (default: 4)
+        rng_vals: Optional range limits (min, max)
+
+    Returns:
+        AttrDict: The updated configuration
+    """
     return update_config(
         file_name, "device.readout", field, value, qubit_i, verbose, sig, rng_vals
     )
 
 
 def update_stark(file_name, field, value, qubit_i, verbose=True, sig=4, rng_vals=None):
-    """Update a Stark shift parameter in the configuration."""
+    """
+    Update a Stark shift parameter in the configuration.
+    
+    Convenience wrapper for update_config that targets stark parameters.
+
+    Args:
+        file_name: Path to the configuration file
+        field: Stark parameter field name
+        value: New value
+        qubit_i: Qubit index
+        verbose: Whether to print update information (default: True)
+        sig: Number of significant digits (default: 4)
+        rng_vals: Optional range limits (min, max)
+
+    Returns:
+        AttrDict: The updated configuration
+    """
     return update_config(
         file_name, "stark", field, value, qubit_i, verbose, sig, rng_vals
     )
 
 
 def update_lo(file_name, field, value, qi, verbose=True, sig=4, rng_vals=None):
-    """Update a local oscillator parameter in the configuration."""
+    """
+    Update a local oscillator parameter in the configuration.
+    
+    Convenience wrapper for update_config that targets hw.soc.lo parameters.
+
+    Args:
+        file_name: Path to the configuration file
+        field: LO parameter field name
+        value: New value
+        qi: Qubit/channel index
+        verbose: Whether to print update information (default: True)
+        sig: Number of significant digits (default: 4)
+        rng_vals: Optional range limits (min, max)
+
+    Returns:
+        AttrDict: The updated configuration
+    """
     return update_config(
         file_name, "hw.soc.lo", field, value, qi, verbose, sig, rng_vals
     )
@@ -235,17 +357,29 @@ def update_lo(file_name, field, value, qi, verbose=True, sig=4, rng_vals=None):
 def init_config(file_name, num_qubits, type="full", t1=50, aliases="Qick001", ip=""):
     """
     Initialize a configuration file for quantum experiments with qubits.
+    
+    Creates a complete configuration with default values for multi-qubit experiments,
+    including qubit parameters, readout settings, and hardware configuration.
 
     Args:
-        file_name: Path to save the configuration
+        file_name: Path where the configuration will be saved
         num_qubits: Number of qubits to configure
-        type: Type of readout, default is "full"
-        t1: Default T1 relaxation time in μs
-        aliases: Identifier for the System-on-Chip (SoC)
-        ip: IP address for the device
+        type: Type of readout DAC output - "full" (full bandwidth), "mux" (multiplexed),
+              or "int" (interpolated) (default: "full")
+        t1: Default T1 relaxation time in μs. Used to initialize T1, T2 values and 
+            final_delay (default: 50)
+        aliases: Identifier for the System-on-Chip (SoC) (default: "Qick001")
+        ip: IP address for the device (default: "")
 
     Returns:
-        The created configuration
+        str: The YAML configuration string that was saved
+        
+    Note:
+        - T2r (Ramsey) is initialized to t1
+        - T2e (Echo) is initialized to 2*t1
+        - final_delay is initialized to 6*t1
+        - All qubit frequencies start at 4000 MHz (ge) and 3800 MHz (ef)
+        - All readout frequencies start at 7000 MHz
     """
 
     # Create a helper function to initialize arrays
@@ -268,86 +402,86 @@ def init_config(file_name, num_qubits, type="full", t1=50, aliases="Qick001", ip
     # Qubit frequency parameters
     device["qubit"].update(
         {
-            "f_ge": init_array(4000),
-            "f_ef": init_array(3800),
-            "kappa": init_array(0),
-            "spec_gain": init_array(1),
+            "f_ge": init_array(4000),  # Ground to excited state frequency (MHz)
+            "f_ef": init_array(3800),  # Excited to second excited state frequency (MHz)
+            "kappa": init_array(0),    # Qubit linewidth (MHz)
+            "spec_gain": init_array(1),  # Gain scaling for spectroscopy
         }
     )
 
-    # Qubit pulse parameters
+    # Qubit pulse parameters for ge and ef transitions
     for pulse_type in ["pi_ge", "pi_ef"]:
         device["qubit"]["pulses"][pulse_type].update(
             {
-                "gain": init_array(0.15),
-                "sigma": init_array(0.1),
-                "sigma_inc": init_array(5),
-                "type": init_array("gauss"),
-                "phase": init_array(0),
+                "gain": init_array(0.15),      # Pulse amplitude
+                "sigma": init_array(0.1),      # Gaussian width (μs)
+                "sigma_inc": init_array(5),    # Pulse length in units of sigma
+                "type": init_array("gauss"),   # Pulse shape
+                "phase": init_array(0),        # Pulse phase (degrees)
             }
         )
 
     # Other qubit parameters
     device["qubit"].update(
         {
-            "pop": init_array(0),
-            "temp": init_array(0),
-            "tuned_up": init_array(False),
-            "low_gain": 0.003,
-            "max_gain": 1,
+            "pop": init_array(0),           # Thermal population
+            "temp": init_array(0),          # Qubit temperature
+            "tuned_up": init_array(False),  # Calibration status flag
+            "low_gain": 0.003,              # Minimum gain for spectroscopy
+            "max_gain": 1,                  # Maximum gain for control pulses
         }
     )
 
     # Readout frequency and gain
     device["readout"].update(
         {
-            "frequency": init_array(7000),
-            "gain": init_array(0.05),
+            "frequency": init_array(7000),  # Readout resonator frequency (MHz)
+            "gain": init_array(0.05),       # Readout pulse amplitude
         }
     )
 
     # Readout resonator parameters
     device["readout"].update(
         {
-            "lamb": init_array(0),
-            "chi": init_array(0),
-            "kappa": init_array(0.5),
-            "qe": init_array(0),
-            "qi": init_array(0),
+            "lamb": init_array(0),      # Lamb shift
+            "chi": init_array(0),       # Dispersive shift
+            "kappa": init_array(0.5),   # Resonator linewidth (MHz)
+            "qe": init_array(0),        # External quality factor
+            "qi": init_array(0),        # Internal quality factor
         }
     )
 
     # Readout settings
     device["readout"].update(
         {
-            "phase": init_array(0),
-            "readout_length": init_array(5),
-            "threshold": init_array(10),
-            "fidelity": init_array(0),
-            "tm": init_array(0),
-            "sigma": init_array(0),
-            "rescale": init_array(False),
+            "phase": init_array(0),             # Phase rotation for signal (degrees)
+            "readout_length": init_array(5),    # Readout pulse duration (μs)
+            "threshold": init_array(10),        # State discrimination threshold
+            "fidelity": init_array(0),          # Readout fidelity
+            "tm": init_array(0),                # Measurement time constant
+            "sigma": init_array(0),             # Readout histogram width
+            "rescale": init_array(False),       # Rescaling flag
         }
     )
 
-    # Readout timing
+    # Readout timing parameters
     device["readout"].update(
         {
-            "trig_offset": init_array(0.5),
-            "final_delay": init_array(t1 * 6),
-            "active_reset": init_array(False),
-            "reset": init_array(3),
+            "trig_offset": init_array(0.5),     # Trigger timing offset (μs)
+            "final_delay": init_array(t1 * 6),  # Delay before next shot (μs)
+            "active_reset": init_array(False),  # Active reset flag
+            "reset": init_array(3),             # Reset parameter
         }
     )
 
-    # Readout averaging
+    # Readout averaging parameters
     device["readout"].update(
         {
-            "reps": init_array(1),
-            "rounds": init_array(1),
-            "max_gain": 1,
-            "reps_base": 150,
-            "rounds_base": 1,
+            "reps": init_array(1),      # Per-qubit repetition multiplier
+            "rounds": init_array(1),    # Per-qubit averaging multiplier
+            "max_gain": 1,              # Maximum readout gain
+            "reps_base": 150,           # Base repetitions for device
+            "rounds_base": 1,           # Base rounds for device
         }
     )
 
@@ -355,20 +489,20 @@ def init_config(file_name, num_qubits, type="full", t1=50, aliases="Qick001", ip
     soc = {
         "adcs": {
             "readout": {
-                "ch": init_array(0),
-                "type": init_array("dyn"),
+                "ch": init_array(0),        # ADC channel numbers
+                "type": init_array("dyn"),  # ADC type
             }
         },
         "dacs": {
             "qubit": {
-                "ch": init_array(1),
-                "nyquist": init_array(1),
-                "type": init_array("full"),
+                "ch": init_array(1),         # DAC channel for qubit control
+                "nyquist": init_array(1),    # Nyquist zone (1 or 2)
+                "type": init_array("full"),  # DAC mode
             },
             "readout": {
-                "ch": init_array(0),
-                "nyquist": init_array(2),
-                "type": init_array(type),
+                "ch": init_array(0),         # DAC channel for readout
+                "nyquist": init_array(2),    # Nyquist zone (1 or 2)
+                "type": init_array(type),    # DAC mode
             },
         },
     }
@@ -387,15 +521,18 @@ def init_config(file_name, num_qubits, type="full", t1=50, aliases="Qick001", ip
 def init_config_res(file_name, num_qubits, type="full", aliases="Qick001"):
     """
     Initialize a configuration file for resonator experiments.
+    
+    Creates a simplified configuration with only readout parameters, used for
+    resonator characterization experiments without qubit control.
 
     Args:
-        file_name: Path to save the configuration
-        num_qubits: Number of qubits to configure
-        type: Type of readout, default is "full"
-        aliases: Identifier for the System-on-Chip (SoC)
+        file_name: Path where the configuration will be saved
+        num_qubits: Number of resonators to configure
+        type: Type of readout DAC output - "full", "mux", or "int" (default: "full")
+        aliases: Identifier for the System-on-Chip (SoC) (default: "Qick001")
 
     Returns:
-        The created configuration
+        str: The YAML configuration string that was saved
     """
 
     # Create a helper function to initialize arrays
@@ -409,53 +546,53 @@ def init_config_res(file_name, num_qubits, type="full", aliases="Qick001"):
     # Readout frequency and gain
     device["readout"].update(
         {
-            "frequency": init_array(7000),
-            "gain": init_array(0.05),
+            "frequency": init_array(7000),  # Resonator frequency (MHz)
+            "gain": init_array(0.05),       # Readout pulse amplitude
         }
     )
 
-    # Readout resonator parameters
+    # Readout resonator parameters (including high/low power measurements)
     device["readout"].update(
         {
-            "kappa": init_array(0.5),
-            "kappa_hi": init_array(0.5),
-            "qe": init_array(0),
-            "qi": init_array(0),
-            "qi_hi": init_array(0),
-            "qi_lo": init_array(0),
+            "kappa": init_array(0.5),       # Linewidth (MHz)
+            "kappa_hi": init_array(0.5),    # Linewidth at high power
+            "qe": init_array(0),            # External quality factor
+            "qi": init_array(0),            # Internal quality factor (overall)
+            "qi_hi": init_array(0),         # Internal Q at high power
+            "qi_lo": init_array(0),         # Internal Q at low power
         }
     )
 
     # Readout settings
     device["readout"].update(
         {
-            "phase": init_array(0),
-            "readout_length": init_array(100),
-            "trig_offset": init_array(0.5),
-            "final_delay": init_array(50),
+            "phase": init_array(0),             # Phase rotation (degrees)
+            "readout_length": init_array(100),  # Pulse duration (μs)
+            "trig_offset": init_array(0.5),     # Trigger timing (μs)
+            "final_delay": init_array(50),      # Delay between shots (μs)
         }
     )
 
     # Readout averaging
     device["readout"].update(
         {
-            "reps": init_array(1),
-            "rounds": init_array(1),
-            "max_gain": 1,
-            "reps_base": 30,
-            "rounds_base": 1,
-            "phase_inc": [1140],
+            "reps": init_array(1),          # Per-resonator repetition multiplier
+            "rounds": init_array(1),        # Per-resonator averaging multiplier
+            "max_gain": 1,                  # Maximum readout gain
+            "reps_base": 30,                # Base repetitions
+            "rounds_base": 1,               # Base rounds
+            "phase_inc": [1140],            # Phase increment for averaging
         }
     )
 
     # Hardware configuration
     soc = {
-        "adcs": {"readout": {"ch": init_array(0)}},
+        "adcs": {"readout": {"ch": init_array(0)}},  # ADC channels
         "dacs": {
             "readout": {
-                "ch": init_array(0),
-                "nyquist": init_array(2),
-                "type": init_array(type),
+                "ch": init_array(0),         # DAC channels
+                "nyquist": init_array(2),    # Nyquist zone
+                "type": init_array(type),    # DAC mode
             },
         },
     }
@@ -473,16 +610,22 @@ def init_config_res(file_name, num_qubits, type="full", aliases="Qick001"):
 
 def save_single_qubit_config(file_name, qubit_index, new_file_name):
     """
-    Save a configuration file that contains only the ith element from each field
-    in the configuration that has length greater than 1.
+    Extract and save configuration for a single qubit.
+    
+    Creates a new configuration file containing only the parameters for the 
+    specified qubit index, extracted from a multi-qubit configuration.
 
     Args:
-        file_name: Path to the original configuration file
-        qubit_index: Index of the qubit to extract
-        new_file_name: Path to save the new configuration file
+        file_name: Path to the original multi-qubit configuration file
+        qubit_index: Index of the qubit to extract (0-indexed)
+        new_file_name: Path where the single-qubit configuration will be saved
 
     Returns:
-        The saved configuration as an AttrDict
+        AttrDict: The single-qubit configuration
+        
+    Note:
+        Arrays with length > 1 are reduced to single values at the specified index.
+        Scalar values and single-element arrays are preserved as-is.
     """
     # Load the original configuration
     cfg = load(file_name)
@@ -511,14 +654,21 @@ def save_single_qubit_config(file_name, qubit_index, new_file_name):
 
 def init_model_config(file_name, num_qubits):
     """
-    Initialize a model configuration file for quantum experiments with qubits.
+    Initialize a model configuration file for theoretical parameters.
+    
+    Creates a configuration for storing theoretical circuit parameters and 
+    statistical analysis results from qubit characterization.
 
     Args:
-        file_name: Path to save the configuration
+        file_name: Path where the configuration will be saved
         num_qubits: Number of qubits to configure
 
     Returns:
-        The created configuration
+        str: The YAML configuration string that was saved
+        
+    Note:
+        A new file is created with "_model" appended before the extension.
+        All parameters are initialized to None and filled during analysis.
     """
 
     # Create a helper function to initialize arrays
@@ -526,27 +676,28 @@ def init_model_config(file_name, num_qubits):
         """Create an array with the same value repeated."""
         return [value] * length
 
-    # Initialize the configuration structure
+    # Initialize the configuration structure with circuit parameters
     auto_cfg = {
         "nqubits": num_qubits,
-        "Ec": init_array(None),
-        "Ej": init_array(None),
-        "Delta": init_array(None),
-        "Sum": init_array(None),
-        "alpha": init_array(None),
-        "T1_purcell": init_array(None),
-        "g_lamb": init_array(None),
-        "g_chi": init_array(None),
-        "g": init_array("chi"),
-        "kappa_low": init_array(None),
-        "ratio": init_array(None),
-        "ng": init_array(None),
-        "nreadout": init_array(None),
-        "Q1": init_array(None),
-        "T1_nopurcell": init_array(None),
-        "Tphi": init_array(None),
+        "Ec": init_array(None),             # Charging energy
+        "Ej": init_array(None),             # Josephson energy
+        "Delta": init_array(None),          # Asymmetry parameter
+        "Sum": init_array(None),            # Sum parameter
+        "alpha": init_array(None),          # Anharmonicity
+        "T1_purcell": init_array(None),     # Purcell-limited T1
+        "g_lamb": init_array(None),         # Coupling (Lamb shift)
+        "g_chi": init_array(None),          # Coupling (dispersive shift)
+        "g": init_array("chi"),             # Coupling type
+        "kappa_low": init_array(None),      # Low-power linewidth
+        "ratio": init_array(None),          # Ratio parameter
+        "ng": init_array(None),             # Gate charge
+        "nreadout": init_array(None),       # Readout photon number
+        "Q1": init_array(None),             # Quality factor
+        "T1_nopurcell": init_array(None),   # T1 without Purcell decay
+        "Tphi": init_array(None),           # Pure dephasing time
     }
 
+    # Statistical analysis parameters
     stats_cfg = {
         "t1_mean": init_array(None),
         "t1_max": init_array(None),
@@ -568,7 +719,7 @@ def init_model_config(file_name, num_qubits):
     }
     auto_cfg["stats"] = stats_cfg
 
-    # Convert to YAML and save
+    # Convert to YAML and save with "_model" suffix
     cfg_yaml = yaml.safe_dump(auto_cfg, default_flow_style=None)
     new_file_name = f"{file_name[0:-4]}_model.yml"
     with open(new_file_name, "w") as modified_file:
@@ -579,17 +730,23 @@ def init_model_config(file_name, num_qubits):
 
 def init_stark_section(file_name, num_qubits):
     """
-    Initializes a 'stark' section in a configuration file.
-
-    This function loads an existing configuration, adds a 'stark' section with
-    np.nan values for various parameters, and saves the updated configuration.
+    Add a Stark shift section to an existing configuration file.
+    
+    Adds parameters for characterizing AC Stark shifts from drive tones.
+    Useful for experiments measuring and compensating Stark effects.
 
     Args:
-        file_name (str): Path to the configuration file.
-        num_qubits (int): The number of qubits, used to determine the length of the parameter arrays.
+        file_name: Path to the configuration file
+        num_qubits: Number of qubits, determines array lengths
 
     Returns:
-        AttrDict: The updated configuration object.
+        AttrDict: The updated configuration object
+        
+    Note:
+        Parameters represent Stark shift coefficients:
+        - q, l, o: Quadratic, linear, offset terms
+        - qneg, lneg, oneg: Negative detuning versions
+        - f, fneg: Frequency shifts at positive/negative detuning
     """
     # Load the existing configuration
     cfg = load(file_name)
@@ -609,15 +766,25 @@ def init_stark_section(file_name, num_qubits):
 
 def add_pulse(file_name, pulse_name, pulse_type="gauss"):
     """
-    Add a new pulse to the configuration.
-    The new pulse will be added to the device/qubit/pulses section.
+    Add a new pulse definition to the configuration.
+    
+    Adds a pulse to device.qubit.pulses with appropriate default parameters
+    based on the pulse type. Useful for defining custom pulse sequences.
 
     Args:
-        file_name (str): Path to the configuration file.
-        pulse_name (str): Name of the new pulse to add.
+        file_name: Path to the configuration file
+        pulse_name: Name for the new pulse (e.g., "pi_half", "echo")
+        pulse_type: Type of pulse shape - "gauss", "const", or "flat_top" 
+                    (default: "gauss")
 
     Returns:
-        AttrDict: The updated configuration object.
+        AttrDict: The updated configuration object
+        
+    Note:
+        Default pulse parameters:
+        - gauss: gain=0.15, sigma=0.1, sigma_inc=4
+        - const: gain=0.15, length=1
+        - flat_top: gain=0.15, length=0.1, ramp_sigma=0.02, ramp_sigma_inc=4
     """
     cfg = load(file_name)
     num_qubits = len(cfg.device.qubit.T1)
@@ -626,28 +793,30 @@ def add_pulse(file_name, pulse_name, pulse_type="gauss"):
         """Create an array with the same value repeated."""
         return [value] * length
 
+    # Create pulse definition based on type
     if pulse_type=='gauss':
         new_pulse = {
-            "gain": init_array(0.15),
-            "sigma": init_array(0.1),
-            "sigma_inc": init_array(4),
+            "gain": init_array(0.15),           # Pulse amplitude
+            "sigma": init_array(0.1),           # Gaussian width (μs)
+            "sigma_inc": init_array(4),         # Pulse length in sigmas
             "type": init_array(pulse_type),
         }
     elif pulse_type=='const':
         new_pulse = {
-            "gain": init_array(0.15),
-            "length": init_array(1),
+            "gain": init_array(0.15),           # Pulse amplitude
+            "length": init_array(1),            # Pulse duration (μs)
             "type": init_array(pulse_type),
         }
     elif pulse_type=='flat_top':
         new_pulse = {
-            "gain": init_array(0.15),
-            "length": init_array(0.1),
-            "ramp_sigma": init_array(0.02),
-            "ramp_sigma_inc": init_array(4),
+            "gain": init_array(0.15),           # Pulse amplitude
+            "length": init_array(0.1),          # Flat top duration (μs)
+            "ramp_sigma": init_array(0.02),     # Ramp width (μs)
+            "ramp_sigma_inc": init_array(4),    # Ramp length in sigmas
             "type": init_array(pulse_type),
         }
 
+    # Add the new pulse to the configuration
     cfg.device.qubit.pulses[pulse_name] = new_pulse
 
     return save(cfg, file_name)
