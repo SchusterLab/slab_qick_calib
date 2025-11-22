@@ -1075,3 +1075,281 @@ def get_homophase(params):
     )
     flist = np.concatenate([flist_lin, flist, flist_linp])
     return flist
+
+class ResSpecFlux(QickExperiment2DSimple):
+    """
+    2D resonator spectroscopy: readout frequency (X) × DC bias (Y).
+
+    For each DC bias setpoint (set on the SoC DC output), run a 1D resonator
+    spectroscopic sweep (ResSpec) and stack the rows into a 2D map.
+
+    Params (merge with ResSpec defaults):
+      # Inner 1D (ResSpec) keys: span, expts, reps, gain, length, etc.
+      # Outer DC sweep:
+      - 'dc_start' (V): start of DC sweep
+      - 'dc_stop'  (V): end of DC sweep
+      - 'expts_dc' (# rows)
+      - 'bias_chan' (int): SoC DC channel index
+      - 'dc_settle' (s): time.sleep after setting bias (optional)
+      - 'dc_verify_print' (bool): print set/readback line per row (optional)
+    """
+
+    def __init__(
+        self,
+        cfg_dict,
+        prefix="",
+        progress=None,
+        qi=0,
+        go=True,
+        live_plot=False,
+        params={},
+        style="fine",
+        display=True,
+        check_params=True,
+    ):
+        # File prefix
+        if not prefix:
+            prefix = generate_filename('spec', qi, style=style, extra='flux')
+
+        super().__init__(cfg_dict=cfg_dict, prefix=prefix, progress=progress, qi=qi, live_plot=live_plot)
+
+        # ---- defaults for inner 1D (ResSpec) and outer DC sweep ----
+        inner_defaults = {
+            "qubit": [qi],
+            "length": self.cfg.device.readout.readout_length[qi],
+            "gain": self.cfg.device.readout.gain[qi],
+            "reps": self.reps,            # inherit your experiment's default
+            "final_delay": 5,
+            "pulse_e": False,
+            "pulse_f": False,
+        }
+        # pick a reasonable freq window around current resonator freq
+        if style == "coarse":
+            inner_defaults.update({"center": self.cfg.device.readout.frequency[qi], "span": 50, "expts": 1000})
+        elif style == "fine":
+            inner_defaults.update({"center": self.cfg.device.readout.frequency[qi], "span": 5, "expts": 220})
+        else:
+            inner_defaults.update({"center": self.cfg.device.readout.frequency[qi], "span": 15, "expts": 300})
+
+        dc_defaults = {
+            "dc_start": 0.0,
+            "dc_stop":  0.40,
+            "expts_dc":  41,
+            "bias_chan": 0,
+            "dc_settle": 0.0,
+            "dc_verify_print": False,
+        }
+
+        # Merge user params
+        p = {**inner_defaults, **dc_defaults, **params}
+
+        # calculate 'start' from 'center' for inner sweep
+        if "center" in p:
+            p["start"] = p["center"] - p["span"] / 2.0
+
+        # Build inner 1D experiment but don't run yet
+        self.expt = ResSpec(cfg_dict, qi=qi, go=False, style=style, params=p, check_params=check_params)
+
+        # keep outer config synced with inner
+        self.cfg.expt = {**self.expt.cfg.expt, **p}
+
+        # axis labels
+        self.xlabel = XLABEL
+        self.ylabel = "DC Bias (V)"
+
+        if go:
+            # no fitting in the sweep (you can call analyze later on a slice)
+            self.run(progress=progress, analyze=False, display=display, save=True)
+
+    def acquire(self, progress=False):
+        import time
+        try:
+            from tqdm import tqdm
+        except Exception:
+            tqdm = lambda x, disable=False: x  # fallback no-op
+
+        # Build DC vector
+        dcpts = np.linspace(self.cfg.expt.dc_start, self.cfg.expt.dc_stop, int(self.cfg.expt.expts_dc))
+
+        # Containers: we’ll append rows from the inner ResSpec.acquire()
+        data = {}
+        data["time"] = []
+        yvals = np.arange(len(dcpts))
+
+        # Instrument alias (SoC) used to set the bias
+        soc = self.im[self.cfg.aliases.soc]
+        chan = int(self.cfg.expt["bias_chan"])
+
+        for i in tqdm(yvals, disable=not progress):
+            dc_val = float(dcpts[i])
+
+            # 1) set DC bias
+            soc.rfb_set_bias(chan, dc_val)
+            if self.cfg.expt.get("dc_settle", 0) > 0:
+                time.sleep(self.cfg.expt.dc_settle)
+            rb = soc.rfb_get_bias(chan)
+            if self.cfg.expt.get("dc_verify_print", False):
+                print(f"[DC Bias] ch {chan}: set {dc_val:.6f} V, read {rb:.6f} V")
+
+            # 2) update inner expt’s cfg (record the dc in metadata)
+            self.expt.cfg.expt["dc"] = dc_val
+
+            # 3) run the inner 1D ResSpec and append rows
+            row = self.expt.acquire(progress=False)
+            for k, v in row.items():
+                if i == 0:
+                    data[k] = []
+                data[k].append(v)
+            data["time"].append(time.time())
+
+            # optional autosave from base if enabled elsewhere
+            if getattr(self, "save_interim", False):
+                super().save_data(data=data)
+
+        # y-axis bookkeeping: use physical DC values
+        data["ypts"] = dcpts
+        data["dc_pts"] = dcpts
+
+        # x-axis: take the first row’s frequency axis
+        data["xpts"] = data["xpts"][0]  # ResSpec writes 'xpts' already
+        if "freq" in data:                     
+            data["freq"] = data["freq"][0]     
+
+        # convert lists to numpy arrays
+        for k in list(data.keys()):
+            data[k] = np.array(data[k])
+        # stack 2D arrays properly for standard fields
+        # (most fields already come as arrays per-row from ResSpec)
+        self.data = data
+
+         # Automatically analyze after collecting all rows
+        if self.cfg.expt.get("auto_analyze", True):   # optional toggle
+            self.analyze(fit=True, hanger=True, verbose=False)
+
+        return data
+
+    def analyze(self, data=None, fit=True, hanger=True, prom=20, verbose=False, **kwargs):
+        """
+        Row-by-row fit of each frequency sweep vs DC bias.
+        Stores f0, Qi, Qe, kappa, r2, success flags, and a simple argmin fmin.
+        """
+        if data is None:
+            data = self.data
+
+        # frequency axis for the inner sweep (already MHz)
+        x = data["xpts"]
+        # use I/Q amplitude by default
+        Y = data["amps"]  # shape: (N_bias, N_freq)
+
+        # containers
+        N = len(data["ypts"])
+        f0     = np.full(N, np.nan)
+        Qi     = np.full(N, np.nan)
+        Qe     = np.full(N, np.nan)
+        kappa  = np.full(N, np.nan)
+        r2     = np.full(N, np.nan)
+        ok     = np.zeros(N, dtype=bool)
+        fmin   = np.full(N, np.nan)
+
+        # 1D helpers
+        fitfunc   = fitter.hangerS21func_sloped if hanger else fitter.lorfunc
+        do_fit    = fitter.fithanger            if hanger else fitter.fitlor
+
+        # fit each bias row
+        for j in range(N):
+            y = Y[j]
+            # avoid the first/last guard points if you used them
+            xs = x[1:-1]
+            ys = y[1:-1]
+
+            # simple estimate from minimum
+            try:
+                fmin[j] = xs[np.argmin(ys)]
+            except Exception:
+                fmin[j] = np.nan
+
+            if not fit:
+                continue
+
+            try:
+                if hanger:
+                    p, pcov, pinit = do_fit(xs, ys)
+                    f0[j], Qi[j], Qe[j], phi, scale, slope = p
+                    # linewidth (MHz)
+                    kappa[j] = f0[j] * (1.0/Qi[j] + 1.0/Qe[j]) * 1e-4
+                    r2[j] = fitter.get_r2(xs, ys, fitfunc, p)
+                    ok[j] = True
+                else:
+                    # Lorentzian: [A0, A1, f0, gamma]
+                    p = do_fit(xs, ys, fitparams=None)
+                    A0, A1, f0j, gam = p
+                    f0[j] = f0j
+                    # approximate kappa from width parameter if desired
+                    kappa[j] = gam
+                    r2[j] = fitter.get_r2(xs, ys, fitfunc, p)
+                    ok[j] = True
+            except Exception as e:
+                if verbose:
+                    print(f"[fit row {j}] failed: {e}")
+                ok[j] = False
+
+        # store results back into data
+        data["f0"]     = f0
+        data["Qi"]     = Qi
+        data["Qe"]     = Qe
+        data["kappa"]  = kappa
+        data["r2"]     = r2
+        data["fit_ok"] = ok
+        data["fmin"]   = fmin
+
+        self.data = data
+        return data
+
+
+    def display(self, data=None, fit=True, plot_both=False, ax=None, **kwargs):
+        """
+        Show 2D amplitude map (freq vs DC bias) and overlay fitted f0(bias) if available.
+        """
+
+        d = self.data if data is None else data
+
+        # Basic sanity for shapes
+        x = np.asarray(d["xpts"])           # freq axis, shape (Nx,)
+        y = np.asarray(d["ypts"])           # bias axis, shape (Ny,)
+        A = np.asarray(d["amps"])           # shape (Ny, Nx)
+
+        # Build figure/axes
+        created_fig = False
+        if ax is None:
+            fig, ax = plt.subplots(1, 1, figsize=(10, 7))
+            created_fig = True
+        ax.set_title(f"Resonator Spectroscopy vs DC Bias  (Q{self.cfg.expt.qubit[0]})")
+
+        # 2D colormap
+        pcm = ax.pcolormesh(x, y, A, shading="auto", cmap="viridis", rasterized=True)
+        cb = plt.colorbar(pcm, ax=ax, label="Amplitude (ADC units)")
+        ax.set_xlabel("Readout Frequency (MHz)")
+        ax.set_ylabel("DC Bias (V)")
+
+        # ---- Overlay fitted f0(bias) if present ----
+        if fit and ("f0" in d):
+            f0 = np.asarray(d["f0"])  # expected shape (Ny,)
+            # Optional boolean mask from analyze(); otherwise treat all as good
+            fit_ok = np.asarray(d.get("fit_ok", np.isfinite(f0)))
+            mask = np.isfinite(f0) & fit_ok
+
+            if np.any(mask):
+                ax.plot(f0[mask], y[mask], "r.-", lw=2, ms=5, zorder=5, label="Fitted $f_0$")
+                ax.legend()
+            else:
+                # Nothing valid to draw
+                pass
+
+        if created_fig:
+            plt.tight_layout()
+            plt.show()
+            # save through the base helper if you want auto pathing
+            try:
+                super().save_fig(fig)
+            except Exception:
+                pass
