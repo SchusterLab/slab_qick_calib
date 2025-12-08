@@ -259,7 +259,7 @@ class ResSpec(QickExperiment):
             # Coarse scan uses wide frequency range
             params_def["start"] = 6000
             params_def["expts"] = 5000
-            params_def["span"] = 500
+            params_def["span"] = 1000
         else:
             # Fine scan centers around current resonator frequency
             params_def["center"] = self.cfg.device.readout.frequency[qi]

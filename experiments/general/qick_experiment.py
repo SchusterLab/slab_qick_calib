@@ -806,7 +806,11 @@ class QickExperiment(Experiment):
         Returns:
             Array of parameter values
         """
+        
+        #print(prog.list_pulse_params("readout_pulse"))
+        #print(prog)
         if self.param["param_type"] == "pulse":
+            #print(prog.list_pulse_params(self.param["label"]))
             xpts = prog.get_pulse_param(
                 self.param["label"], self.param["param"], as_array=True
             )

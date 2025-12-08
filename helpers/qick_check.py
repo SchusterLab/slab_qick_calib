@@ -157,12 +157,15 @@ def check_resonances(cfg_dict):
 
     # Print results
     print("Configured resonator frequencies (MHz):")
-    for f in freq:
-        print(f)
+    # Print frequencies on one line with 4 significant digits
+    print(" ".join(f"{float(f):.7g}" for f in freq))
     print("Aliased resonator frequencies (MHz):")
-    for f in alt_freq:
-        print(f)
-
+    print(" ".join(f"{float(f):.7g}" for f in alt_freq))
+    print('Qubit frequencies (MHz):')
+    print(" ".join(f"{float(f):.7g}" for f in auto_cfg.device.qubit.f_ge))
+    print("Difference between mirror resonator and qubit frequencies (MHz):")
+    print(" ".join(f"{float(f):.7g}" for f in auto_cfg.device.qubit.f_ge- alt_freq))
+    
 
 def check_adc(cfg_dict):
     """

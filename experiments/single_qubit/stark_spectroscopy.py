@@ -214,7 +214,7 @@ class StarkSpec(QickExperiment2DSweep):
         params_def2 = {
             "rounds": self.rounds,
             "final_delay": 10,
-            "length": 5,
+            "length": 10,
             "stark_expts": 30,
             "df_stark": 0,
             "max_stark_gain": 1,
@@ -338,21 +338,30 @@ class StarkSpec(QickExperiment2DSweep):
         # fit frequency of resonance moving
         f = [self.data["fit_avgi"][i][2] for i in range(len(self.data["fit_avgi"]))]
         self.data['f'] = f
+        # Remove entries where f is NaN from f and corresponding stark_gain (and ypts)
+        f_arr = np.array(self.data["f"], dtype=float)
+        stark_arr = np.array(self.data["stark_gain"], dtype=float)
+
+        mask = ~np.isnan(f_arr)
+        if not np.all(mask):
+            f_arr = f_arr[mask]
+            stark_arr = stark_arr[mask]
 
         # Fit the data
-        try:
-            popt, pcov = curve_fit(quadratic, self.data["stark_gain"], f)
-            self.data["popt"] = popt
-            Delta = (
-                self.cfg.device.qubit.f_ge[self.cfg.expt.qubit[0]]
-                - self.cfg.device.readout.frequency[self.cfg.expt.qubit[0]]
-            )
-            ng2 = popt[0] / 2 * Delta
-            self.data["ng2"] = ng2
-            print(f"ng2: {ng2}") # This is n photons * g**2
+        # try:
+        popt, pcov = curve_fit(quadratic, stark_arr, f_arr)
+        self.data["popt"] = popt
+        # Delta = (
+        #     self.cfg.device.qubit.f_ge[self.cfg.expt.qubit[0]]
+        #     - self.cfg.device.readout.frequency[self.cfg.expt.qubit[0]]
+        # )
+        chi = self.cfg.device.readout.chi[self.cfg.expt.qubit[0]]
+        n = popt[0] / 2 * chi
+        self.data["n"] = n
+        print(f"n: {n}") # This is n photons/gain
             
-        except:
-            print('Fit failed')
+        # except:
+        #     print('Fit failed')
 
         # Store the fitted qubit frequency
         #        data["new_freq"] = data["best_fit"][2]
@@ -409,10 +418,9 @@ class StarkSpec(QickExperiment2DSweep):
         gain = self.cfg.device.readout.gain[self.cfg.expt.qubit[0]]
         plt.axvline(gain, color="k", linestyle="--", label="Readout gain")
         plt.legend()
-        self.data['df_readout']=self.cfg.device.qubit.f_ge[self.cfg.expt.qubit[0]] - quadratic(gain, *self.data["popt"])
+        #self.data['df_readout']=self.cfg.device.qubit.f_ge[self.cfg.expt.qubit[0]] - quadratic(gain, *self.data["popt"])
 
 
 # Define a quadratic function
-@staticmethod
 def quadratic(x, a, c):
     return a * x**2 + c

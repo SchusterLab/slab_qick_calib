@@ -40,6 +40,9 @@ def check_chi(cfg_dict, qi=0, span=7, offset=0.5, npts=301, plot=False, check_f=
     """
     auto_cfg = config.load(cfg_dict["cfg_file"])
     freq = auto_cfg["device"]["readout"]["frequency"][qi]
+    kappa = auto_cfg["device"]["readout"]["kappa"][qi]
+    t1 = auto_cfg["device"]["qubit"]["T1"][qi]
+    final_delay = t1*5
     start = freq - span/2 - offset
     center = start + span / 2 + offset/2
     chi = ResSpec(
@@ -50,7 +53,7 @@ def check_chi(cfg_dict, qi=0, span=7, offset=0.5, npts=301, plot=False, check_f=
             "center": center,
             "npts": npts,
             "rounds": 5,
-            "final_delay": 15,
+            "final_delay": final_delay,
             "pulse_e": True,
         },
         go=False,

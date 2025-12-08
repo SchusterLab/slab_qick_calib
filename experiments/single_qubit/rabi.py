@@ -402,7 +402,7 @@ class RabiExperiment(QickExperiment):
                         "var": "length",
                     },
                 ]
-                self.param["param"]="sigma"
+                self.param["param"]="total_length"
             else:
                 # For other pulse types, sweep length directly
                 x_sweep = [{"pts": len_pts, "var": "length"}]
