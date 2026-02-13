@@ -52,7 +52,7 @@ def check_chi(cfg_dict, qi=0, span=7, offset=0.5, npts=301, plot=False, check_f=
             "span": span,
             "center": center,
             "npts": npts,
-            "rounds": 5,
+            "rounds": 2,
             "final_delay": final_delay,
             "pulse_e": True,
         },

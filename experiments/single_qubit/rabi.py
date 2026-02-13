@@ -504,7 +504,8 @@ class RabiExperiment(QickExperiment):
         if self.cfg.expt.sweep == "amp":
             title = "Amplitude"
             xlabel = "Gain / Max Gain"
-            param_name = "sigma" if self.cfg.expt.type == "gauss" else "length"
+            #param_name = "sigma" if self.cfg.expt.type == "gauss" else "length"
+            param_name = "sigma"
         else:
             title = "Length"
             xlabel = "Pulse Length ($\mu$s)"
