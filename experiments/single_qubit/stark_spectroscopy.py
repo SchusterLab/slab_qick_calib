@@ -75,7 +75,7 @@ class QubitStarkSpecProgram(QickProgram):
             "freq": cfg.expt.stark_freq,
             "gain": cfg.expt.stark_gain,
             "type": cfg.expt.pulse_type,
-            "sigma": cfg.expt.length,
+            "sigma": cfg.expt.stark_length,
             "phase": 0,
         }
         super().make_pulse(stark_pulse, "stark_pulse")
@@ -96,10 +96,12 @@ class QubitStarkSpecProgram(QickProgram):
         # Configure readout
         if self.adc_type == "dyn":
             self.send_readoutconfig(ch=self.adc_ch, name="readout", t=0)
-
-        # Apply qubit and Stark pulses simultaneously
-        self.pulse(ch=self.qubit_ch, name="qubit_pulse", t=0)
+        
         self.pulse(ch=self.res_ch, name="stark_pulse", t=0)
+        self.delay(t=cfg.expt.stark_length-cfg.expt.length)
+        # Apply qubit pulses 
+        self.pulse(ch=self.qubit_ch, name="qubit_pulse", t=0)
+        
 
         # Wait before measurement
         self.delay_auto(t=0.01, tag="wait")
@@ -215,6 +217,7 @@ class StarkSpec(QickExperiment2DSweep):
             "rounds": self.rounds,
             "final_delay": 10,
             "length": 5,
+            "stark_length":15,
             "stark_expts": 30,
             "df_stark": 0,
             "max_stark_gain": 1,
@@ -242,13 +245,6 @@ class StarkSpec(QickExperiment2DSweep):
             self.cfg.device.readout.frequency[qi] + params["df_stark"]
         )
 
-        # Adjust pulse length if needed
-        if params["length"] == "t1":
-            # Set pulse length to T1/4 if specified as "t1"
-            params["length"] = self.cfg.device.qubit.T1[qi] / 4
-        if params["length"] > max_length:
-            # Limit pulse length to maximum allowed
-            params["length"] = max_length
 
         # Set experiment configuration
         self.cfg.expt = params
@@ -347,9 +343,11 @@ class StarkSpec(QickExperiment2DSweep):
                 self.cfg.device.qubit.f_ge[self.cfg.expt.qubit[0]]
                 - self.cfg.device.readout.frequency[self.cfg.expt.qubit[0]]
             )
-            ng2 = popt[0] / 2 * Delta
-            self.data["ng2"] = ng2
-            print(f"ng2: {ng2}") # This is n photons * g**2
+            chi = self.cfg.device.readout.chi[self.cfg.expt.qubit[0]]
+            n = popt[0] / 2 * chi
+            self.data["n"] = n
+            print(f"n: {n}") # This is n photons/gain
+            self.data['df_readout']=self.cfg.device.qubit.f_ge[self.cfg.expt.qubit[0]] - quadratic(gain = self.cfg.device.readout.gain[self.cfg.expt.qubit[0]], *self.data["popt"])
             
         except:
             print('Fit failed')
@@ -409,7 +407,7 @@ class StarkSpec(QickExperiment2DSweep):
         gain = self.cfg.device.readout.gain[self.cfg.expt.qubit[0]]
         plt.axvline(gain, color="k", linestyle="--", label="Readout gain")
         plt.legend()
-        self.data['df_readout']=self.cfg.device.qubit.f_ge[self.cfg.expt.qubit[0]] - quadratic(gain, *self.data["popt"])
+        
 
 
 # Define a quadratic function

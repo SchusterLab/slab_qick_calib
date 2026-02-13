@@ -12,7 +12,7 @@ from ..experiments.single_qubit.rabi import RabiExperiment
 colors = ["#0869c8", "#b51d14"]
 
 
-def check_chi(cfg_dict, qi=0, span=7, offset=0.5, npts=301, plot=False, check_f=False):
+def check_chi(cfg_dict, qi=0, span=7, df=-0.5, npts=301, plot=False, check_f=False):
     """
     Measures the chi shift of a qubit.
     This is done by measuring the resonator frequency with and without a pi pulse on the qubit.
@@ -40,8 +40,8 @@ def check_chi(cfg_dict, qi=0, span=7, offset=0.5, npts=301, plot=False, check_f=
     """
     auto_cfg = config.load(cfg_dict["cfg_file"])
     freq = auto_cfg["device"]["readout"]["frequency"][qi]
-    start = freq - span/2 - offset
-    center = start + span / 2 + offset/2
+    start = freq - span/2 + df
+    center = start + span / 2 + df/2
     chi = ResSpec(
         cfg_dict,
         qi=qi,
@@ -50,7 +50,7 @@ def check_chi(cfg_dict, qi=0, span=7, offset=0.5, npts=301, plot=False, check_f=
             "center": center,
             "npts": npts,
             "rounds": 5,
-            "final_delay": 15,
+            "final_delay": auto_cfg.device.qubit.T1[qi] *4,
             "pulse_e": True,
         },
         go=False,
@@ -66,7 +66,7 @@ def check_chi(cfg_dict, qi=0, span=7, offset=0.5, npts=301, plot=False, check_f=
                 "center": center,
                 "npts": npts,
                 "rounds": 5,
-                "final_delay": 15,
+                "final_delay": auto_cfg.device.qubit.T1[qi] *4,
                 "pulse_e": True,
                 "pulse_f": True,
             },

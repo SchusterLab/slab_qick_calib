@@ -584,6 +584,7 @@ class ResSpec(QickExperiment):
             fig.tight_layout()
             plt.show()
             super().save_fig(fig)
+            super().save_config()
         
     def update(self, freq=True, fast=False, verbose=True):
         """
@@ -668,12 +669,12 @@ class ResSpecPower(QickExperiment2DSimple):
 
         # Default parameters
         params_def = {
-            "reps": self.reps / 5000,  # Reduce repetitions for efficiency
+            "reps": self.reps / 3000,  # Reduce repetitions for efficiency
             "rng": 100,                # Dynamic range for logarithmic gain sweep
             "max_gain": self.cfg.device.qubit.max_gain, # Maximum gain used in log sweep
             "span": 15,                # Frequency span in MHz
             "expts": 300,              # Number of frequency points
-            "start_gain": 0.003,       # Minimum gain value for linear sweep
+            "start_gain": 0.3,       # Minimum gain value for linear sweep
             "step_gain": 0.05,         # Gain step for linear sweep
             "expts_gain": 20,          # Number of gain points
             "f_off": 4,                # Frequency offset from resonator frequency
@@ -1348,7 +1349,6 @@ class ResSpecFlux(QickExperiment2DSimple):
         if created_fig:
             plt.tight_layout()
             plt.show()
-            # save through the base helper if you want auto pathing
             try:
                 super().save_fig(fig)
             except Exception:

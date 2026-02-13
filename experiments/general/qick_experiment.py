@@ -373,6 +373,9 @@ class QickExperiment(Experiment):
         final_delay = self._get_final_delay()
         #print(f"Final delay: {final_delay}")
 
+        # global flag in config about if qick box 
+        # Set attenuators and filters 
+
         # Create program instance
         kwargs = {'final_delay':final_delay, 'cfg':self.cfg}
         # if self.cfg.expt.active_reset: 
