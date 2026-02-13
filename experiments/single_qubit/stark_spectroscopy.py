@@ -334,6 +334,14 @@ class StarkSpec(QickExperiment2DSweep):
         # fit frequency of resonance moving
         f = [self.data["fit_avgi"][i][2] for i in range(len(self.data["fit_avgi"]))]
         self.data['f'] = f
+        # Remove entries where f is NaN from f and corresponding stark_gain (and ypts)
+        f_arr = np.array(self.data["f"], dtype=float)
+        stark_arr = np.array(self.data["stark_gain"], dtype=float)
+
+        mask = ~np.isnan(f_arr)
+        if not np.all(mask):
+            f_arr = f_arr[mask]
+            stark_arr = stark_arr[mask]
 
         # Fit the data
         try:
@@ -349,8 +357,8 @@ class StarkSpec(QickExperiment2DSweep):
             print(f"n: {n}") # This is n photons/gain
             self.data['df_readout']=self.cfg.device.qubit.f_ge[self.cfg.expt.qubit[0]] - quadratic(gain = self.cfg.device.readout.gain[self.cfg.expt.qubit[0]], *self.data["popt"])
             
-        except:
-            print('Fit failed')
+        # except:
+        #     print('Fit failed')
 
         # Store the fitted qubit frequency
         #        data["new_freq"] = data["best_fit"][2]
@@ -411,6 +419,5 @@ class StarkSpec(QickExperiment2DSweep):
 
 
 # Define a quadratic function
-@staticmethod
 def quadratic(x, a, c):
     return a * x**2 + c
