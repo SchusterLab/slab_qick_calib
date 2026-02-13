@@ -415,7 +415,7 @@ def init_config(file_name, num_qubits, type="full", t1=50, aliases="Qick001", ip
             {
                 "gain": init_array(0.15),      # Pulse amplitude
                 "sigma": init_array(0.1),      # Gaussian width (μs)
-                "sigma_inc": init_array(5),    # Pulse length in units of sigma
+                "sigma_inc": init_array(4),    # Pulse truncated after this number of sigma
                 "type": init_array("gauss"),   # Pulse shape
                 "phase": init_array(0),        # Pulse phase (degrees)
             }
@@ -490,6 +490,7 @@ def init_config(file_name, num_qubits, type="full", t1=50, aliases="Qick001", ip
         "adcs": {
             "readout": {
                 "ch": init_array(0),        # ADC channel numbers
+                "attn": init_array(0),      # ADC attenuation (from 0-30dB)
                 "type": init_array("dyn"),  # ADC type
             }
         },
@@ -497,11 +498,15 @@ def init_config(file_name, num_qubits, type="full", t1=50, aliases="Qick001", ip
             "qubit": {
                 "ch": init_array(1),         # DAC channel for qubit control
                 "nyquist": init_array(1),    # Nyquist zone (1 or 2)
+                "attn1": init_array(0),      # DAC attenuation (from 0-30dB)
+                "attn2": init_array(0),      # DAC attenuation (from 0-30dB)
                 "type": init_array("full"),  # DAC mode
             },
             "readout": {
                 "ch": init_array(0),         # DAC channel for readout
                 "nyquist": init_array(2),    # Nyquist zone (1 or 2)
+                "attn1": init_array(0),      # DAC attenuation (from 0-30dB)
+                "attn2": init_array(0),      # DAC attenuation (from 0-30dB)
                 "type": init_array(type),    # DAC mode
             },
         },
@@ -587,11 +592,13 @@ def init_config_res(file_name, num_qubits, type="full", aliases="Qick001"):
 
     # Hardware configuration
     soc = {
-        "adcs": {"readout": {"ch": init_array(0)}},  # ADC channels
+        "adcs": {"readout": {"ch": init_array(0), "attn": init_array(0)}},  # ADC channels and attenuation
         "dacs": {
             "readout": {
                 "ch": init_array(0),         # DAC channels
                 "nyquist": init_array(2),    # Nyquist zone
+                "attn1": init_array(0),      # DAC attenuation
+                "attn2": init_array(0),      # DAC attenuation 
                 "type": init_array(type),    # DAC mode
             },
         },
