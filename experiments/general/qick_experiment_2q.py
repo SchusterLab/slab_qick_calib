@@ -351,12 +351,7 @@ class QickExperiment2Q(Experiment):
 
         # Save figure if created in this method
         if save_fig:
-            imname = self.fname.split("\\")[-1]
-            fig.tight_layout()
-            fig.savefig(
-                self.fname[0 : -len(imname)] + "images\\" + imname[0:-3] + ".png"
-            )
-            plt.show()
+            self.save_fig(fig)
 
     def make_hist(self, prog):
         """

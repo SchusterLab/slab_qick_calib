@@ -1093,8 +1093,7 @@ class ResSpec2D(QickExperiment2DSimple):
         plt.show()
         
         # Save figure
-        imname = self.fname.split("\\")[-1]
-        fig.savefig(self.fname[0 : -len(imname)] + "images\\" + imname[0:-3] + ".png")
+        self.save_fig(fig)
 
 
 def get_homophase(params):

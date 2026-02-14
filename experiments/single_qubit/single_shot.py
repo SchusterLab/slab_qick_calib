@@ -661,15 +661,10 @@ class HistogramExperiment(QickExperiment):
                 print(f"Threshold gf: {thresholds[1]:.3f}")
                 print(f"Threshold ef: {thresholds[2]:.3f}")
 
-        # Extract image name for saving
-        imname = self.fname.split("\\")[-1]
-
         # Show and save figure if requested
         if savefig:
             plt.show()
-            fig.savefig(
-                self.fname[0 : -len(imname)] + "images\\" + imname[0:-3] + ".png"
-            )
+            self.save_fig(fig)
 
     def update(self, freq=True, fast=False, verbose=True):
         """

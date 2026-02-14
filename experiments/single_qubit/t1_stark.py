@@ -558,10 +558,7 @@ class T1StarkFreqExperiment(QickExperiment2DSimple):
                 data["xpts"], data["avgi"][i], linewidth=0.5
             )  # , label=f'Gain {data['stark_gain_pts'][i]}')
 
-        imname = self.fname.split("\\")[-1]
-        fig.savefig(
-            self.fname[0 : -len(imname)] + "images\\" + imname[0:-3] + "quad_fit.png"
-        )
+        self.save_fig(fig, suffix="quad_fit")
         plt.show()
 
 

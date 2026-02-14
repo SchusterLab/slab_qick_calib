@@ -65,6 +65,9 @@ def ham(cfg_path):
                    auto_cfg.device.readout.chi[i], alpha)
         config.update_config(model_name, None, 'g_chi', gX, index=i, verbose=False, sig=4)
 
+        #nreadout = auto_cfg.device.readout.gain[i]**2*auto_cfg.device.readout.nstark[i]
+        config.update_config(model_name, None, 'nreadout', nreadout, index=i, verbose=False, sig=2)
+
 def delta(cfg_path):
     """
     Calculate detuning parameters and related quantities for all qubits.
