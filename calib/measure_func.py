@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import scipy.constants as cs
 import seaborn as sns
+from pathlib import Path
 
 
 from ..helpers import config
@@ -100,7 +101,8 @@ def check_chi(cfg_dict, qi=0, span=7, df=-0.5, npts=301, plot=False, check_f=Fal
         xpts_chi = chi.data["xpts"]
         xpts_res = rspec.data["xpts"]
 
-    arg = np.argmin(np.abs(np.abs(chi.data["amps"])) - np.abs(rspec.data["amps"]))
+    arg = np.argmin(chi.data["amps"])
+    #arg = np.argmin(np.abs(np.abs(chi.data["amps"])) - np.abs(rspec.data["amps"]))
     arg2 = np.argmin(np.abs(rspec.data["amps"]))
     chi.data["rval"] = rspec.data["xpts"][arg2]
     chi.data["cval"] = chi.data["xpts"][arg]
@@ -151,8 +153,8 @@ def check_chi(cfg_dict, qi=0, span=7, df=-0.5, npts=301, plot=False, check_f=Fal
     ax[2].set_ylabel("Phase")
     plt.show()
 
-    imname = rspec.fname.split("\\")[-1]
-    fig.savefig(rspec.fname[0 : -len(imname)] + "images\\" + imname[0:-3] + "_chi.png")
+    file_path = Path(rspec.fname)
+    fig.savefig(file_path.parent / "images" / (file_path.stem + "_chi.png"))
     return (
         [chi, rspec],
         chi_val,
@@ -234,10 +236,8 @@ def measure_temp(cfg_dict, qi, temp=40, expts=20, chan=None):
         f"Qubit {qi} Temperature: {qubit_temp:0.2f} mK, Population: {population:0.2g}"
     )
 
-    imname = rabief.fname.split("\\")[-1]
-    fig.savefig(
-        rabief.fname[0 : -len(imname)] + "images\\" + imname[0:-3] + "_temp.png"
-    )
+    file_path = Path(rabief.fname)
+    fig.savefig(file_path.parent / "images" / (file_path.stem + "_temp.png"))
     plt.show()
 
     return qubit_temp, population
