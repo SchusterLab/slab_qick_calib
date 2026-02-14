@@ -812,6 +812,23 @@ class ResSpecPower(QickExperiment2DSimple):
             data['freq']= [fhi, flo]
             data['kappa']= [kappa_hi, kappa_lo]
 
+        # Phase correction: remove linear phase slope
+        phases_2d = data['phases']
+        freqs = data['xpts']
+
+        first_line_phase = phases_2d[-1, :]
+        unwrapped_first = np.unwrap(first_line_phase)
+        npts = min(25, len(freqs))
+        coeffs = np.polyfit(freqs[:npts], unwrapped_first[:npts], 1)
+        linear_fit = coeffs[0] * freqs + coeffs[1]
+
+        phases_corrected = np.zeros_like(phases_2d)
+        for i in range(phases_2d.shape[0]):
+            unwrapped_phase = np.unwrap(phases_2d[i, :])
+            phases_corrected[i, :] = np.unwrap(unwrapped_phase - linear_fit)
+
+        data['phases_corrected'] = phases_corrected
+
         return data
 
     def display(self, data=None, fit=True, **kwargs):
@@ -874,6 +891,49 @@ class ResSpecPower(QickExperiment2DSimple):
         
         # Save figure
         super().save_fig(fig)
+
+        # Phase plots
+        if 'phases_corrected' in data:
+            freqs = x_sweep
+            gains = y_sweep
+            phases_corrected = data['phases_corrected']
+
+            # 2D corrected phase heatmap
+            fig2, ax2 = plt.subplots(1, 1, figsize=(10, 8))
+            plt.pcolormesh(freqs, gains, phases_corrected, shading="auto", rasterized=True)
+            plt.xlabel(self.xlabel)
+            plt.ylabel(self.ylabel)
+            plt.colorbar(label='Phase (radians)')
+            if self.cfg.expt.get('log', False):
+                plt.yscale('log')
+            plt.title(f"Resonator Phase vs Power Q{qubit}")
+            ax2.tick_params(top=True, bottom=True, right=True)
+            plt.tight_layout()
+            plt.show()
+            super().save_fig(fig2, suffix='_phase')
+
+            # Individual phase lines with color gradient
+            fig3, ax3 = plt.subplots(1, 1, figsize=(10, 8))
+            colors = plt.cm.viridis(np.linspace(1, 0, phases_corrected.shape[0]))
+            for i in range(phases_corrected.shape[0] - 1, -1, -1):
+                plt.plot(freqs, phases_corrected[i, :], label=f'Gain={gains[i]:.4f}',
+                         color=colors[i], alpha=0.7)
+            plt.xlabel(self.xlabel)
+            plt.ylabel('Phase (radians)')
+            plt.grid(True, alpha=0.3)
+            if phases_corrected.shape[0] <= 20:
+                plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)
+            else:
+                sm = plt.cm.ScalarMappable(cmap=plt.cm.viridis,
+                                            norm=plt.Normalize(vmin=gains.min(), vmax=gains.max()))
+                sm.set_array([])
+                cbar = plt.colorbar(sm, ax=ax3)
+                cbar.set_label(self.ylabel)
+            plt.title(f"Phase Lines Q{qubit}")
+            ax3.tick_params(top=True, bottom=True, right=True)
+            plt.tight_layout()
+            plt.show()
+            super().save_fig(fig3, suffix='_phase_lines')
 
 class ResSpec2D(QickExperiment2DSimple):
     """
