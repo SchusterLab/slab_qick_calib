@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from scipy.optimize import curve_fit
 
 from qick import *
 
@@ -8,6 +9,11 @@ from ..general.qick_experiment import QickExperiment
 from ..general.qick_program import QickProgram
 
 from ..general.qick_experiment import QickExperiment2DSimple
+
+
+def exp_func(x, a, b, c):
+    """Exponential decay/rise: a * exp(-x * b) + c"""
+    return a * np.exp(-x * b) + c
 
 """
 Time of Flight (ToF) Calibration Module
@@ -178,6 +184,7 @@ class ToFCalibrationExperiment(QickExperiment):
         # Run the experiment if go is True
         if go:
             self.go(analyze=False, display=False, progress=True, save=True)
+            self.analyze(fit=self.cfg.expt.use_readout)
             self.display(adc_trig_offset=self.cfg.expt.trig_offset)
 
     def acquire(self, progress=False):
@@ -233,20 +240,50 @@ class ToFCalibrationExperiment(QickExperiment):
         """
         Analyze the acquired data.
 
-        This method is a placeholder for data analysis. In the current implementation,
-        it simply returns the data without performing any analysis.
+        When fit=True, performs a two-pass exponential fit to the amplitude data
+        to extract the resonator ring-up time constant.
 
         Args:
             data: Data to analyze (default: self.data)
-            fit: Whether to fit the data
+            fit: Whether to fit exponential to amplitude (resonator ring up)
             findpeaks: Whether to find peaks in the data
             **kwargs: Additional keyword arguments
 
         Returns:
-            The data dictionary
+            The data dictionary (with 'ring_up_fit' key added when fit=True)
         """
         if data is None:
             data = self.data
+
+        if not fit:
+            # Compute trig_offset: find half-max crossing point + 10 ns
+            half_max = np.max(data['amps']) / 2
+            crossing_idx = np.argmin(np.abs(data['amps'] - half_max))
+            data['trig_offset'] = data['xpts'][crossing_idx] + 0.01  # +10 ns in µs
+
+        if fit:
+            qi = self.cfg.expt.qubit[0]
+            kappa = self.cfg.device.readout.kappa[qi]
+            xdata = data['xpts']
+            t_min = self.cfg.device.readout.trig_offset[qi] + 0.06
+            max_time = t_min + 2 / kappa
+            mask = (xdata > t_min) & (xdata < max_time)
+            xdata = xdata - t_min
+            amps_masked = data['amps'][mask]
+
+            # Initial guesses: c=steady state, a=start-end (negative for ring-up), b~kappa
+            c0 = np.mean(amps_masked[-20:-1])
+            a0 = amps_masked[0] - c0
+            b0 = kappa * 3
+            p0 = [a0, b0, c0]
+
+            popt, pcov = curve_fit(exp_func, xdata[mask], amps_masked, p0=p0)
+            self.data['t_min'] = t_min
+            self.data['ring_up_fit'] = {'popt': popt, 'pcov': pcov, 'mask': mask}
+            self.data['ring_up_amplitude'] = popt[0]
+            self.data['ring_up_rate'] = popt[1]
+            self.data['ring_up_offset'] = popt[2]
+
         return data
 
     def display(self, data=None, adc_trig_offset=0, save_fig=True, **kwargs):
@@ -254,7 +291,8 @@ class ToFCalibrationExperiment(QickExperiment):
         Display the results of the ToF calibration.
 
         This method plots the I and Q values against time and marks the current
-        trigger offset with a vertical line.
+        trigger offset with a vertical line. If ring-up fit data is available,
+        an additional plot shows the exponential fit.
 
         Args:
             data: Data to display (default: self.data)
@@ -281,13 +319,39 @@ class ToFCalibrationExperiment(QickExperiment):
         plt.plot(data["xpts"], data["i"], label="I")
         plt.plot(data["xpts"], data["q"], label="Q")
         plt.plot(data["xpts"], data["amps"], label="Amplitude")
-        plt.axvline(adc_trig_offset, c="k", ls="--")
+        plt.axvline(adc_trig_offset, c="k", ls="--", label=f"Old trig_offset: {adc_trig_offset:.4f}")
+        if 'trig_offset' in data:
+            plt.axvline(data['trig_offset'], c="r", ls="--", label=f"New trig_offset: {data['trig_offset']:.4f}")
         plt.legend()
         plt.show()
 
         # Save figure if requested
         if save_fig:
             super().save_fig(fig)
+
+        # Display ring-up fit if available
+        if 'ring_up_fit' in self.data:
+            popt = self.data['ring_up_fit']['popt']
+            mask = self.data['ring_up_fit']['mask']
+            t_min = self.data['t_min']
+            rate = self.data['ring_up_rate']
+            xfit = self.data['xpts'][mask] - t_min
+            yfit = self.data['amps'][mask]
+
+            kappa = self.cfg.device.readout.kappa[q_ind]
+            fit_label = f'Fit ($\\kappa_{{fit}}$ = {rate/2/np.pi:.2f} MHz, $\\kappa_{{fit}}/\\kappa/$ = {rate / kappa/np.pi/2:.2f})'
+
+            fig_ring, ax_ring = plt.subplots(1, 1, figsize=(8, 3))
+            ax_ring.plot(xfit, yfit, 'o', label='Data')
+            ax_ring.plot(xfit, exp_func(xfit, *popt), '-', label=fit_label)
+            ax_ring.set_xlabel('Time ($\\mu$s)')
+            ax_ring.set_ylabel('Amplitude')
+            ax_ring.legend()
+            ax_ring.set_title(f'Resonator ring up for Q{q_ind}')
+            plt.show()
+
+            if save_fig:
+                super().save_fig(fig_ring)
 
 
 class ToF2D(QickExperiment2DSimple):
