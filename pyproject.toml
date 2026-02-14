@@ -22,7 +22,6 @@ dependencies = [
     "tqdm",
     "h5py",
     "Pyro4",
-    "python-dateutil",
     "ipywidgets==7.7.2",
     "visdom",
 ]
@@ -35,12 +34,6 @@ classifiers = [
 [project.urls]
 "Homepage" = "https://github.com/SchusterLab/slab_qick_calib"
 "Bug Tracker" = "https://github.com/SchusterLab/slab_qick_calib/issues"
-
-[project.scripts]
-instrument-manager = "slab_qick_calib.exp_handling.instrumentmanager:main"
-
-[project.entry-points."console_scripts"]
-instrument-manager = "slab_qick_calib.exp_handling.instrumentmanager:main"
 
 [tool.setuptools]
 packages = ["slab_qick_calib", "slab_qick_calib.analysis", "slab_qick_calib.calib", "slab_qick_calib.exp_handling", "slab_qick_calib.experiments", "slab_qick_calib.experiments.general", "slab_qick_calib.experiments.single_qubit", "slab_qick_calib.experiments.two_qubit", "slab_qick_calib.helpers"]

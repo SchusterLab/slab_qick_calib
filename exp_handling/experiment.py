@@ -16,9 +16,8 @@ import yaml
 import numpy as np
 import traceback
 
-from .datamanagement import SlabFile, AttrDict
+from .datamanagement import SlabFile, AttrDict, get_next_filename
 from .instrumentmanager import InstrumentManager
-from .dataanalysis import get_next_filename
 
 
 class NpEncoder(json.JSONEncoder):
