@@ -559,7 +559,92 @@ def plot_sets(d, xvals, yvals, cols=4, nrep=10, fit_func=None, params=None):
     return fig, ax
 
 
-def add_losses(tt): 
+def plot_vs_temperature(tt, qubit_list=None, param_keys=None, use_mean=False):
+    """
+    Plot tracking data parameters as a function of mixing chamber temperature.
+
+    Parameters
+    ----------
+    tt : list
+        Tracking data for each qubit (from time_tracking or load_tracking)
+    qubit_list : list, optional
+        List of qubit indices to plot. Defaults to all qubits in tt.
+    param_keys : list, optional
+        List of parameter keys to plot. Defaults to common coherence parameters.
+    use_mean : bool, optional
+        Whether to normalize values by their mean.
+
+    Returns
+    -------
+    list of (fig, axes) tuples, one per qubit
+    """
+    if qubit_list is None:
+        qubit_list = list(range(len(tt)))
+    if param_keys is None:
+        param_keys = ["t1", "t2r", "t2", "f_ge", "fidelity", "kappa", "frequency", "pi_length", "tphi", "tsphi"]
+
+    parameter_config = get_parameter_config()
+    figs = []
+
+    for j, qi in enumerate(qubit_list):
+        if "mxc_temp" not in tt[j] or len(tt[j]["mxc_temp"]) == 0:
+            print(f"Warning: No mxc_temp data for qubit {qi}, skipping")
+            continue
+
+        temp = np.array(tt[j]["mxc_temp"])
+
+        # Filter to param_keys that exist in data
+        valid_keys = [k for k in param_keys if k in tt[j] and k in parameter_config]
+        if not valid_keys:
+            continue
+
+        nrows, ncols, sz = calculate_subplot_layout(len(valid_keys))
+        fig, axes = plt.subplots(nrows, ncols, figsize=sz)
+        fig.suptitle(f"Qubit {qi} vs MXC Temperature")
+        axes = np.atleast_1d(axes).flatten()
+
+        for i, param_key in enumerate(valid_keys):
+            config = parameter_config[param_key]
+            key = config["key"]
+            r2_key = config["r2_scan"]
+
+            # Outlier removal (same logic as plot_all)
+            if r2_key is not None and r2_key in tt[j]:
+                inds = tt[j][r2_key] > np.nanmean(np.array(tt[j][r2_key])) - 0.08
+                inds2 = np.abs(tt[j][key] - np.nanmean(tt[j][key])) < np.nanstd(tt[j][key]) * 4
+                inds = np.where(np.logical_and(inds, inds2))[0]
+            else:
+                inds = np.arange(len(tt[j][key]))
+
+            # Data normalization (same logic as plot_all)
+            if key in ["f_ge", "frequency"]:
+                y = 1e3 * (tt[j][key][inds] - np.nanmean(tt[j][key][inds]))
+            elif key in ["pi_length"] or use_mean:
+                y = tt[j][key][inds] / np.nanmean(tt[j][key][inds])
+            elif key in ["t2r_amp", "t1_amp"]:
+                y = np.abs(tt[j][key][inds])
+            elif key in ["fidelity"]:
+                y = np.log10(1 - tt[j][key][inds])
+            else:
+                y = tt[j][key][inds]
+
+            x = temp[inds]
+            # Remove NaNs in either x or y
+            valid = ~(np.isnan(x) | np.isnan(y))
+            axes[i].plot(x[valid], y[valid], ".", markersize=3)
+            axes[i].set_ylabel(config["label"])
+            axes[i].set_xlabel("MXC Temp (mK)")
+
+        for i in range(len(valid_keys), len(axes)):
+            axes[i].set_visible(False)
+
+        fig.tight_layout()
+        figs.append((fig, axes))
+
+    return figs
+
+
+def add_losses(tt):
     par_list = ['t1','t2r','t2','t2e', 'tphi', 'tsphi']
     for j in range(len(tt)):
         for par in par_list:
