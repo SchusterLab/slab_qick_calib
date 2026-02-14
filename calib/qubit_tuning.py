@@ -13,6 +13,7 @@ The module is designed to work with the QICK (Quantum Instrumentation Control Ki
 """
 
 from datetime import datetime
+from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -285,7 +286,7 @@ def make_summary_figure(cfg_dict, progs, qi):
 
     # Save figure
     datestr = datetime.now().strftime("%Y%m%d_%H%M")
-    fname = cfg_dict["expt_path"] + f"\\images\\summary\\qubit{qi}_measure_func_{datestr}.png"
+    fname = str(Path(cfg_dict["expt_path"]) / "images" / "summary" / f"qubit{qi}_measure_func_{datestr}.png")
     print(fname)
     fig.savefig(fname, dpi=150, bbox_inches="tight")
 

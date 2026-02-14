@@ -12,7 +12,7 @@ Taken from the slab repository
 Created on Sat Sep 03 14:50:09 2011
 @author: David Schuster
 """
-import os
+from pathlib import Path
 import socket
 import sys
 from optparse import OptionParser
@@ -295,7 +295,7 @@ class InstrumentManager(dict):
         
         # Construct filename
         if prefix:
-            fname = os.path.join(path, prefix)
+            fname = str(Path(path) / prefix)
         else:
             fname = path
             

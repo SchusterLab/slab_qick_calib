@@ -1,5 +1,5 @@
 import importlib, inspect
-import os, os.path
+from pathlib import Path
 import sys
 
 
@@ -22,31 +22,27 @@ def import_modules_from_files(module_path, f):
         del obj
 
 
-path = __path__[0]
+path = Path(__path__[0])
 thismodule = sys.modules[__name__]
 print(thismodule)
 print(path)
-files = os.listdir(path)
-files = [f for f in files if not f.endswith(".ini")]
+files = [f.name for f in path.iterdir() if not f.name.endswith(".ini")]
 module_path = __name__
-# module_path = os.path.join("slab_qick_calib", module_path)
 # Import general first so that it can be a superclass
-fpath = os.path.join(path, "general")
-subfiles = os.listdir(fpath)
-subfiles = [f for f in subfiles if not f.endswith(".ini")]
+fpath = path / "general"
+subfiles = [f.name for f in fpath.iterdir() if not f.name.endswith(".ini")]
 submodule_path = module_path + ".general"
 for subf in subfiles:
     import_modules_from_files(submodule_path, subf)
 
 for f in files:
-    fpath = os.path.join(path, f)
+    fpath = path / f
     print(fpath)
     if f[0] == "_" or f[0] == "." or f == "general":
         continue
-    if os.path.isdir(fpath):
-        subfiles = os.listdir(fpath)
-        subfiles = [f for f in subfiles if not f.endswith(".ini")]
-        submodule_path = module_path + "." + os.path.split(fpath)[-1]
+    if fpath.is_dir():
+        subfiles = [sf.name for sf in fpath.iterdir() if not sf.name.endswith(".ini")]
+        submodule_path = module_path + "." + fpath.name
         for subf in subfiles:
             import_modules_from_files(submodule_path, subf)
     else:

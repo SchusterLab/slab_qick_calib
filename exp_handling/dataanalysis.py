@@ -13,7 +13,7 @@ Created on Sat Jul 30 14:04:03 2011
 """
 
 import glob
-import os.path
+from pathlib import Path
 import time
 import dateutil
 import matplotlib
@@ -264,7 +264,7 @@ def save_script(expt_path, prefix):
     expt_path\date_prefix_number"""
     tag = date_tag(None)
     ii = next_path_index(expt_path, prefix)
-    fname = os.path.join(expt_path, "%s_%s_%03d.py" % (tag, prefix, ii))
+    fname = str(Path(expt_path) / ("%s_%s_%03d.py" % (tag, prefix, ii)))
     fw = open(fname, "w")
     fw.write(get_script())
     fw.close()
@@ -297,24 +297,23 @@ def load_nwa_file(filename):
 
 
 def load_nwa_dir(datapath):
-    fnames = glob.glob(os.path.join(datapath, "*.CSV"))
-    fnames.sort()
-    prefixes = [os.path.split(fname)[-1] for fname in fnames]
+    fnames = sorted(Path(datapath).glob("*.CSV"))
+    prefixes = [f.name for f in fnames]
+    fnames = [str(f) for f in fnames]
     data = [load_nwa_file(fname) for fname in fnames]
     return prefixes, data
 
 
 def load_nwa_list(datapath, header_list):
-    fnames = glob.glob(os.path.join(datapath, "*.CSV"))
+    fnames = sorted(Path(datapath).glob("*.CSV"))
     prefixes = []
     fnames2 = []
-    fnames.sort()
     for fname in fnames:
-        prefix = os.path.split(fname)[-1]
+        prefix = fname.name
         number = prefix.split("_")[0]
         if int(number) in header_list:
             prefixes.append(prefix)
-            fnames2.append(fname)
+            fnames2.append(str(fname))
     #            print 'filename', fname
     #    print 'filenames 2',fnames2
     data = [load_nwa_file(fname) for fname in fnames2]
@@ -328,11 +327,10 @@ def next_file_index(datapath, prefix, suffix=""):
     """Searches directories for files of the form *_prefix* and returns next number
     in the series"""
 
-    dirlist = glob.glob(os.path.join(datapath, prefix + "_*" + suffix))
-    dirlist.sort()
+    dirlist = sorted(Path(datapath).glob(prefix + "_*" + suffix))
     if len(dirlist) > 0:
         try:
-            ii = int(os.path.split(dirlist[-1])[-1].split("_")[-1][0:-3]) + 1
+            ii = int(dirlist[-1].name.split("_")[-1][0:-3]) + 1
         except:
             ii = 0
     else:
@@ -344,10 +342,9 @@ def current_file_index(datapath, prefix="", suffix=".h5"):
     """Searches directories for files of the form *_prefix* and returns current number
     in the series"""
 
-    dirlist = glob.glob(os.path.join(datapath, prefix + "_*" + suffix))
-    dirlist.sort()
+    dirlist = sorted(Path(datapath).glob(prefix + "_*" + suffix))
     try:
-        ii = int(os.path.split(dirlist[-1])[-1].split("_")[0])
+        ii = int(dirlist[-1].name.split("_")[0])
     except:
         ii = 0
     return ii
@@ -363,19 +360,17 @@ def date_tag(date_str=None):
 
 
 def next_path_index(expt_path, prefix="", suffix=".h5"):
-    dirlist = glob.glob(os.path.join(expt_path, "*" + prefix + "*[0-9][0-9][0-9]"))
-    if dirlist == []:
+    dirlist = sorted(Path(expt_path).glob("*" + prefix + "*[0-9][0-9][0-9]"))
+    if not dirlist:
         return 0
-    dirlist.sort()
-    return int(os.path.split(dirlist[-1])[-1].split("_")[-1]) + 1
+    return int(dirlist[-1].name.split("_")[-1]) + 1
 
 
 def current_path_index(expt_path, prefix=""):
-    dirlist = glob.glob(os.path.join(expt_path, "*" + prefix + "*[0-9][0-9][0-9]"))
-    if dirlist == []:
+    dirlist = sorted(Path(expt_path).glob("*" + prefix + "*[0-9][0-9][0-9]"))
+    if not dirlist:
         return 0
-    dirlist.sort()
-    return int(os.path.split(dirlist[-1])[-1].split("_")[-1])
+    return int(dirlist[-1].name.split("_")[-1])
 
 
 def get_next_filename(datapath, prefix, suffix=""):
@@ -395,17 +390,15 @@ def make_datapath(expt_path, prefix, date_str=None, new_file=False):
         ii = next_path_index(expt_path, prefix)
     else:
         ii = current_path_index(expt_path, prefix)
-    datapath = os.path.join(expt_path, "%s_%s_%03d" % (tag, prefix, ii))
-    os.mkdir(datapath)
-    if datapath[-1] != "\\":
-        datapath += "\\"
-    return datapath
+    datapath = Path(expt_path) / ("%s_%s_%03d" % (tag, prefix, ii))
+    datapath.mkdir()
+    return str(datapath)
 
 
 def current_datapath(expt_path, prefix, date_str=None):
     tag = date_tag(date_str)
     ii = next_path_index(expt_path, prefix) - 1
-    return os.path.join(expt_path, "%s_%s_%03d\\" % (tag, prefix, ii))
+    return str(Path(expt_path) / ("%s_%s_%03d" % (tag, prefix, ii)))
 
 
 def tic():

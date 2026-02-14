@@ -42,7 +42,7 @@ import h5py
 import inspect
 import datetime
 import json
-import os.path
+from pathlib import Path
 import copy
 
 
@@ -659,7 +659,7 @@ def load_array(f, array_name):
 
 
 def load_slabfile_data(fname, path="", group="/"):
-    fullname = os.path.join(path, fname)
+    fullname = str(Path(path) / fname)
     with SlabFile(fullname, "r") as f:
         data = f.get_group_data(group)
     return data

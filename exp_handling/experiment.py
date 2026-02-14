@@ -10,7 +10,7 @@ Taken from the slab repository
 
 __author__ = "David Schuster"
 
-import os.path
+from pathlib import Path
 import json
 import yaml
 import numpy as np
@@ -185,7 +185,7 @@ class Experiment:
         
         # Configure config file path
         if config_file is not None:
-            self.config_file = os.path.join(path, config_file)
+            self.config_file = str(Path(path) / config_file)
         else:
             self.config_file = None
 
@@ -195,13 +195,15 @@ class Experiment:
         else:
             self.im = im
 
-        # Set up data file name
+        # Set up data file name - save to 'data' subdirectory
+        data_path = Path(path) / "data"
+        data_path.mkdir(exist_ok=True)
         if fname is not None:
-            self.fname = os.path.join(path, fname)
+            self.fname = str(data_path / fname)
         else:
             # Auto-generate next available filename with .h5 extension
-            self.fname = os.path.join(
-                path, get_next_filename(path, prefix, suffix=".h5")
+            self.fname = str(
+                data_path / get_next_filename(str(data_path), prefix, suffix=".h5")
             )
             
         # Load configuration if specified
@@ -222,7 +224,7 @@ class Experiment:
         """
         # Default to prefix.json if no config file specified
         if self.config_file is None:
-            self.config_file = os.path.join(self.path, self.prefix + ".json")
+            self.config_file = str(Path(self.path) / (self.prefix + ".json"))
             
         try:
             # Handle different config file formats

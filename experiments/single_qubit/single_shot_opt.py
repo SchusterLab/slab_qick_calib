@@ -1,3 +1,4 @@
+from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 from qick import *
@@ -406,9 +407,8 @@ class SingleShotOptExperiment(QickExperiment):
                     return data[:, i[0], i[1]].reshape(-1)
 
         m = 0.5
-        imname = self.fname.split("\\")[-1]
-        folder = self.fname[0 : -len(imname)]
-        imname = imname[0:-3]
+        imname = Path(self.fname).stem
+        folder = Path(self.path)
 
         if ndims == 1:
             row, col = smart_ax(npts[0])
@@ -436,7 +436,7 @@ class SingleShotOptExperiment(QickExperiment):
                 )
 
                 ax[i].set_title(f"{labs[inds[0]]} {data[sweep_var[0]][i]:.2f}")
-            fig.savefig(folder + "images\\" + f"{imname}_raw.png")
+            fig.savefig(folder / "images" / f"{imname}_raw.png")
 
         elif ndims == 2:
             fig, ax = plt.subplots(npts[0], npts[1], figsize=(npts[1] * 3, npts[0] * 3))
@@ -470,7 +470,7 @@ class SingleShotOptExperiment(QickExperiment):
             plt.figtext(
                 0.0, 0.5, labs[inds[0]], verticalalignment="center", rotation="vertical"
             )
-            fig.savefig(folder + "images\\" + f"{imname}_raw.png")
+            fig.savefig(folder / "images" / f"{imname}_raw.png")
         else:
             for k in range(npts[2]):
                 fig, ax = plt.subplots(
@@ -512,7 +512,7 @@ class SingleShotOptExperiment(QickExperiment):
                 )
 
                 fig.tight_layout()
-                fig.savefig(folder + "images\\" + f"{imname}_raw_{k}.png")
+                fig.savefig(folder / "images" / f"{imname}_raw_{k}.png")
 
         title = f"Single Shot Optimization Q{self.cfg.expt.qubit[0]}"
 
@@ -545,7 +545,7 @@ class SingleShotOptExperiment(QickExperiment):
                     plt.xlabel(xlabel)
                     plt.ylabel(f"Fidelity [%]")
                     plt.legend(title=var1_label)
-                    fig.savefig(folder + "images\\" + f"{imname}_{v2_ind}.png")
+                    fig.savefig(folder / "images" / f"{imname}_{v2_ind}.png")
                     plt.show()
             else:
                 # 1D/2D scan: single plot with all combinations
@@ -568,7 +568,7 @@ class SingleShotOptExperiment(QickExperiment):
                 plt.xlabel(xlabel)
                 plt.ylabel(f"Fidelity [%]")
                 plt.legend(title=leg_title)
-                fig.savefig(folder + "images\\" + imname + ".png")
+                fig.savefig(folder / "images" / (imname + ".png"))
                 plt.show()
 
         elif len(gainpts) > 1:
@@ -598,7 +598,7 @@ class SingleShotOptExperiment(QickExperiment):
                     plt.xlabel(xlabel)
                     plt.ylabel(f"Fidelity [%]")
                     plt.legend(title=var1_label)
-                    fig.savefig(folder + "images\\" + f"{imname}_{v2_ind}.png")
+                    fig.savefig(folder / "images" / f"{imname}_{v2_ind}.png")
                     plt.show()
             else:
                 # 1D/2D scan: single plot with all combinations
@@ -621,7 +621,7 @@ class SingleShotOptExperiment(QickExperiment):
                 plt.xlabel(xlabel)
                 plt.ylabel(f"Fidelity [%]")
                 plt.legend(title=leg_title)
-                fig.savefig(folder + "images\\" + imname + ".png")
+                fig.savefig(folder / "images" / (imname + ".png"))
                 plt.show()
 
         else:
@@ -651,7 +651,7 @@ class SingleShotOptExperiment(QickExperiment):
                     plt.xlabel(xlabel)
                     plt.ylabel(f"Fidelity [%]")
                     plt.legend(title=var1_label)
-                    fig.savefig(folder + "images\\" + f"{imname}_{v2_ind}.png")
+                    fig.savefig(folder / "images" / f"{imname}_{v2_ind}.png")
                     plt.show()
             else:
                 # 1D/2D scan: single plot with all combinations
@@ -674,7 +674,7 @@ class SingleShotOptExperiment(QickExperiment):
                 plt.xlabel(xlabel)
                 plt.ylabel(f"Fidelity [%]")
                 plt.legend(title=leg_title)
-                fig.savefig(folder + "images\\" + imname + ".png")
+                fig.savefig(folder / "images" / (imname + ".png"))
                 plt.show()
 
         if plot_pars:

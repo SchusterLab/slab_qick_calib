@@ -1,7 +1,7 @@
-import os
 import time
 from copy import deepcopy
 from datetime import datetime
+from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -334,7 +334,7 @@ def measure_setup(qi, cfg_dict):
 
 
 def measure_fast(qi, cfg_dict, i, tdir, t1_val, t2_val, display=False,t2_type='T2r'):
-    fname = os.path.join(tdir, f"t1_qubit{qi}_{i:05d}")
+    fname = str(Path(tdir) / f"t1_qubit{qi}_{i:05d}")
     t1 = meas.T1Experiment(
         cfg_dict,
         qi=qi,
@@ -345,7 +345,7 @@ def measure_fast(qi, cfg_dict, i, tdir, t1_val, t2_val, display=False,t2_type='T
         params={"span": 3.7 * t1_val},
     )
 
-    fname = os.path.join(tdir, f"{t2_type}_qubit{qi}_{i:05d}")
+    fname = str(Path(tdir) / f"{t2_type}_qubit{qi}_{i:05d}")
     if t2_type=='T2r':
         params = {"span": 3.2 * t2_val, 'experiment_type': 'ramsey'}
     else:
@@ -370,14 +370,14 @@ def measure_fast2(qi, cfg_dict, i, t2e=None, t1=None, t1_val=30, t2_val=30):
             cfg_dict, qi=qi, display=False, progress=False, style="fast"
         )
     else:
-        t1.fname = os.path.join(t1.fname.split("\\")[0:-1], f"t1_qubit{qi}_{i:%5d}")
+        t1.fname = str(Path(t1.fname).parent / f"t1_qubit{qi}_{i:%5d}")
         t1.span = 3.7 * t1_val
 
     if t2e is None:
         t2e = meas.T2Experiment(
             cfg_dict, qi=qi, display=False, progress=False, style="fast", params={'experiment_type':'echo'}
         )
-        t2e.fname = os.path.join(t2e.fname.split("\\")[0:-1], f"t2_qubit{qi}_{i:%5d}")
+        t2e.fname = str(Path(t2e.fname).parent / f"t2_qubit{qi}_{i:%5d}")
     t2e.span = 3 * t2_val
 
     return t1, t2e
@@ -409,13 +409,14 @@ def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True)
         path where the data is saved
     """
     # Create directory for tracking data
-    base_path = "\\".join(cfg_dict["expt_path"].split("\\")[:-2]) + "\\Tracking\\"
+    base_path = Path(cfg_dict["expt_path"]).parents[1] / "Tracking"
     tracking_id = f'{datetime.now().strftime("%Y_%m_%d_%H_%M")}_{total_time:.1f}hrs'
-    tracking_path = os.path.join(base_path, tracking_id)
-    os.makedirs(tracking_path, exist_ok=True)
-    os.mkdir(os.path.join(tracking_path, "images"))
+    tracking_path = base_path / tracking_id
+    tracking_path.mkdir(parents=True, exist_ok=True)
+    (tracking_path / "images").mkdir()
+    (tracking_path / "data").mkdir()
     cfg_dict = deepcopy(cfg_dict)  # Avoid modifying original cfg_dict
-    cfg_dict["expt_path"] = tracking_path
+    cfg_dict["expt_path"] = str(tracking_path)
 
     # Initialize timing variables
     start_time = time.time()
@@ -471,11 +472,9 @@ def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True)
 
         # Save tracking data to CSV files
         for j, qi in enumerate(qubit_list):
-            csv_dir = os.path.join(base_path, "csv")
-            os.makedirs(csv_dir, exist_ok=True)
-            csv_path = os.path.join(
-                csv_dir, f"{tracking_id}_qubit_{qi}_tracking.csv"
-            )
+            csv_dir = base_path / "csv"
+            csv_dir.mkdir(exist_ok=True)
+            csv_path = str(csv_dir / f"{tracking_id}_qubit_{qi}_tracking.csv")
 
             # Convert tracking data dict to numpy arrays for saving
             data_arrays = {}

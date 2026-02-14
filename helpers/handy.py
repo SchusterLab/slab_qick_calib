@@ -1,4 +1,5 @@
 from datetime import datetime
+from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
@@ -23,7 +24,7 @@ def plot_many(d,title='', save_path=None, chan='avgi',yax=None, norm=False, horz
     fig.tight_layout()
     if save_path is not None:
         current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
-        fname = save_path +'images\\summary\\'+ title + "_" + current_time + ".png"
+        fname = str(Path(save_path) / "images" / "summary" / (title + "_" + current_time + ".png"))
         plt.savefig(fname)
 
 def plot_many_limited(d,row:int = 1,title='',save = True, save_path=None, chan='avgi',yax=None, norm=False, horz_line=None, individial_fig_size = (4,4), title_list = None, xlabel = None, sensitivity = 0.1):
@@ -67,7 +68,7 @@ def plot_many_limited(d,row:int = 1,title='',save = True, save_path=None, chan='
     fig.colorbar(pcm, ax=ax, orientation='vertical', fraction=0.02, pad=0.04)  # Add a shared colorbar
     if save_path is not None:
         current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
-        fname = save_path +'images\\summary\\'+ title + "_" + current_time + ".png"
+        fname = str(Path(save_path) / "images" / "summary" / (title + "_" + current_time + ".png"))
         if save:
             plt.savefig(fname)
 
