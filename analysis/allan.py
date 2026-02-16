@@ -5,7 +5,8 @@ import os
 import seaborn as sns
 from datetime import datetime
 from scipy.optimize import curve_fit
-from .collections import get_parameter_config
+from pathlib import Path
+from .collections import get_parameter_config, _get_tracking_base
 
 
 
@@ -148,7 +149,7 @@ def calculate_overlapping_allan_variance(data, tau_values):
     return allan_var
 
 
-def perform_analysis(tt,fname='def', param='t1', qubit_list=None):
+def perform_analysis(tt,fname='def', param='t1', qubit_list=None, save_path=None, tracking_id=None):
 
     if qubit_list is None:
         qubit_list = range(len(tt))
@@ -297,12 +298,32 @@ def perform_analysis(tt,fname='def', param='t1', qubit_list=None):
     axes[1].set_ylabel("Normalized Overlapping Allan Deviation")
     axes[1].legend(fontsize=8)
     plt.tight_layout()
-    
+    if save_path is not None:
+        # Save to Tracking/images/ with tracking_id in filename
+        tracking_base = _get_tracking_base(save_path)
+        images_dir = tracking_base / "images"
+        images_dir.mkdir(parents=True, exist_ok=True)
+        prefix = f"{tracking_id}_" if tracking_id else ""
+        save_file = images_dir / f"{prefix}allan_variance_{param}_{fname}.png"
+        plt.savefig(save_file, dpi=300)
+
     par_mean = np.array(par_mean)
     par_std = np.array(par_std)
     fig, axes = plt.subplots(1, 2, figsize=(12, 4))
     axes[0].errorbar(range(len(par_mean)), par_mean, yerr=par_std, fmt='o')
+    axes[0].set_xlabel("Qubit")
+    axes[0].set_ylabel(f"Mean {param_label}")
     axes[1].plot(par_mean, par_std/par_mean, 'o')
-        #plt.savefig(f"images/t1_allan_variance_analysis_{fname}'_qubit{qi}.png", dpi=300)
+    axes[1].set_xlabel(f"Mean {param_label}")
+    axes[1].set_ylabel("Coefficient of Variation")
+    plt.tight_layout()
+    if save_path is not None:
+        # Save to Tracking/images/ with tracking_id in filename
+        tracking_base = _get_tracking_base(save_path)
+        images_dir = tracking_base / "images"
+        images_dir.mkdir(parents=True, exist_ok=True)
+        prefix = f"{tracking_id}_" if tracking_id else ""
+        save_file = images_dir / f"{prefix}allan_stats_{param}_{fname}.png"
+        fig.savefig(save_file, dpi=300)
     plt.show()
 

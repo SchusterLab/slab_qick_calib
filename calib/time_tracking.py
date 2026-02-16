@@ -413,7 +413,7 @@ def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True,
     tracking_id = f'{datetime.now().strftime("%Y_%m_%d_%H_%M")}_{total_time:.1f}hrs'
     tracking_path = base_path / tracking_id
     tracking_path.mkdir(parents=True, exist_ok=True)
-    (tracking_path / "images").mkdir()
+    (base_path / "images").mkdir(exist_ok=True)
     (tracking_path / "data").mkdir()
     cfg_dict = deepcopy(cfg_dict)  # Avoid modifying original cfg_dict
     cfg_dict["expt_path"] = str(tracking_path)
@@ -425,13 +425,18 @@ def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True,
 
     # Run measurements until total_time is reached
     while elapsed < total_time:
-        # Read MXC temperature at start of each iteration
+        # Read MXC temperature and pulsetube status at start of each iteration
         mxc_temp = np.nan
+        pulsetube_on = np.nan
         if bf_client is not None:
             try:
                 mxc_temp = bf_client.get_mxc_temperature()
             except Exception as e:
                 print(f"Warning: failed to read MXC temperature: {e}")
+            try:
+                pulsetube_on = float(bf_client.is_pulsetube_on())
+            except Exception as e:
+                print(f"Warning: failed to read pulsetube status: {e}")
 
         for j, qi in enumerate(qubit_list):
             # Measure current time
@@ -466,6 +471,7 @@ def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True,
             d["elapsed"] = elapsed
             if bf_client is not None:
                 d["mxc_temp"] = mxc_temp
+                d["pulsetube_on"] = pulsetube_on
 
             # Store data for this iteration
             if i == 0 and j == 0:
@@ -496,12 +502,12 @@ def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True,
             rows = np.vstack(list(data_arrays.values())).T
             # Future change to only add a new row 
             # Save to CSV
-            np.savetxt(csv_path, rows, delimiter=",", header=header, comments="", fmt="%.4f")
+            np.savetxt(csv_path, rows, delimiter=",", header=header, comments="", fmt="%.5f")
 
-    
+
     tt_stats = calc_stats(tracking_data)
 
-    return tracking_data, tracking_path, tt_stats
+    return tracking_data, tracking_path, tt_stats, tracking_id
 
 
 def load_tracking(csv_dir, tracking_id=None, qubit_list=None):
@@ -560,8 +566,13 @@ def load_tracking(csv_dir, tracking_id=None, qubit_list=None):
         tracking_data.append(qubit_dict)
 
     tt_stats = calc_stats(tracking_data)
+
+    # Ensure images directory exists in Tracking folder
+    tracking_base = csv_dir.parent  # csv_dir is Tracking/csv, so parent is Tracking
+    (tracking_base / "images").mkdir(exist_ok=True)
+
     print(f"Loaded tracking_id='{tracking_id}', qubits={qubit_list}")
-    return tracking_data, str(csv_dir), tt_stats
+    return tracking_data, str(csv_dir), tt_stats, tracking_id
 
 
 def calc_stats(tracking_data):

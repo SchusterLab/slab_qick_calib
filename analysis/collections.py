@@ -11,6 +11,35 @@ import os
 from pathlib import Path
 
 
+def _get_tracking_base(path):
+    """
+    Find the Tracking base directory from any path.
+
+    Parameters
+    ----------
+    path : str or Path
+        Any path within the tracking structure (e.g., csv dir, tracking_id dir, or Tracking dir)
+
+    Returns
+    -------
+    Path
+        Path to the Tracking base directory
+    """
+    path = Path(path)
+
+    # If path ends with 'csv', parent is Tracking
+    if path.name == "csv":
+        return path.parent
+
+    # If path contains 'Tracking' in its parts, find it
+    for parent in [path] + list(path.parents):
+        if parent.name == "Tracking":
+            return parent
+
+    # If we can't find Tracking, assume path is already the base or use parent
+    return path if path.name == "Tracking" else path.parent
+
+
 def get_parameter_config():
     """
     Get the parameter configuration dictionary that maps parameter keys to their properties.
@@ -182,13 +211,13 @@ def process_data(tt, qubit_list=None):
     return tt, b
 
 
-def plot_all(tt, qubit_list=None, fname='def', param_keys=None, use_mean=False, nbins=40, plot_time=False):
+def plot_all(tt, qubit_list=None, fname='def', param_keys=None, use_mean=False, nbins=40, plot_time=False, save_path=None, tracking_id=None):
 
     if qubit_list is None:
         qubit_list = [i for i in range(len(tt))]
     if param_keys is None:
         param_keys = ["t1", "t2r", "t2", "f_ge", "fidelity", "kappa", "frequency", "pi_length", "tphi", "tsphi", "t2_r2"]
-    
+
     parameter_config = get_parameter_config()
     
     nrows, ncols, sz = calculate_subplot_layout(len(param_keys))
@@ -260,11 +289,33 @@ def plot_all(tt, qubit_list=None, fname='def', param_keys=None, use_mean=False, 
                     plt.MaxNLocator(5)
                 )  # Limit the number of ticks to avoid overcrowding
                 # ax[k].set_xticklabels(xval, rotation=45, ha='right')  # Rotate labels for better readability
-                # Plot data, set titles.
-                ax[i].plot(
-                    xval[inds], np.array(y), "o", linewidth=1
-                )  # , label=leg_list[k])
-                # ax[k].legend()
+
+                # Check if pulsetube_on data is available
+                if "pulsetube_on" in tt[j] and len(tt[j]["pulsetube_on"]) > 0:
+                    pulsetube = np.array(tt[j]["pulsetube_on"])[inds]
+                    x = xval[inds]
+
+                    # Separate data by pulse tube status
+                    # Pulse tube ON: pulsetube_on == 1.0
+                    pt_on_mask = (pulsetube == 1.0) & ~np.isnan(y)
+                    # Pulse tube OFF: pulsetube_on == 0.0 or NaN
+                    pt_off_mask = ((pulsetube == 0.0) | np.isnan(pulsetube)) & ~np.isnan(y)
+
+                    # Plot pulse tube ON points in default color
+                    if np.any(pt_on_mask):
+                        ax[i].plot(x[pt_on_mask], y[pt_on_mask], "o", linewidth=1, label="PT On")
+                    # Plot pulse tube OFF points in red
+                    if np.any(pt_off_mask):
+                        ax[i].plot(x[pt_off_mask], y[pt_off_mask], "o", linewidth=1, color='red', label="PT Off")
+
+                    # Add legend only if both states exist
+                    if np.any(pt_on_mask) and np.any(pt_off_mask):
+                        ax[i].legend(fontsize=8, loc='best')
+                else:
+                    # Fallback to original plotting if no pulsetube data
+                    ax[i].plot(
+                        xval[inds], np.array(y), "o", linewidth=1
+                    )
 
                 ax[i].set_ylabel(config["label"])
                 ax[i].set_xlabel("Time (hr)")
@@ -294,10 +345,24 @@ def plot_all(tt, qubit_list=None, fname='def', param_keys=None, use_mean=False, 
 
         if plot_time:
             fig.tight_layout()
-            #fig.savefig(os.path.join("images", f"{qi}_tracking_{fname}.png"))
+            if save_path is not None:
+                # Save to Tracking/images/ with tracking_id in filename
+                tracking_base = _get_tracking_base(save_path)
+                images_dir = tracking_base / "images"
+                images_dir.mkdir(parents=True, exist_ok=True)
+                prefix = f"{tracking_id}_" if tracking_id else ""
+                save_file = images_dir / f"{prefix}{qi}_tracking_{fname}.png"
+                fig.savefig(save_file)
 
         fig2.tight_layout()
-        #fig2.savefig(os.path.join("images", f"{qi}_histogram_{fname}.png"))
+        if save_path is not None:
+            # Save to Tracking/images/ with tracking_id in filename
+            tracking_base = _get_tracking_base(save_path)
+            images_dir = tracking_base / "images"
+            images_dir.mkdir(parents=True, exist_ok=True)
+            prefix = f"{tracking_id}_" if tracking_id else ""
+            save_file = images_dir / f"{prefix}{qi}_histogram_{fname}.png"
+            fig2.savefig(save_file)
 
 
 
@@ -513,16 +578,26 @@ def plot_violin(tt, qubit_list=None, fname='def', param_keys=None, use_mean=Fals
     
     fig.tight_layout()
 
-    # Save plots
-    #file_path = Path(filename)
+    # Save plots to Tracking/images/ with tracking_id in filename
+    import re
     qlist = [str(q) for q in qubit_list]
     qstr = ",".join(qlist)
     plist = ",".join(param_keys)
     pstr = plist.replace(" ", "")
     file_path = Path(csv_path)
 
-    new_filename = file_path.name.rsplit(".", 1)[0] + "_violin" + qstr + "_" + pstr + ".png"
-    fig.savefig(file_path.parent / "images" / new_filename)
+    # Extract tracking_id from CSV filename (e.g., "2026_02_09_14_30_12.0hrs_qubit_0_tracking.csv")
+    match = re.match(r"(.+)_qubit_\d+_tracking\.csv", file_path.name)
+    tracking_id = match.group(1) if match else ""
+
+    # Save to Tracking/images/
+    tracking_base = _get_tracking_base(csv_path)
+    images_dir = tracking_base / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+
+    prefix = f"{tracking_id}_" if tracking_id else ""
+    new_filename = f"{prefix}violin_q{qstr}_{pstr}.png"
+    fig.savefig(images_dir / new_filename)
 
     return fig, axes
 
@@ -559,7 +634,7 @@ def plot_sets(d, xvals, yvals, cols=4, nrep=10, fit_func=None, params=None):
     return fig, ax
 
 
-def plot_vs_temperature(tt, qubit_list=None, param_keys=None, use_mean=False):
+def plot_vs_temperature(tt, qubit_list=None, param_keys=None, use_mean=False, save_path=None, tracking_id=None):
     """
     Plot tracking data parameters as a function of mixing chamber temperature.
 
@@ -573,6 +648,10 @@ def plot_vs_temperature(tt, qubit_list=None, param_keys=None, use_mean=False):
         List of parameter keys to plot. Defaults to common coherence parameters.
     use_mean : bool, optional
         Whether to normalize values by their mean.
+    save_path : str or Path, optional
+        Path to save plots. If provided, saves to Tracking/images/.
+    tracking_id : str, optional
+        Tracking ID to include in filename.
 
     Returns
     -------
@@ -629,9 +708,32 @@ def plot_vs_temperature(tt, qubit_list=None, param_keys=None, use_mean=False):
                 y = tt[j][key][inds]
 
             x = temp[inds]
-            # Remove NaNs in either x or y
-            valid = ~(np.isnan(x) | np.isnan(y))
-            axes[i].plot(x[valid], y[valid], ".", markersize=3)
+
+            # Check if pulsetube_on data is available
+            if "pulsetube_on" in tt[j] and len(tt[j]["pulsetube_on"]) > 0:
+                pulsetube = np.array(tt[j]["pulsetube_on"])[inds]
+
+                # Separate data by pulse tube status
+                # Pulse tube ON: pulsetube_on == 1.0
+                pt_on_mask = (pulsetube == 1.0) & ~(np.isnan(x) | np.isnan(y))
+                # Pulse tube OFF: pulsetube_on == 0.0 or NaN
+                pt_off_mask = ((pulsetube == 0.0) | np.isnan(pulsetube)) & ~(np.isnan(x) | np.isnan(y))
+
+                # Plot pulse tube ON points in default color
+                if np.any(pt_on_mask):
+                    axes[i].plot(x[pt_on_mask], y[pt_on_mask], ".", markersize=3, label="PT On")
+                # Plot pulse tube OFF points in red
+                if np.any(pt_off_mask):
+                    axes[i].plot(x[pt_off_mask], y[pt_off_mask], ".", markersize=3, color='red', label="PT Off")
+
+                # Add legend only if both states exist
+                if np.any(pt_on_mask) and np.any(pt_off_mask):
+                    axes[i].legend(fontsize=8, loc='best')
+            else:
+                # Fallback to original plotting if no pulsetube data
+                valid = ~(np.isnan(x) | np.isnan(y))
+                axes[i].plot(x[valid], y[valid], ".", markersize=3)
+
             axes[i].set_ylabel(config["label"])
             axes[i].set_xlabel("MXC Temp (mK)")
 
@@ -639,6 +741,14 @@ def plot_vs_temperature(tt, qubit_list=None, param_keys=None, use_mean=False):
             axes[i].set_visible(False)
 
         fig.tight_layout()
+        if save_path is not None:
+            # Save to Tracking/images/ with tracking_id in filename
+            tracking_base = _get_tracking_base(save_path)
+            images_dir = tracking_base / "images"
+            images_dir.mkdir(parents=True, exist_ok=True)
+            prefix = f"{tracking_id}_" if tracking_id else ""
+            save_file = images_dir / f"{prefix}{qi}_vs_temperature.png"
+            fig.savefig(save_file)
         figs.append((fig, axes))
 
     return figs
