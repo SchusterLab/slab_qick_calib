@@ -5,6 +5,7 @@ from scipy.optimize import curve_fit
 from qick import *
 
 from ...exp_handling.datamanagement import AttrDict
+from ...helpers import config
 from ..general.qick_experiment import QickExperiment
 from ..general.qick_program import QickProgram
 
@@ -259,7 +260,7 @@ class ToFCalibrationExperiment(QickExperiment):
             # Compute trig_offset: find half-max crossing point + 10 ns
             half_max = np.max(data['amps']) / 2
             crossing_idx = np.argmin(np.abs(data['amps'] - half_max))
-            data['trig_offset'] = data['xpts'][crossing_idx] + 0.01  # +10 ns in µs
+            data['trig_offset'] = data['xpts'][crossing_idx] + 0.02  # +20 ns in µs
 
         if fit:
             qi = self.cfg.expt.qubit[0]
@@ -319,9 +320,9 @@ class ToFCalibrationExperiment(QickExperiment):
         plt.plot(data["xpts"], data["i"], label="I")
         plt.plot(data["xpts"], data["q"], label="Q")
         plt.plot(data["xpts"], data["amps"], label="Amplitude")
-        plt.axvline(adc_trig_offset, c="k", ls="--", label=f"Old trig_offset: {adc_trig_offset:.4f}")
+        #plt.axvline(adc_trig_offset, c="k", ls="--", label=f"Old trig_offset: {adc_trig_offset:.4f}")
         if 'trig_offset' in data:
-            plt.axvline(data['trig_offset'], c="r", ls="--", label=f"New trig_offset: {data['trig_offset']:.4f}")
+            plt.axvline(data['trig_offset'], c="k", ls="--", label=f"New trig_offset: {data['trig_offset']:.4f}")
         plt.legend()
         plt.show()
 
@@ -351,7 +352,14 @@ class ToFCalibrationExperiment(QickExperiment):
             plt.show()
 
             if save_fig:
-                super().save_fig(fig_ring)
+                super().save_fig(fig_ring, suffix="_ringup_fit")
+
+
+    def update(self, verbose=True):
+        qi = self.cfg.expt.qubit[0]
+        cfg_file = self.config_file
+        if 'trig_offset' in self.data:
+            config.update_readout(cfg_file, 'trig_offset', self.data['trig_offset'], qi, verbose=verbose)
 
 
 class ToF2D(QickExperiment2DSimple):
