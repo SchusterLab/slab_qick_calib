@@ -25,6 +25,7 @@ from ..general.qick_experiment import QickExperiment, QickExperiment2DSimple
 from ..general.qick_program import QickProgram
 
 from ...analysis import fitting as fitter
+from .resonator_spectroscopy import ResSpec
 FIT_FUNC = fitter.lorfunc
 FITTER_FUNC = fitter.fitlor
 XLABEL = "Qubit Frequency (MHz)"
@@ -652,6 +653,7 @@ class QubitSpecFlux(QickExperiment2DSimple):
         ef = "ef_" if params.get("checkEF", False) else ""
         prefix = f"qubit_spectroscopy_flux_{ef}{style}_qubit{qi}" if not prefix else prefix
         super().__init__(cfg_dict=cfg_dict, prefix=prefix, progress=progress, qi=qi, live_plot=live_plot)
+        self.cfg_dict = cfg_dict
 
         # ---- style presets for the X (frequency) axis ----
         if style == "coarse":
@@ -682,6 +684,9 @@ class QubitSpecFlux(QickExperiment2DSimple):
             "bias_chan": 0,
             "dc_settle": 0.0,
             "dc_verify_print": False,
+            "recenter_res": False,        # run ResSpec at each bias to recenter readout
+            "recenter_res_span": 5,       # MHz span for the ResSpec sweep
+            "recenter_res_expts": 100,    # number of points for ResSpec
         }
 
         # Merge defaults
@@ -772,17 +777,46 @@ class QubitSpecFlux(QickExperiment2DSimple):
             if self.cfg.expt.get("dc_verify_print", False):
                 print(f"[DC Bias] ch {chan}: set {dc_val:.6f} V, read {readback:.6f} V")
 
+            # Recenter readout by running a quick ResSpec at this bias
+            q = self.expt.cfg.expt["qubit"][0]
+            if self.cfg.expt.get("recenter_res", False):
+                res_params = {
+                    "center": self.cfg.device.readout.frequency[q],
+                    "span": self.cfg.expt.get("recenter_res_span", 5),
+                    "expts": self.cfg.expt.get("recenter_res_expts", 100),
+                    "qubit": [q],
+                    "qubit_chan": self.cfg.expt["qubit_chan"],
+                }
+                res = ResSpec(self.cfg_dict, qi=q, go=False, params=res_params, check_params=False)
+                res.acquire(progress=False)
+                res.analyze(fit=True, hanger=True)
+                if res.data.get("freq_fit") is not None:
+                    f0_row = float(res.data["freq_fit"][0])
+                    self.expt.cfg.device.readout.frequency[q] = f0_row
+                    self.cfg.device.readout.frequency[q]      = f0_row
+                    f0_used_each_row.append(f0_row)
             # If we have a bias→f0 table, interpolate and update readout frequency
-            if have_table:
+            elif have_table:
                 f0_row = float(np.interp(dc_val, self.bias_table_V, self.f0_table_MHz))
-                q = self.expt.cfg.expt["qubit"][0]
                 # update both the inner expt cfg and outer cfg so QickProgram picks it up
                 self.expt.cfg.device.readout.frequency[q] = f0_row
                 self.cfg.device.readout.frequency[q]      = f0_row
                 f0_used_each_row.append(f0_row)
 
             # 3) run the inner 1D experiment and append
-            data_new = self.expt.acquire(progress=progress)
+            try:
+                data_new = self.expt.acquire(progress=progress)
+            except RuntimeError as e:
+                # Readout loop error — retry once after tproc reset
+                print(f"[QubitSpecFlux] RuntimeError at bias {dc_val:.4f} V: {e}")
+                try:
+                    soc.tproc.reset()
+                    print("[QubitSpecFlux] tproc reset, retrying...")
+                    time.sleep(0.5)
+                    data_new = self.expt.acquire(progress=progress)
+                except RuntimeError:
+                    print(f"[QubitSpecFlux] Retry failed. Saving {len(data.get('time',[]))} rows and stopping.")
+                    break
             for key in data_new:
                 if i == 0:
                     data[key] = []
@@ -794,7 +828,8 @@ class QubitSpecFlux(QickExperiment2DSimple):
                 super().save_data(data=data)
 
         freq = data["xpts"][0] if np.ndim(data["xpts"]) > 1 else data["xpts"]
-        bias = dcpts
+        n_completed = len(data.get("time", []))
+        bias = dcpts[:n_completed]
 
         # overwrite axes
         data["xpts"] = bias
@@ -812,7 +847,7 @@ class QubitSpecFlux(QickExperiment2DSimple):
                 data[k] = np.array(a)
 
         # Store the readout frequency actually used at each bias (if available)
-        if have_table and len(f0_used_each_row) == len(bias):
+        if len(f0_used_each_row) > 0:
             data["f0_used_MHz"] = np.asarray(f0_used_each_row, dtype=float)
 
         if "amps" in data:

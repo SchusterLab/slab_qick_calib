@@ -1,0 +1,72 @@
+aliases: {ip: 10.108.30.23, soc: bf1_soc}
+device:
+  qubit:
+    T1: [1, 50, 50, 50]
+    T2e: [1, 100, 100, 100]
+    T2r: [1, 50, 50, 50]
+    f_ef: [3800, 3800, 3800, 3800]
+    f_ge: [5660.9747, 5657.1574, 6204.8217, 4000]
+    kappa: [189.3021, 346.8944, -20.3047, 0]
+    low_gain: 0.003
+    max_gain: 1
+    pop: [0, 0, 0, 0]
+    pulses:
+      pi_ef:
+        gain: [0.15, 0.15, 0.15, 0.15]
+        phase: [0, 0, 0, 0]
+        sigma: [0.1, 0.1, 0.1, 0.1]
+        sigma_inc: [4, 4, 4, 4]
+        type: [gauss, gauss, gauss, gauss]
+      pi_ge:
+        gain: [0.15, 0.15, 0.15, 0.15]
+        phase: [0, 0, 0, 0]
+        sigma: [0.1, 0.1, 0.1, 0.1]
+        sigma_inc: [4, 4, 4, 4]
+        type: [gauss, gauss, gauss, gauss]
+    spec_gain: [1, 1, 1, 1]
+    temp: [0, 0, 0, 0]
+    tuned_up: [false, false, false, false]
+  readout:
+    active_reset: [false, false, false, false]
+    chi: [0, 0, 0, 0]
+    fidelity: [0, 0, 0, 0]
+    final_delay: [10, 300, 300, 300]
+    frequency: [3941.7496, 7142.5682, 7687.8994, 8292.8916]
+    gain: [0.3, 0.3, 0.4, 0.05]
+    kappa: [0.3144, 2.9665, 2.9497, 2.6211]
+    lamb: [14.9704, -14.9796, -7.3832, -1.8339]
+    max_gain: 1
+    phase: [0, 0, 0, 0]
+    qe: [1.6647, 0.2408, 0.2699, 0.3164]
+    qi: [5.0793, 25849609.3308, 7.6006, 33712862.0122]
+    readout_length: [5, 5, 5, 5]
+    reps: [1, 1, 1, 1]
+    reps_base: 150
+    rescale: [false, false, false, false]
+    reset: [3, 3, 3, 3]
+    rounds: [1, 1, 1, 1]
+    rounds_base: 1
+    sigma: [0, 0, 0, 0]
+    threshold: [10, 10, 10, 10]
+    tm: [0, 0, 0, 0]
+    trig_offset: [0.52, 0.52, 0.52, 0.5]
+hw:
+  soc:
+    adcs:
+      readout:
+        attn: [0, 0, 0, 0]
+        ch: [10, 10, 10, 10]
+        type: [dyn, dyn, dyn, dyn]
+    dacs:
+      qubit:
+        attn1: [0, 0, 0, 0]
+        attn2: [0, 0, 0, 0]
+        ch: [1, 1, 1, 1]
+        nyquist: [1, 1, 1, 1]
+        type: [full, full, full, full]
+      readout:
+        attn1: [0, 0, 0, 0]
+        attn2: [0, 0, 0, 0]
+        ch: [0, 0, 0, 0]
+        nyquist: [2, 2, 2, 2]
+        type: [full, full, full, full]
