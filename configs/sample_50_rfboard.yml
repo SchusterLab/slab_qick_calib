@@ -1,0 +1,91 @@
+aliases: {ip: 10.108.30.23, soc: bf1_soc}
+device:
+  qubit:
+    T1: [1, 1, 1.41, 50]
+    T2e: [100, 1.5, 1.68, 100]
+    T2r: [1.5, 1.5, 1.5, 50]
+    f_ef: [5616.9564, 4400.1538, 3800, 3800]
+    f_ge: [5663, 4539.224, 3430, 7058.6069]
+    kappa: [-7.9447, -8.7761, -2.8192, 36.0622]
+    low_gain: 0.003
+    max_gain: 1
+    pop: [0, 0, 0, 0]
+    pulses:
+      pi_ef:
+        gain: [1.1486, 0.7002, 0.15, 0.15]
+        phase: [0, 0, 0, 0]
+        sigma: [0.025, 0.01, 0.1, 0.1]
+        sigma_inc: [4, 3, 4, 4]
+        type: [gauss, gauss, gauss, gauss]
+      pi_ge:
+        gain: [0.2319, 0.372, 0.2141, 0.15]
+        phase: [0, 0, 0, 0]
+        sigma: [0.015, 0.01, 0.01, 0.1]
+        sigma_inc: [4, 3, 3, 4]
+        type: [gauss, gauss, gauss, gauss]
+    spec_gain: [1, 1, 1, 1]
+    temp: [0, 0, 0, 0]
+    tuned_up: [true, true, false, false]
+  readout:
+    active_reset: [false, false, false, false]
+    chi: [-0.4338, -4.1093, -1.3698, 0]
+    fidelity: [0.1187, 0.277, 0.032, 0]
+    final_delay: [10, 10, 10, 10]
+    frequency: [3938.7732, 7145.5429, 7681.9172, 8289.9243]
+    gain: [0.7188, 0.5171, 0.3, 0.1]
+    kappa: [0.802, 4.0148, 3.1058, 3.1366]
+    lamb: [-0.4883, 49.2146, -8.1959, -0.9335]
+    max_gain: 1
+    phase: [-92.5876, 116.5504, 32.0662, 0]
+    qe: [0.7378, 0.1895, 0.2877, 0.3273]
+    qi: [1.4691, 2.933, 1.7621, 1.3728]
+    readout_length: [0.5293, 0.9599, 1.701, 1]
+    reps: [1, 1, 1, 2]
+    reps_base: 1000
+    rescale: [false, false, false, false]
+    reset: [3, 3, 3, 3]
+    rounds: [1, 1, 1, 16]
+    rounds_base: 1
+    sigma: [70.8571, 20.9258, 22.8504, 0]
+    threshold: [51.2128, 32.3762, -2.631, 10]
+    tm: [7.5516, 2.9299, 0.2361, 0]
+    trig_offset: [0.52, 0.52, 0.52, 0.5]
+hw:
+  soc:
+    adcs:
+      readout:
+        attn: [0, 0, 0, 0]
+        ch: [0, 0, 0, 0]
+        filter_bw: [500, 100, 500, 1000]
+        filter_fc: [3939.1391, 7146.7939, 7681.8329, 8289.9904]
+        filter_type: [bandpass, bandpass, bandpass, bandpass]
+        type: [dyn, dyn, dyn, dyn]
+    dacs:
+      qubit:
+        attn1: [0, 5, 0, 10]
+        attn2: [0, 0, 0, 0]
+        ch: [1, 1, 1, 1]
+        filter_bw: [500, 100, 1000, 1000]
+        filter_fc: [5847.1338, 4539.224, 3430, 7058.6069]
+        filter_type: [bandpass, bandpass, bandpass, bandpass]
+        nyquist: [1, 1, 1, 1]
+        type: [full, full, full, full]
+      readout:
+        attn1: [30, 30, 20, 10]
+        attn2: [20, 0, 0, 0]
+        ch: [0, 0, 0, 0]
+        filter_bw: [100, 100, 100, 100]
+        filter_fc: [3939.1391, 7146.7939, 7681.8329, 8289.9904]
+        filter_type: [bandpass, bandpass, bandpass, bandpass]
+        nyquist: [2, 2, 2, 2]
+        type: [full, full, full, full]
+    rfboard_active:
+      adc:
+        '0': {attn: 0, filter_bw: 500, filter_fc: 7681.8329, filter_type: bandpass,
+          qubit: 2}
+      dac_qubit:
+        '1': {attn1: 0, attn2: 0, filter_bw: 1000, filter_fc: 3430, filter_type: bandpass,
+          qubit: 2}
+      dac_readout:
+        '0': {attn1: 20, attn2: 0, filter_bw: 100, filter_fc: 7681.8329, filter_type: bandpass,
+          qubit: 2}
