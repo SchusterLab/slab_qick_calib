@@ -591,7 +591,7 @@ def fitdecaysin(
         fitparams[4] = np.mean(ydata)  # y0
 
     bounds = (
-        [0.6 * fitparams[0], 1e-3, -360, 0.1, np.min(ydata)],
+        [0.6 * fitparams[0], 1e-3, -360, 0.05, np.min(ydata)],
         [1.5 * fitparams[0], 1e3, 360, np.inf, np.max(ydata)],
     )
 
@@ -676,7 +676,7 @@ def fitdecayslopesin(
         fitparams[5] = 0  # slope
 
     bounds = (
-        [0.6 * fitparams[0], 1e-3, -360, 0.1, np.min(ydata), -np.inf],
+        [0.6 * fitparams[0], 1e-3, -360, 0.05, np.min(ydata), -np.inf],
         [1.5 * fitparams[0], 1e3, 360, np.inf, np.max(ydata), np.inf],
     )
 

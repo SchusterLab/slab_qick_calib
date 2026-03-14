@@ -289,7 +289,10 @@ def measure_cohere(qi, cfg_dict, update=True, display=False, max_t1=MAX_T1):
         t1.display(debug=True)
         print("T1 failed")
 
-    qubit_dict = set_up_dict(t1, t2r)
+    if t1 is None or t2r is None:        
+        qubit_dict = {}
+    else:
+        qubit_dict = set_up_dict(t1, t2r)
 
     return qubit_dict
 
@@ -335,6 +338,7 @@ def measure_setup(qi, cfg_dict):
 
 def measure_fast(qi, cfg_dict, i, tdir, t1_val, t2_val, display=False,t2_type='T2r'):
     fname = str(Path(tdir) / f"t1_qubit{qi}_{i:05d}")
+    
     t1 = meas.T1Experiment(
         cfg_dict,
         qi=qi,
@@ -345,11 +349,14 @@ def measure_fast(qi, cfg_dict, i, tdir, t1_val, t2_val, display=False,t2_type='T
         params={"span": 3.7 * t1_val},
     )
 
+
+
     fname = str(Path(tdir) / f"{t2_type}_qubit{qi}_{i:05d}")
     if t2_type=='T2r':
         params = {"span": 3.2 * t2_val, 'experiment_type': 'ramsey'}
     else:
         params = {"span": 3.2 * t2_val, 'experiment_type': 'echo'}
+    
     t2 = meas.T2Experiment(
         cfg_dict,
         qi=qi,
@@ -359,7 +366,7 @@ def measure_fast(qi, cfg_dict, i, tdir, t1_val, t2_val, display=False,t2_type='T
         style="fast",
         params=params,
     )
-
+   
     qubit_dict = set_up_dict(t1, t2)
     return qubit_dict
 
@@ -438,6 +445,9 @@ def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True,
             except Exception as e:
                 print(f"Warning: failed to read pulsetube status: {e}")
 
+        # Track which qubits succeeded this iteration (for CSV update)
+        iter_success = [True] * len(qubit_list)
+
         for j, qi in enumerate(qubit_list):
             # Measure current time
             tm = time.time()
@@ -454,19 +464,28 @@ def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True,
                 else:
                     t1_val = tracking_data[j]["t1"][-1]
                     t2_val = tracking_data[j]["t2"][-1]
-                    
-                
 
-                # cfg_dict['cfg_file']=None
-                d = measure_fast(qi, cfg_dict, i, tracking_path, t1_val, t2_val, display=display, t2_type=t2)
-                t1_val = d["t1"]
-                t2_val = d["t2"]
-                # d = measure_cohere(qi, cfg_dict, display=display)
-                # d = measure_params(qi, cfg_dict, display=display, fast=True,  check_fid=False)
+                try:
+                    d = measure_fast(qi, cfg_dict, i, tracking_path, t1_val, t2_val, display=display, t2_type=t2)
+                    if not d:
+                        raise RuntimeError("Measurement returned empty result")
+                    t1_val = d["t1"]
+                    t2_val = d["t2"]
+                except Exception as e:
+                    print(f"Measurement failed for qubit {qi} on run {i}: {e}")
+                    print("Using previous t1/t2 values for next iteration")
+                    iter_success[j] = False
+                    continue
             else:
-                d = measure_params(
-                    qi, cfg_dict, display=display, fast=False, check_fid=False
-                )
+                try:
+                    d = measure_params(
+                        qi, cfg_dict, display=display, fast=False, check_fid=False
+                    )
+                except Exception as e:
+                    print(f"Measurement failed for qubit {qi} on run {i}: {e}")
+                    iter_success[j] = False
+                    continue
+
             d["time"] = tm
             d["elapsed"] = elapsed
             if bf_client is not None:
@@ -486,8 +505,11 @@ def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True,
 
         i += 1
 
-        # Save tracking data to CSV files
+        # Save tracking data to CSV files (only for qubits that succeeded)
         for j, qi in enumerate(qubit_list):
+            if not iter_success[j]:
+                continue
+
             csv_dir = base_path / "csv"
             csv_dir.mkdir(exist_ok=True)
             csv_path = str(csv_dir / f"{tracking_id}_qubit_{qi}_tracking.csv")
@@ -500,10 +522,9 @@ def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True,
             # Create header and data rows
             header = ",".join(data_arrays.keys())
             rows = np.vstack(list(data_arrays.values())).T
-            # Future change to only add a new row 
+            # Future change to only add a new row
             # Save to CSV
             np.savetxt(csv_path, rows, delimiter=",", header=header, comments="", fmt="%.5f")
-
 
     tt_stats = calc_stats(tracking_data)
 
