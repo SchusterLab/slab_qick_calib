@@ -332,7 +332,7 @@ def resfunc8(f_proj, fr, Qr,  Qc_hat_mag, a_real, a_imag, phi, tau, Imtau):
     imag_S21[f_proj<0] = 0
     return real_S21 + imag_S21
 
-def finefit(f, z, fr_0):
+def finefit(f, z, fr_0,p0=None):
     """
     finefit fits f and z to the resonator model described in Jiansong's thesis
 
@@ -345,8 +345,15 @@ def finefit(f, z, fr_0):
         fr_fine, Qr_fine, Qc_hat_mag_fine, a_fine, phi_fine, tau_fine, Qc_fine
     """
 
+
+
     # find starting parameters using a rough fit
     fr_1, Qr_1, phi_1, a_1, Qc_hat_mag_1, tau_1, Imtau_1 = roughfit(f, z, fr_0)
+
+    if p0 is None:
+        p0 =[fr_1, Qr_1, Qc_hat_mag_1, a_1.real, a_1.imag, phi_1, tau_1, Imtau_1]
+    else:
+        p0 = np.concatenate(([fr_1,Qr_1,Qc_hat_mag_1,a_1.real,a_1.imag], p0))
 
     # trim data?
     #if False:
@@ -374,7 +381,7 @@ def finefit(f, z, fr_0):
         plt.plot(z.real,z.imag,'.')
         plt.plot(resfunc3(f,fr_1,Qr_1,Qc_hat_mag_1,a_1,phi_1,tau_1).real,resfunc3(f,fr_1,Qr_1,Qc_hat_mag_1,a_1,phi_1,tau_1).imag,label='roughfit')
 
-    fparams, fcov = opt.curve_fit(resfunc8, xdata, ydata, p0=[fr_1, Qr_1, Qc_hat_mag_1, a_1.real, a_1.imag, phi_1, tau_1, Imtau_1], bounds=([min(f), 0, 0, -np.inf, -np.inf,-1*np.pi, -np.inf, -np.inf], [max(f), np.inf, np.inf, np.inf, np.inf, np.pi, np.inf, np.inf]))
+    fparams, fcov = opt.curve_fit(resfunc8, xdata, ydata, p0=p0, bounds=([min(f), 0, 0, -np.inf, -np.inf,-1*np.pi, -np.inf, -np.inf], [max(f), np.inf, np.inf, np.inf, np.inf, np.pi, np.inf, np.inf]))
 
     if final_fit_plotting:
         plt.figure(1)

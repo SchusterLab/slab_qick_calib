@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(python:*)",
+      "Bash(python3:*)",
+      "Bash(where:*)",
+      "Bash(powershell -Command:*)",
+      "Bash(powershell -ExecutionPolicy Bypass -File:*)",
+      "Bash(grep:*)",
+      "Bash(python.exe:*)",
+      "Bash(cmd.exe:*)",
+      "Bash(git status:*)",
+      "Bash(C:\\\\Users\\\\slab\\\\anaconda3\\\\python.exe:*)",
+      "Bash(powershell -File - <<'PSEOF'\n$py = \"C:\\\\Users\\\\slab\\\\anaconda3\\\\python.exe\"\n$script = @\"\nimport json\nwith open\\(r'c:\\\\_Lib\\\\python\\\\slab_qick_calib\\\\notebooks\\\\tune_qubits_erik.ipynb', 'r', encoding='utf-8'\\) as f:\n    nb = json.load\\(f\\)\ncells = nb['cells']\nfor i, cell in enumerate\\(cells\\):\n    src = ''.join\\(cell['source']\\)\n    lower = src.lower\\(\\)\n    if 'tof' in lower or 'ring' in lower or 'time of flight' in lower:\n        preview = src[:200].replace\\('\\\\n','\\\\\\\\n'\\)\n        print\\(f'Cell {i} \\({cell[\"cell_type\"]}\\): {preview}'\\)\n        print\\(\\)\n\"@\n$script | & $py -\nPSEOF)",
+      "Bash(dir:*)",
+      "Bash(find:*)",
+      "Bash(cmd /c \"where python 2>nul & where python3 2>nul & where py 2>nul\")",
+      "Bash(cmd /c \"conda run -n base python -c \"\"import fridge.bluefors; print\\(fridge.bluefors.__file__\\)\"\"\")"
+    ]
+  }
+}
