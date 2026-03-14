@@ -47,11 +47,11 @@ def setup_readout_chain(
     qubit,
     soc,
     cfg,
-    bw_adc=1000,
-    bw_dac=100,
-    atten1_dac=0,
-    atten2_dac=0,
-    atten_adc=30,
+    bw_adc=None,
+    bw_dac=None,
+    atten1_dac=None,
+    atten2_dac=None,
+    atten_adc=None,
     cfg_file=None,
 ):
     """
@@ -60,23 +60,40 @@ def setup_readout_chain(
     Sets bandpass filters on ADC and DAC readout channels centered on the
     readout frequency from the config, and sets attenuator values.
 
+    When attenuation or bandwidth parameters are ``None`` (the default),
+    values are read from the per-qubit config arrays.  Pass explicit values
+    to override.
+
     Args:
         qubit: Qubit index
         soc: QICK SoC object
         cfg: Configuration AttrDict
-        bw_adc: ADC filter bandwidth in MHz (default: 1000)
-        bw_dac: DAC filter bandwidth in MHz (default: 100)
-        atten1_dac: DAC attenuator 1 in dB (default: 0)
-        atten2_dac: DAC attenuator 2 in dB (default: 0)
-        atten_adc: ADC attenuator in dB (default: 30)
+        bw_adc: ADC filter bandwidth in MHz (default: from config, fallback 1000)
+        bw_dac: DAC filter bandwidth in MHz (default: from config, fallback 100)
+        atten1_dac: DAC attenuator 1 in dB (default: from config)
+        atten2_dac: DAC attenuator 2 in dB (default: from config)
+        atten_adc: ADC attenuator in dB (default: from config)
         cfg_file: Optional path to persist active state to disk (default: None)
 
     Returns:
         dict: Channel info ``{"ADC_ch", "DAC_ch", "readout_freq"}``
     """
-    adc_ch = cfg.hw.soc.adcs.readout.ch[qubit]
-    dac_ch = cfg.hw.soc.dacs.readout.ch[qubit]
+    hw = cfg.hw.soc
+    adc_ch = hw.adcs.readout.ch[qubit]
+    dac_ch = hw.dacs.readout.ch[qubit]
     readout_freq = cfg.device.readout.frequency[qubit]
+
+    # Read defaults from config when not explicitly provided
+    if bw_adc is None:
+        bw_adc = hw.adcs.readout.filter_bw[qubit] if hasattr(hw.adcs.readout, "filter_bw") else 1000
+    if bw_dac is None:
+        bw_dac = hw.dacs.readout.filter_bw[qubit] if hasattr(hw.dacs.readout, "filter_bw") else 100
+    if atten1_dac is None:
+        atten1_dac = hw.dacs.readout.attn1[qubit]
+    if atten2_dac is None:
+        atten2_dac = hw.dacs.readout.attn2[qubit]
+    if atten_adc is None:
+        atten_adc = hw.adcs.readout.attn[qubit]
 
     # Set bandpass filters (MHz -> GHz)
     soc.rfb_set_ro_filter(adc_ch, fc=readout_freq / 1000, ftype="bandpass", bw=bw_adc / 1000)
@@ -104,9 +121,9 @@ def setup_qubit_drive_chain(
     qubit,
     soc,
     cfg,
-    bw=1000,
-    atten1_dac=0,
-    atten2_dac=0,
+    bw=None,
+    atten1_dac=None,
+    atten2_dac=None,
     center_freq=None,
     cfg_file=None,
 ):
@@ -116,21 +133,34 @@ def setup_qubit_drive_chain(
     Sets bandpass filter on the qubit DAC channel centered on f_ge from
     the config (or a custom center frequency) and sets attenuator values.
 
+    When attenuation or bandwidth parameters are ``None`` (the default),
+    values are read from the per-qubit config arrays.  Pass explicit values
+    to override.
+
     Args:
         qubit: Qubit index
         soc: QICK SoC object
         cfg: Configuration AttrDict
-        bw: Filter bandwidth in MHz (default: 1000)
-        atten1_dac: DAC attenuator 1 in dB (default: 0)
-        atten2_dac: DAC attenuator 2 in dB (default: 0)
+        bw: Filter bandwidth in MHz (default: from config, fallback 1000)
+        atten1_dac: DAC attenuator 1 in dB (default: from config)
+        atten2_dac: DAC attenuator 2 in dB (default: from config)
         center_freq: Override center frequency in MHz (default: use f_ge from config)
         cfg_file: Optional path to persist active state to disk (default: None)
 
     Returns:
         dict: Channel info ``{"DAC_ch", "drive_freq"}``
     """
-    dac_ch = cfg.hw.soc.dacs.qubit.ch[qubit]
+    hw = cfg.hw.soc
+    dac_ch = hw.dacs.qubit.ch[qubit]
     drive_freq = cfg.device.qubit.f_ge[qubit]
+
+    # Read defaults from config when not explicitly provided
+    if bw is None:
+        bw = hw.dacs.qubit.filter_bw[qubit] if hasattr(hw.dacs.qubit, "filter_bw") else 1000
+    if atten1_dac is None:
+        atten1_dac = hw.dacs.qubit.attn1[qubit]
+    if atten2_dac is None:
+        atten2_dac = hw.dacs.qubit.attn2[qubit]
 
     fc = center_freq if center_freq is not None else drive_freq
 
@@ -311,6 +341,11 @@ def apply_config_rf_settings(soc, cfg, qubit=None, cfg_file=None):
         qubit: Optional qubit index to configure (default: all)
         cfg_file: Optional path to persist active state to disk (default: None)
     """
+    # Reload config from disk so that manual yml edits are picked up
+    if cfg_file is not None:
+        from . import config
+        cfg = config.load(cfg_file)
+
     hw = cfg.hw.soc
 
     if qubit is not None:
@@ -406,6 +441,11 @@ def activate_qubit_rf(qubit, soc, cfg, cfg_file=None,
     Returns:
         AttrDict or cfg: Updated cfg (reloaded from disk if ``cfg_file`` given)
     """
+    # Reload config from disk so that manual yml edits are picked up
+    if cfg_file is not None:
+        from . import config
+        cfg = config.load(cfg_file)
+
     hw = cfg.hw.soc
     parts = []
 

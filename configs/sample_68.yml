@@ -61,12 +61,12 @@ hw:
       qubit:
         attn1: [0, 0, 0, 0]
         attn2: [0, 0, 0, 0]
-        ch: [1, 1, 1, 1]
+        ch: [3, 3, 3, 3]
         nyquist: [1, 1, 1, 1]
         type: [full, full, full, full]
       readout:
         attn1: [0, 0, 0, 0]
         attn2: [0, 0, 0, 0]
-        ch: [0, 0, 0, 0]
+        ch: [2, 2, 2, 2]
         nyquist: [2, 2, 2, 2]
         type: [full, full, full, full]

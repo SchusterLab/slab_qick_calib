@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(xargs grep:*)",
+      "Bash(ls /c/_Lib/python/qq/slab_qick_calib/notebooks/*.ipynb)"
+    ]
+  }
+}

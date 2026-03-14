@@ -74,6 +74,18 @@ class QubitSpecProgram(QickProgram):
         super()._initialize(cfg, readout="standard")
 
         # Define the probe pulse with variable frequency
+        if cfg.expt.flux:
+            self.declare_gen(cfg.expt.flux_chan, nqz=1, mixer_freq=0)
+            pulse = {
+            "chan": cfg.expt.flux_chan,
+            "freq": 0,  # Pulse frequency
+            "phase": 0,  # Pulse phase
+            "gain": cfg.expt.flux_gain,  # Pulse amplitude
+            "length": cfg.expt.length,  # Pulse duration same as qubit pulse
+            "type": 'const'            
+            }
+            super().make_pulse(pulse, "flux_pulse")
+        
         pulse = {
             "freq": cfg.expt.frequency,
             "gain": cfg.expt.gain,
@@ -107,9 +119,17 @@ class QubitSpecProgram(QickProgram):
         if cfg.expt.checkEF:
             self.pulse(ch=self.qubit_ch, name="pi_ge", t=0)
             self.delay_auto(t=0.01, tag="wait 1")
-
-        # Apply the probe pulse with variable frequency
-        self.pulse(ch=self.qubit_ch, name="qubit_pulse", t=0)
+        
+        if cfg.expt.flux:
+            # Apply the probe pulse with variable frequency
+            self.pulse(ch=self.qubit_ch, name="qubit_pulse", t=0)
+            # Apply the flux pulse at the same time
+            self.pulse(ch=cfg.expt.flux_chan, name="flux_pulse", t=0)
+            self.delay_auto(t=0.01, tag="wait flux")
+        else:
+            # Apply the probe pulse with variable frequency
+            self.pulse(ch=self.qubit_ch, name="qubit_pulse", t=0)
+        
 
         # Add delay if separate readout is enabled
         if cfg.expt.sep_readout:
@@ -268,6 +288,9 @@ class QubitSpec(QickExperiment):
             "qubit_chan": self.cfg.hw.soc.adcs.readout.ch[qi],
             "sep_readout": True,
             "active_reset": False,
+            "flux": False, # Whether to apply flux while pulse
+            "flux_chan": self.cfg.hw.soc.dacs.flux.ch[qi], # DAC channel for flux pulse
+            "flux_gain": 0.1, # Gain for flux pulse
         }
         params_def = {**params_def2, **params_def}
 
@@ -384,6 +407,8 @@ class QubitSpec(QickExperiment):
 
         # Set up plot title
         title = f"Spectroscopy Q{self.cfg.expt.qubit[0]} (Gain {self.cfg.expt.gain})"
+        if self.cfg.expt.flux:
+            title += f" (Flux Gain {self.cfg.expt.flux_gain})"
         if self.cfg.expt.checkEF:
             title = "EF " + title
 

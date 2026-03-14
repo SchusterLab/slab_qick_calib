@@ -612,6 +612,7 @@ class QickExperiment(Experiment):
         parent_dir = file_path.parent
         new_filename = file_path.name.rsplit(".", 1)[0] + suffix + ".png"
         output_path = parent_dir / "images" / new_filename
+        output_path.parent.mkdir(parents=True, exist_ok=True)
 
         fig.savefig(output_path)
         plt.show()

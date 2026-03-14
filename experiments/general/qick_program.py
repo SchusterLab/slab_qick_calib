@@ -308,7 +308,7 @@ class QickProgram(AveragerProgramV2):
                 name="ramp",
                 sigma=pulse.sigma,  # Width of Gaussian
                 length=length,
-                even_length=False,
+                even_length=True,
             )
             pulse_args["envelope"] = "ramp"  # Use Gaussian envelope
 

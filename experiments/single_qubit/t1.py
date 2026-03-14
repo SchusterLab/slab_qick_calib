@@ -81,6 +81,17 @@ class T1Program(QickProgram):
                 "type": "flat_top",  
             }
             super().make_pulse(pulse, "stark_pulse")
+        elif cfg.expt.flux:
+            self.declare_gen(cfg.expt.flux_chan, nqz=1, mixer_freq=0)
+            pulse = {
+            "chan": cfg.expt.flux_chan,
+            "freq": 0,  # Pulse frequency
+            "phase": 0,  # Pulse phase
+            "gain": cfg.expt.flux_gain,  # Pulse amplitude
+            "length": cfg.expt.wait_time,  # Pulse duration
+            "type": 'const'            
+            }
+            super().make_pulse(pulse, "flux_pulse")
 
     def _body(self, cfg):
         """
@@ -110,9 +121,17 @@ class T1Program(QickProgram):
             self.pulse(ch=self.qubit_ch, name="stark_pulse", t=0)
             # Small buffer delay after AC Stark pulse
             self.delay_auto(t=cfg.expt["end_wait"], tag="wait")
+        elif cfg.expt.flux:
+            # Apply flux pulse during wait time
+            self.delay_auto(t=0.01, tag="wait_stark")
+            # Apply flux pulse during wait time
+            self.pulse(ch=cfg.expt.flux_chan, name="flux_pulse", t=0)
+            # Small buffer delay after flux pulse
+            self.delay_auto(t=0.1, tag="wait")
+            #self.delay_auto(t=cfg.expt["end_wait"], tag="wait")
         else:
             # Simple delay for standard T1 measurement
-            self.delay_auto(t=cfg.expt["wait_time"] + 0.01, tag="wait")
+            self.delay_auto(t=cfg.expt["wait_time"] + 0.03, tag="wait")
 
         # Measure the qubit state
         super().measure(cfg)
@@ -215,6 +234,9 @@ class T1Experiment(QickExperiment):
             "qubit_chan": self.cfg.hw.soc.adcs.readout.ch[
                 qi
             ],  # Readout channel for this qubit
+            "flux": False, # Whether to apply flux pulse during wait time
+            "flux_chan": self.cfg.hw.soc.dacs.flux.ch[qi], # DAC channel for flux pulse
+            "flux_gain": 0.1, # Gain for flux pulse
         }
 
         # Adjust parameters based on measurement style
@@ -320,6 +342,8 @@ class T1Experiment(QickExperiment):
         # Get qubit index for plot title
         qubit = self.cfg.expt.qubit[0]
         title = f"$T_1$ Q{qubit}"
+        if self.cfg.expt.flux:
+            title += f" (Flux Gain {self.cfg.expt.flux_gain})"
 
         # Define caption parameters to display T1 fit result
         caption_params = [
@@ -340,7 +364,7 @@ class T1Experiment(QickExperiment):
             rescale=rescale,
         )
 
-    def update(self, rng_vals=[1, 500], first_time=False, verbose=True):
+    def update(self, rng_vals=[0.5, 500], first_time=False, verbose=True):
         qi = self.cfg.expt.qubit[0]
         if self.status:
             config.update_qubit(
