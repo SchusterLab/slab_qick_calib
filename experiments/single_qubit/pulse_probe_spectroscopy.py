@@ -429,6 +429,7 @@ class QubitSpec(QickExperiment):
             show_hist=False,
             fitfunc=fitfunc,
             caption_params=caption_params,  # Pass the new structured parameter list
+            **kwargs,
         )
 
 

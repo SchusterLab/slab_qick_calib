@@ -5,7 +5,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from ..helpers import config
+from ..helpers import config, rfboard
 import slab_qick_calib.experiments as meas
 from . import qubit_tuning
 
@@ -390,7 +390,7 @@ def measure_fast2(qi, cfg_dict, i, t2e=None, t1=None, t1_val=30, t2_val=30):
     return t1, t2e
 
 
-def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True, bf_client=None):
+def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True, bf_client=None, soc=None):
     """
     Track qubit parameters over time.
 
@@ -407,6 +407,9 @@ def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True,
         Total tracking time in hours
     display : bool, optional
         Whether to display plots during measurements
+    soc : object, optional
+        QICK SoC object. If provided, calls rfboard.activate_qubit_rf()
+        before each qubit's measurements to switch RF filters/attenuators.
 
     Returns
     -------
@@ -454,11 +457,17 @@ def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True,
             elapsed = (tm - start_time) / 3600
             print(f"Starting run {i}, for qubit {qi}. Time elapsed {elapsed:.2f} hrs")
 
+            # Switch RF board to this qubit's settings
+            if soc is not None:
+                auto_cfg = config.load(cfg_dict["cfg_file"])
+                auto_cfg = rfboard.activate_qubit_rf(qi, soc, auto_cfg, cfg_file=cfg_dict["cfg_file"])
+
             # Measure qubit parameters
             if fast:
                 if i == 0:
                     t2 = 'T2e'
-                    auto_cfg = config.load(cfg_dict["cfg_file"])
+                    if soc is None:
+                        auto_cfg = config.load(cfg_dict["cfg_file"])
                     t1_val = auto_cfg["device"]["qubit"]["T1"][qi]
                     t2_val = auto_cfg["device"]["qubit"][t2][qi]
                 else:
@@ -592,7 +601,17 @@ def load_tracking(csv_dir, tracking_id=None, qubit_list=None):
     tracking_base = csv_dir.parent  # csv_dir is Tracking/csv, so parent is Tracking
     (tracking_base / "images").mkdir(exist_ok=True)
 
-    print(f"Loaded tracking_id='{tracking_id}', qubits={qubit_list}")
+    # Report when CSVs were last updated
+    most_recent = max(fpath.stat().st_mtime for _, fpath in files)
+    last_modified = datetime.fromtimestamp(most_recent)
+    elapsed = datetime.now() - last_modified
+    hours, remainder = divmod(int(elapsed.total_seconds()), 3600)
+    minutes = remainder // 60
+    print(
+        f"Loaded tracking_id='{tracking_id}', qubits={qubit_list}\n"
+        f"  CSV last updated: {last_modified.strftime('%Y-%m-%d %H:%M:%S')} "
+        f"({hours}h {minutes}m ago)"
+    )
     return tracking_data, str(csv_dir), tt_stats, tracking_id
 
 

@@ -373,6 +373,9 @@ class T2Experiment(QickExperiment):
         # Define parameter metadata for plotting
         self.param = {"label": "wait", "param": "t", "param_type": "time"}
 
+        # Ensure sweep step size is above DAC minimum resolution
+        self.check_dac_timing(num_segments=self.cfg.expt.num_pi + 1)
+
         # Create a 1D sweep for the wait time from start to start+span
         self.cfg.expt.wait_time = QickSweep1D(
             "wait_loop", self.cfg.expt.start, self.cfg.expt.start + self.cfg.expt.span
@@ -601,4 +604,5 @@ class T2Experiment(QickExperiment):
             caption_params=caption_params,
             savefig=savefig,
             rescale=rescale,
+            **kwargs,
         )

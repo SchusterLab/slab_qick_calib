@@ -1100,7 +1100,7 @@ def plot_reset(experiment_data: List[Any], filename: str) -> None:
     # Save plots
     file_path = Path(filename)
     new_filename = file_path.name.rsplit(".", 1)[0] + "_reset_hist.png"
-    fig.savefig(file_path.parent / "images" / new_filename)
+    fig.savefig(file_path.parent.parent / "images" / new_filename)
     
 
 def fit_hist(bin_centers: np.ndarray, histogram: np.ndarray, 

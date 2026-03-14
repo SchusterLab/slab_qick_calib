@@ -495,6 +495,7 @@ class RabiExperiment(QickExperiment):
             fitfunc=self.fitfunc,
             caption_params=caption_params,
             rescale=rescale,
+            **kwargs,
         )
 
     def _get_plot_labels(self):

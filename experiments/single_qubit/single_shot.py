@@ -701,6 +701,12 @@ class HistogramExperiment(QickExperiment):
         config.update_readout(
             cfg_file, "fidelity", self.data["fids"][0], qi, verbose=verbose
         )
+        config.update_readout(
+            cfg_file, "g_mean", self.data["g_mean"], qi, verbose=verbose
+        )
+        config.update_readout(
+            cfg_file, "e_mean", self.data["e_mean"], qi, verbose=verbose
+        )
 
         # Update additional parameters if not in fast mode
         if not fast:

@@ -712,13 +712,47 @@ class ResSpecPower(QickExperiment2DSimple):
         
 
 
+    @classmethod
+    def from_h5file(cls, fname):
+        """Load from h5 and reconstruct gain_pts if missing."""
+        self = super().from_h5file(fname)
+        data = self.data
+
+        # Collapse xpts to 1D if saved as 2D from interim saves
+        if data["xpts"].ndim == 2:
+            data["xpts"] = data["xpts"][0]
+
+        # Number of rows actually acquired (may be less than config if interrupted)
+        n_acquired = data["amps"].shape[0]
+
+        # Reconstruct gain_pts from config if missing
+        if "gain_pts" not in data:
+            cfg = self.cfg.expt
+            if cfg.get('log', False):
+                rng = cfg.rng
+                rat = rng ** (-1 / (cfg.expts_gain - 1))
+                data["gain_pts"] = cfg.max_gain * rat ** np.arange(cfg.expts_gain)
+            else:
+                data["gain_pts"] = cfg.start_gain + cfg.step_gain * np.arange(cfg.expts_gain)
+
+        # Trim gain_pts to match actual data if experiment was interrupted
+        if len(data["gain_pts"]) > n_acquired:
+            data["gain_pts"] = data["gain_pts"][:n_acquired]
+
+        if "ypts" not in data or len(data.get("ypts", [])) != n_acquired:
+            data["ypts"] = data["gain_pts"]
+
+        self.xlabel = XLABEL
+        self.ylabel = "Resonator Gain (DAC level)"
+        return self
+
     def acquire(self, progress=False):
         """
         Acquire data for the power sweep experiment.
-        
+
         Args:
             progress: Whether to show progress bar
-            
+
         Returns:
             Acquired data
         """

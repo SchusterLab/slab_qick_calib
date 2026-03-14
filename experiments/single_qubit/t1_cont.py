@@ -936,7 +936,7 @@ class T1ContExperiment(QickExperiment):
         """
         try:
             fname_path = Path(self.fname)
-            images_dir = fname_path.parent / "images"
+            images_dir = fname_path.parent.parent / "images"
             images_dir.mkdir(exist_ok=True)
             return images_dir / f"{fname_path.stem}.png"
         except (AttributeError, TypeError):

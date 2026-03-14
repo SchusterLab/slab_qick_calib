@@ -280,6 +280,9 @@ class T1Experiment(QickExperiment):
         # Define parameter metadata for plotting
         self.param = {"label": "wait", "param": "t", "param_type": "time"}
 
+        # Ensure sweep step size is above DAC minimum resolution
+        self.check_dac_timing(num_segments=1)
+
         # Create a 1D sweep for the wait time from start to start+span
         self.cfg.expt.wait_time = QickSweep1D(
             "wait_loop", self.cfg.expt.start, self.cfg.expt.start + self.cfg.expt.span
@@ -342,8 +345,8 @@ class T1Experiment(QickExperiment):
         # Get qubit index for plot title
         qubit = self.cfg.expt.qubit[0]
         title = f"$T_1$ Q{qubit}"
-        if self.cfg.expt.flux:
-            title += f" (Flux Gain {self.cfg.expt.flux_gain})"
+        if self.cfg.expt.get("flux", False):
+            title += f" (Flux Gain {self.cfg.expt.flux_gain:0.3f})"
 
         # Define caption parameters to display T1 fit result
         caption_params = [
@@ -362,6 +365,7 @@ class T1Experiment(QickExperiment):
             fitfunc=self.fitfunc,
             caption_params=caption_params,
             rescale=rescale,
+            **kwargs,
         )
 
     def update(self, rng_vals=[0.5, 500], first_time=False, verbose=True):

@@ -23,6 +23,7 @@ from qick import *
 
 from ...exp_handling.experiment import Experiment
 from ...analysis import fitting as fitter
+from .qick_experiment import DisplayManager
 
 
 class QickExperiment2Q(Experiment):
@@ -42,7 +43,7 @@ class QickExperiment2Q(Experiment):
         rounds: Number of software averages (maximum of the two qubits)
     """
 
-    def __init__(self, cfg_dict=None, prefix="QickExp", progress=None, qi=[0]):
+    def __init__(self, cfg_dict=None, prefix="QickExp", progress=None, qi=[0], display=None):
         """
         Initialize the QickExperiment2Q with hardware configuration.
 
@@ -55,6 +56,7 @@ class QickExperiment2Q(Experiment):
             prefix: Prefix for saved data files (default: "QickExp")
             progress: Whether to show progress bars during execution
             qi: List of qubit indices to use for the experiment (default: [0])
+            display: Display mode for plots (e.g. 'talk' for presentation-sized text)
         """
         soccfg = cfg_dict["soc"]
         path = cfg_dict["expt_path"]
@@ -68,6 +70,7 @@ class QickExperiment2Q(Experiment):
             progress=progress,
             im=im,
         )
+        self._display_mode = display
         # Use maximum reps and rounds from both qubits
         reps = np.max([self.cfg.device.readout.reps[q] for q in qi])
         rounds = np.max([self.cfg.device.readout.rounds[q] for q in qi])
@@ -235,6 +238,7 @@ class QickExperiment2Q(Experiment):
         fitfunc=None,
         caption_params=[],
         debug=False,
+        display=None,
         **kwargs,
     ):
         """
@@ -269,18 +273,22 @@ class QickExperiment2Q(Experiment):
             save_fig = False
 
         nq = len(self.cfg.expt.qubit)
-        
+
+        # Use instance display mode as fallback
+        display = display or getattr(self, '_display_mode', None)
+        DisplayManager.apply_display_style(display)
+
         # Configure plot layout based on what to display
         if plot_all:
             # Create 3-panel figure for amplitude, I, and Q
-            fig, ax = plt.subplots(3, 1, figsize=(7.5, 9.5))
+            fig, ax = plt.subplots(3, 1, figsize=DisplayManager.scale_figsize((7.5, 9.5), display))
             fig.suptitle(title)
             ylabels = ["Amplitude [ADC units]", "I [ADC units]", "Q [ADC units]"]
             ydata_lab = ["amps", "avgi", "avgq"]
         else:
             # Create figure with one panel per qubit for I quadrature
             if ax is None:
-                fig, ax = plt.subplots(nq, 1, figsize=(7, 7))
+                fig, ax = plt.subplots(nq, 1, figsize=DisplayManager.scale_figsize((7, 7), display))
             ylabels = ["I [ADC units]"]
             ydata_lab = ["avgi"]
             # Set titles for each qubit
@@ -338,7 +346,7 @@ class QickExperiment2Q(Experiment):
 
         # Show histograms if requested
         if show_hist:
-            fig2, ax = plt.subplots(1, nq, figsize=(3 * nq, 3))
+            fig2, ax = plt.subplots(1, nq, figsize=DisplayManager.scale_figsize((3 * nq, 3), display))
             for i in range(nq):
                 ax[i].plot(
                     data["bin_centers"][i],
