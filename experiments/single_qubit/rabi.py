@@ -299,7 +299,7 @@ class RabiExperiment(QickExperiment):
         if params["sweep"] == "amp":
             if params["n_pulses"] == 1:
                 # Single pulse: sweep from near zero to cover desired oscillations
-                params_def["start"] = 0.003 # Minimum gain that works for current QICK
+                params_def["start"] = 0.005 # Minimum gain that works for current QICK
                 params_def["max_gain"] = params["gain"] * params["num_osc"] * 2
             else:
                 # Multiple pulses: sweep around nominal gain for pi pulse in small range 

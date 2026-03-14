@@ -290,6 +290,8 @@ class QickProgram(AveragerProgramV2):
             "phase": pulse.phase,  # Pulse phase
             "gain": pulse.gain,  # Pulse amplitude
         }
+        # print('pulse: {}'.format(pulse))
+        # print('pulse_args: {}'.format(pulse_args))
 
         # Create different pulse types based on pulse.type
         if pulse.type == "gauss":

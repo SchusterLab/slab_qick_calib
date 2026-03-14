@@ -24,6 +24,9 @@ from qick import *
 from ...exp_handling.experiment import Experiment
 from ...analysis import fitting as fitter
 
+from pathlib import Path
+
+
 
 class QickExperiment2Q(Experiment):
     """
@@ -446,6 +449,17 @@ class QickExperiment2Q(Experiment):
         print(f"Saving {self.fname}")
         super().save_data(data=data)
         return self.fname
+
+    def save_fig(self, fig, suffix=''):
+        """Save figure to disk."""
+        fig.tight_layout()
+
+        file_path = Path(self.fname)
+        new_filename = file_path.name.rsplit(".", 1)[0] + suffix + ".png"
+        output_path = Path(self.path) / "images" / new_filename
+
+        fig.savefig(output_path)
+        plt.show()
 
     def get_params(self, prog):
         """
