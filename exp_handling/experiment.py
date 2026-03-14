@@ -195,8 +195,12 @@ class Experiment:
             self.im = im
 
         # Set up data file name - save to 'data' subdirectory
-        data_path = Path(path) / "data"
-        data_path.mkdir(exist_ok=True)
+        # For absolute paths: path/data, for relative paths: data/path
+        if Path(path).is_absolute():
+            data_path = Path(path) / "data"
+        else:
+            data_path = Path("data") / path
+        data_path.mkdir(parents=True, exist_ok=True)
         if fname is not None:
             self.fname = str(data_path / fname)
         else:

@@ -220,8 +220,11 @@ class DisplayManager:
             debug: Whether to show debug info
         """
         # Plot data points (excluding first and last points)
-        ax.plot(data["xpts"][1:-1], data[ydata][1:-1], "o-", rasterized=True)
-        
+        plot_full=True
+        if plot_full:
+            ax.plot(data["xpts"], data[ydata], "o-", rasterized=True)
+        else:
+            ax.plot(data["xpts"][1:-1], data[ydata][1:-1], "o", rasterized=True)
         if fit_params is not None and fitfunc is not None:
             p = fit_params
             pCov = data.get("fit_err_" + ydata, None)

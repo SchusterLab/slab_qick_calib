@@ -69,8 +69,8 @@ def check_chi(cfg_dict, qi=0, span=7, df=-0.5, npts=301, plot=False, check_f=Fal
                 "span": span,
                 "center": center,
                 "npts": npts,
-                "rounds": 5,
-                "final_delay": auto_cfg.device.qubit.T1[qi] *4,
+                "rounds": 3,
+                "final_delay": final_delay,
                 "pulse_e": True,
                 "pulse_f": True,
             },
@@ -154,14 +154,14 @@ def check_chi(cfg_dict, qi=0, span=7, df=-0.5, npts=301, plot=False, check_f=Fal
     plt.show()
 
     file_path = Path(rspec.fname)
-    fig.savefig(file_path.parent / "images" / (file_path.stem + "_chi.png"))
+    fig.savefig(file_path.parent.parent / "images" / (file_path.stem + "_chi.png"))
     return (
         [chi, rspec],
         chi_val,
     )
 
 
-def measure_temp(cfg_dict, qi, temp=40, expts=20, chan=None):
+def measure_temp(cfg_dict, qi, temp=40, expts=32, chan=None, bf_client=None, no_fit=True):
     """
     Measures the temperature of a qubit.
     This is done by measuring the population of the excited state with and without a pi pulse.
@@ -181,14 +181,25 @@ def measure_temp(cfg_dict, qi, temp=40, expts=20, chan=None):
         The number of rounds to run.
     chan : int
         The channel to use for the measurement.
+    bf_client : object, optional
+        Bluefors client for reading mixing chamber temperature.
 
     Returns
     -------
     tuple
         A tuple containing the qubit temperature and the population of the excited state.
     """
+    # Read MXC temperature at the beginning if bf_client is provided
+    auto_cfg = config.load(cfg_dict["cfg_file"])
+    max_gain = auto_cfg["device"]["qubit"]["pulses"]["pi_ef"]["gain"][qi]*5.2
+    mxc_temp = np.nan
+    if bf_client is not None:
+        try:
+            mxc_temp = bf_client.get_mxc_temperature() * 1000  # Convert K to mK
+        except Exception as e:
+            print(f"Warning: failed to read MXC temperature: {e}")
     rabief = RabiExperiment(
-        cfg_dict, qi=qi, params={"pulse_ge": True, "checkEF": True}
+        cfg_dict, qi=qi, params={"pulse_ge": True, "checkEF": True, "max_gain": max_gain, "expts": expts}
     )
     rabief_nopulse = RabiExperiment(
         cfg_dict,
@@ -198,31 +209,43 @@ def measure_temp(cfg_dict, qi, temp=40, expts=20, chan=None):
             "pulse_ge": False,
             "checkEF": True,
             "temp": temp,
+            "max_gain": max_gain,
         },
         style="temp",
     )
 
     # To measure temperature, use fewer points to get more signal more quickly
     fge = 1e6 * rabief.cfg.device.qubit.f_ge[qi]
+    fef = 1e6 * rabief.cfg.device.qubit.f_ef[qi]
     if chan is None:
         population = rabief_nopulse.data["best_fit"][0] / rabief.data["best_fit"][0]
+        chan = str(rabief_nopulse.data["i_best"])[2:-1]
+        rng_ge = np.max(rabief.data[chan]) - np.min(rabief.data[chan])
+        rng_noge = np.max(rabief_nopulse.data[chan]) - np.min(rabief_nopulse.data[chan])
+        population = rng_noge / (rng_ge+rng_noge)
     else:
-        population = rabief_nopulse.data[chan][0] / rabief.data[chan][0]
+        if no_fit: 
+            population = rabief_nopulse.data[chan][0] / rabief.data[chan][0]
+        else:
+            rng_ge = np.max(rabief.data[chan]) - np.min(rabief.data[chan])
+            rng_noge = np.max(rabief_nopulse.data[chan]) - np.min(rabief_nopulse.data[chan])
+            population = rng_noge / rng_ge
 
-    qubit_temp = -1e3 * cs.h * fge / (cs.k * np.log(population))
+    qubit_temp = -1e3 * cs.h * fef / (cs.k * np.log(population/(1-population)))
 
     fig, ax = plt.subplots(1, 1)
-    i_best = str(rabief.data["i_best"])[2:-1]
     ax.plot(
         rabief.data["xpts"],
-        rabief.data[i_best] - np.min(rabief.data[i_best]),
+        rabief.data[chan] - np.min(rabief.data[chan]),
+        "o-",
         label="ge Pulse",
     )
     ax.set_ylabel("ge Pulse")
     axt = plt.twinx()
     axt.plot(
         rabief_nopulse.data["xpts"],
-        rabief_nopulse.data[i_best] - np.min(rabief_nopulse.data[i_best]),
+        rabief_nopulse.data[chan] - np.min(rabief_nopulse.data[chan]),
+        "o-",
         label="No ge Pulse",
         color=colors[1],
     )
@@ -232,12 +255,16 @@ def measure_temp(cfg_dict, qi, temp=40, expts=20, chan=None):
     axt.yaxis.label.set_color(colors[1])
     axt.set_xlabel("Gain (DAC units)")
     axt.set_ylabel("No ge Pulse")
-    ax.set_title(
-        f"Qubit {qi} Temperature: {qubit_temp:0.2f} mK, Population: {population:0.2g}"
-    )
+
+    # Add MXC temperature to title if available
+    if np.isnan(mxc_temp):
+        title = f"Qubit {qi} Temperature: {qubit_temp:0.2f} mK, Population: {population:0.2g}"
+    else:
+        title = f"Qubit {qi} Temperature: {qubit_temp:0.2f} mK, Population: {population:0.2g}, MXC: {mxc_temp:.1f} mK"
+    ax.set_title(title)
 
     file_path = Path(rabief.fname)
-    fig.savefig(file_path.parent / "images" / (file_path.stem + "_temp.png"))
+    fig.savefig(file_path.parent.parent / "images" / (file_path.stem + "_temp.png"))
     plt.show()
 
-    return qubit_temp, population
+    return qubit_temp, population, rabief_nopulse, rabief

@@ -132,6 +132,9 @@ class ResSpecProgram(QickProgram):
         if cfg.expt.pulse_e:
             super().make_cfg_pulse(q, cfg.device.qubit.f_ge, "pi_ge")
 
+        if cfg.expt.pulse_f:
+            super().make_cfg_pulse(q, cfg.device.qubit.f_ef, "pi_ef")
+
     def _body(self, cfg):
         """
         Define the main body of the experiment sequence.
@@ -647,10 +650,11 @@ class ResSpecPower(QickExperiment2DSimple):
         go=True,
         live_plot=False,
         params={},
+        disp_kwargs=None,
     ):
         """
         Initialize the power sweep resonator spectroscopy experiment.
-        
+
         Args:
             cfg_dict: Configuration dictionary
             prefix: Prefix for data files
@@ -658,6 +662,7 @@ class ResSpecPower(QickExperiment2DSimple):
             qi: Qubit index
             go: Whether to run the experiment immediately
             params: Additional parameters to override defaults
+            disp_kwargs: Display options dictionary (e.g., plot_phase=True)
         """
         # Determine qubit state for filename
         state = 'e' if "pulse_e" in params and params['pulse_e'] else None
@@ -703,7 +708,7 @@ class ResSpecPower(QickExperiment2DSimple):
         if go:
             self.run(analyze=False, display=False, progress=False, save=True)
             self.analyze(fit=True, lowgain=None, highgain=None)
-            self.display(fit=True)
+            self.display(fit=True, **(disp_kwargs or {}))
         
 
 
@@ -831,13 +836,14 @@ class ResSpecPower(QickExperiment2DSimple):
 
         return data
 
-    def display(self, data=None, fit=True, **kwargs):
+    def display(self, data=None, fit=True, plot_phase=False, **kwargs):
         """
         Display the results of the power sweep experiment.
-        
+
         Args:
             data: Data to display (if None, use self.data)
             fit: Whether to show the fit results
+            plot_phase: Whether to show phase heatmap and phase line plots
             **kwargs: Additional arguments for the display
         """
         data = self.data if data is None else data
@@ -893,7 +899,7 @@ class ResSpecPower(QickExperiment2DSimple):
         super().save_fig(fig)
 
         # Phase plots
-        if 'phases_corrected' in data:
+        if plot_phase and 'phases_corrected' in data:
             freqs = x_sweep
             gains = y_sweep
             phases_corrected = data['phases_corrected']
@@ -924,8 +930,12 @@ class ResSpecPower(QickExperiment2DSimple):
             if phases_corrected.shape[0] <= 20:
                 plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)
             else:
-                sm = plt.cm.ScalarMappable(cmap=plt.cm.viridis,
-                                            norm=plt.Normalize(vmin=gains.min(), vmax=gains.max()))
+                if self.cfg.expt.get('log', False):
+                    from matplotlib.colors import LogNorm
+                    norm = LogNorm(vmin=gains.min(), vmax=gains.max())
+                else:
+                    norm = plt.Normalize(vmin=gains.min(), vmax=gains.max())
+                sm = plt.cm.ScalarMappable(cmap=plt.cm.viridis, norm=norm)
                 sm.set_array([])
                 cbar = plt.colorbar(sm, ax=ax3)
                 cbar.set_label(self.ylabel)
