@@ -357,8 +357,8 @@ class StarkSpec(QickExperiment2DSweep):
             print(f"n: {n}") # This is n photons/gain
             self.data['df_readout']=self.cfg.device.qubit.f_ge[self.cfg.expt.qubit[0]] - quadratic(gain = self.cfg.device.readout.gain[self.cfg.expt.qubit[0]], *self.data["popt"])
             
-        # except:
-        #     print('Fit failed')
+        except:
+            print('Fit failed')
 
         # Store the fitted qubit frequency
         #        data["new_freq"] = data["best_fit"][2]
