@@ -1,3 +1,4 @@
+from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 from qick import *
@@ -406,9 +407,8 @@ class SingleShotOptExperiment(QickExperiment):
                     return data[:, i[0], i[1]].reshape(-1)
 
         m = 0.5
-        imname = self.fname.split("\\")[-1]
-        folder = self.fname[0 : -len(imname)]
-        imname = imname[0:-3]
+        imname = Path(self.fname).stem
+        folder = Path(self.path)
 
         if ndims == 1:
             row, col = smart_ax(npts[0])
@@ -436,7 +436,7 @@ class SingleShotOptExperiment(QickExperiment):
                 )
 
                 ax[i].set_title(f"{labs[inds[0]]} {data[sweep_var[0]][i]:.2f}")
-            fig.savefig(folder + "images\\" + f"{imname}_raw.png")
+            fig.savefig(folder / "images" / f"{imname}_raw.png")
 
         elif ndims == 2:
             fig, ax = plt.subplots(npts[0], npts[1], figsize=(npts[1] * 3, npts[0] * 3))
@@ -470,7 +470,7 @@ class SingleShotOptExperiment(QickExperiment):
             plt.figtext(
                 0.0, 0.5, labs[inds[0]], verticalalignment="center", rotation="vertical"
             )
-            fig.savefig(folder + "images\\" + f"{imname}_raw.png")
+            fig.savefig(folder / "images" / f"{imname}_raw.png")
         else:
             for k in range(npts[2]):
                 fig, ax = plt.subplots(
@@ -496,70 +496,186 @@ class SingleShotOptExperiment(QickExperiment):
                             markersize=m,
                             rasterized=True,
                         )
-                fig.suptitle(title)
+                        if i == npts[0] - 1:
+                            ax[i, j].set_xlabel(np.round(self.data[sweep_var[1]][j], 2))
+                        if j == 0:
+                            ax[i, j].set_ylabel(np.round(self.data[sweep_var[0]][i], 2))
+
+                # Add figure title with constant parameter value
+                const_param_value = data[sweep_var[2]][k]
+                fig.suptitle(f"{title}, {labs[inds[2]]} = {const_param_value:.2f}")
+
+                # Add figure-level axis labels
+                plt.figtext(0.5, 0.0, labs[inds[1]], horizontalalignment="center")
+                plt.figtext(
+                    0.0, 0.5, labs[inds[0]], verticalalignment="center", rotation="vertical"
+                )
+
                 fig.tight_layout()
-                fig.savefig(folder + "images\\" + f"{imname}_raw_{k}.png")
+                fig.savefig(folder / "images" / f"{imname}_raw_{k}.png")
 
         title = f"Single Shot Optimization Q{self.cfg.expt.qubit[0]}"
-        fig = plt.figure(figsize=(9, 5.5))
-        plt.title(title)
+
+        # For 3D scans, create multiple plots (one per var2 value)
+        # For 1D/2D scans, keep single plot behavior
         if len(fpts) > 1:
             xval = fpts
             xlabel = "Frequency (MHz)"
             var1 = gainpts
+            var1_label = "Gain"
             var2 = lenpts
-            npts = len(var1) * len(var2)
-            bb = sns.color_palette("coolwarm", npts)
-            leg_title = "Gain, Len ($\mu$s)"
-            for v1_ind, v1 in enumerate(var1):
+            var2_label = "Len ($\mu$s)"
+
+            if ndims == 3:
+                # 3D scan: create separate plot for each var2 value
                 for v2_ind, v2 in enumerate(var2):
-                    plt.plot(
-                        xval,
-                        100 * fid[:, v1_ind, v2_ind],
-                        "o-",
-                        label=f"{v1:.2f}, {v2:.2f}",
-                        color=bb[v1_ind * len(var2) + v2_ind],
-                    )
+                    fig = plt.figure(figsize=(9, 5.5))
+                    plt.title(f"{title}, {var2_label} = {v2:.3f}")
+                    bb = sns.color_palette("coolwarm", len(var1))
+
+                    for v1_ind, v1 in enumerate(var1):
+                        plt.plot(
+                            xval,
+                            100 * fid[:, v1_ind, v2_ind],
+                            "o-",
+                            label=f"{v1:.3f}",
+                            color=bb[v1_ind],
+                        )
+
+                    plt.xlabel(xlabel)
+                    plt.ylabel(f"Fidelity [%]")
+                    plt.legend(title=var1_label)
+                    fig.savefig(folder / "images" / f"{imname}_{v2_ind}.png")
+                    plt.show()
+            else:
+                # 1D/2D scan: single plot with all combinations
+                fig = plt.figure(figsize=(9, 5.5))
+                plt.title(title)
+                npts = len(var1) * len(var2)
+                bb = sns.color_palette("coolwarm", npts)
+                leg_title = "Gain, Len ($\mu$s)"
+
+                for v1_ind, v1 in enumerate(var1):
+                    for v2_ind, v2 in enumerate(var2):
+                        plt.plot(
+                            xval,
+                            100 * fid[:, v1_ind, v2_ind],
+                            "o-",
+                            label=f"{v1:.3f}, {v2:.3f}",
+                            color=bb[v1_ind * len(var2) + v2_ind],
+                        )
+
+                plt.xlabel(xlabel)
+                plt.ylabel(f"Fidelity [%]")
+                plt.legend(title=leg_title)
+                fig.savefig(folder / "images" / (imname + ".png"))
+                plt.show()
+
         elif len(gainpts) > 1:
             xval = gainpts
             xlabel = "Gain/Max Gain"
             var1 = fpts
+            var1_label = "Freq (MHz)"
             var2 = lenpts
-            npts = len(var1) * len(var2)
-            bb = sns.color_palette("coolwarm", npts)
-            leg_title = "Freq (MHz), Len ($\mu$s)"
-            for v1_ind, v1 in enumerate(var1):
+            var2_label = "Len ($\mu$s)"
+
+            if ndims == 3:
+                # 3D scan: create separate plot for each var2 value
                 for v2_ind, v2 in enumerate(var2):
-                    plt.plot(
-                        xval,
-                        100 * fid[v1_ind, :, v2_ind],
-                        "o-",
-                        label=f"{v1:.2f}, {v2:.2f}",
-                        color=bb[v1_ind * len(var2) + v2_ind],
-                    )
+                    fig = plt.figure(figsize=(9, 5.5))
+                    plt.title(f"{title}, {var2_label} = {v2:.3f}")
+                    bb = sns.color_palette("coolwarm", len(var1))
+
+                    for v1_ind, v1 in enumerate(var1):
+                        plt.plot(
+                            xval,
+                            100 * fid[v1_ind, :, v2_ind],
+                            "o-",
+                            label=f"{v1:.3f}",
+                            color=bb[v1_ind],
+                        )
+
+                    plt.xlabel(xlabel)
+                    plt.ylabel(f"Fidelity [%]")
+                    plt.legend(title=var1_label)
+                    fig.savefig(folder / "images" / f"{imname}_{v2_ind}.png")
+                    plt.show()
+            else:
+                # 1D/2D scan: single plot with all combinations
+                fig = plt.figure(figsize=(9, 5.5))
+                plt.title(title)
+                npts = len(var1) * len(var2)
+                bb = sns.color_palette("coolwarm", npts)
+                leg_title = "Freq (MHz), Len ($\mu$s)"
+
+                for v1_ind, v1 in enumerate(var1):
+                    for v2_ind, v2 in enumerate(var2):
+                        plt.plot(
+                            xval,
+                            100 * fid[v1_ind, :, v2_ind],
+                            "o-",
+                            label=f"{v1:.3f}, {v2:.3f}",
+                            color=bb[v1_ind * len(var2) + v2_ind],
+                        )
+
+                plt.xlabel(xlabel)
+                plt.ylabel(f"Fidelity [%]")
+                plt.legend(title=leg_title)
+                fig.savefig(folder / "images" / (imname + ".png"))
+                plt.show()
+
         else:
             xval = lenpts
             xlabel = "Readout length ($\mu$s)"
             var1 = fpts
+            var1_label = "Freq (MHz)"
             var2 = gainpts
-            npts = len(var1) * len(var2)
-            bb = sns.color_palette("coolwarm", npts)
-            leg_title = "Freq (MHz), Gain"
-            for v1_ind, v1 in enumerate(var1):
-                for v2_ind, v2 in enumerate(var2):
-                    plt.plot(
-                        xval,
-                        100 * fid[v1_ind, v2_ind, :],
-                        "o-",
-                        label=f"{v2:1.0f},  {v1:.2f}",
-                        color=bb[v1_ind * len(var2) + v2_ind],
-                    )
+            var2_label = "Gain"
 
-        plt.xlabel(xlabel)
-        plt.ylabel(f"Fidelity [%]")
-        plt.legend(title=leg_title)
-        fig.savefig(folder + "images\\" + imname + ".png")
-        plt.show()
+            if ndims == 3:
+                # 3D scan: create separate plot for each var2 value
+                for v2_ind, v2 in enumerate(var2):
+                    fig = plt.figure(figsize=(9, 5.5))
+                    plt.title(f"{title}, {var2_label} = {v2:.3f}")
+                    bb = sns.color_palette("coolwarm", len(var1))
+
+                    for v1_ind, v1 in enumerate(var1):
+                        plt.plot(
+                            xval,
+                            100 * fid[v1_ind, v2_ind, :],
+                            "o-",
+                            label=f"{v1:.3f}",
+                            color=bb[v1_ind],
+                        )
+
+                    plt.xlabel(xlabel)
+                    plt.ylabel(f"Fidelity [%]")
+                    plt.legend(title=var1_label)
+                    fig.savefig(folder / "images" / f"{imname}_{v2_ind}.png")
+                    plt.show()
+            else:
+                # 1D/2D scan: single plot with all combinations
+                fig = plt.figure(figsize=(9, 5.5))
+                plt.title(title)
+                npts = len(var1) * len(var2)
+                bb = sns.color_palette("coolwarm", npts)
+                leg_title = "Freq (MHz), Gain"
+
+                for v1_ind, v1 in enumerate(var1):
+                    for v2_ind, v2 in enumerate(var2):
+                        plt.plot(
+                            xval,
+                            100 * fid[v1_ind, v2_ind, :],
+                            "o-",
+                            label=f"{v2:.3f},  {v1:.3f}",
+                            color=bb[v1_ind * len(var2) + v2_ind],
+                        )
+
+                plt.xlabel(xlabel)
+                plt.ylabel(f"Fidelity [%]")
+                plt.legend(title=leg_title)
+                fig.savefig(folder / "images" / (imname + ".png"))
+                plt.show()
 
         if plot_pars:
             tmv = self.data["tm"][0]

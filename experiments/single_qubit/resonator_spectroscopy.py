@@ -132,6 +132,9 @@ class ResSpecProgram(QickProgram):
         if cfg.expt.pulse_e:
             super().make_cfg_pulse(q, cfg.device.qubit.f_ge, "pi_ge")
 
+        if cfg.expt.pulse_f:
+            super().make_cfg_pulse(q, cfg.device.qubit.f_ef, "pi_ef")
+
     def _body(self, cfg):
         """
         Define the main body of the experiment sequence.
@@ -647,10 +650,11 @@ class ResSpecPower(QickExperiment2DSimple):
         go=True,
         live_plot=False,
         params={},
+        disp_kwargs=None,
     ):
         """
         Initialize the power sweep resonator spectroscopy experiment.
-        
+
         Args:
             cfg_dict: Configuration dictionary
             prefix: Prefix for data files
@@ -658,6 +662,7 @@ class ResSpecPower(QickExperiment2DSimple):
             qi: Qubit index
             go: Whether to run the experiment immediately
             params: Additional parameters to override defaults
+            disp_kwargs: Display options dictionary (e.g., plot_phase=True)
         """
         # Determine qubit state for filename
         state = 'e' if "pulse_e" in params and params['pulse_e'] else None
@@ -703,7 +708,7 @@ class ResSpecPower(QickExperiment2DSimple):
         if go:
             self.run(analyze=False, display=False, progress=False, save=True)
             self.analyze(fit=True, lowgain=None, highgain=None)
-            self.display(fit=True)
+            self.display(fit=True, **(disp_kwargs or {}))
         
 
 
@@ -812,15 +817,33 @@ class ResSpecPower(QickExperiment2DSimple):
             data['freq']= [fhi, flo]
             data['kappa']= [kappa_hi, kappa_lo]
 
+        # Phase correction: remove linear phase slope
+        phases_2d = data['phases']
+        freqs = data['xpts']
+
+        first_line_phase = phases_2d[-1, :]
+        unwrapped_first = np.unwrap(first_line_phase)
+        npts = min(25, len(freqs))
+        coeffs = np.polyfit(freqs[:npts], unwrapped_first[:npts], 1)
+        linear_fit = coeffs[0] * freqs + coeffs[1]
+
+        phases_corrected = np.zeros_like(phases_2d)
+        for i in range(phases_2d.shape[0]):
+            unwrapped_phase = np.unwrap(phases_2d[i, :])
+            phases_corrected[i, :] = np.unwrap(unwrapped_phase - linear_fit)
+
+        data['phases_corrected'] = phases_corrected
+
         return data
 
-    def display(self, data=None, fit=True, **kwargs):
+    def display(self, data=None, fit=True, plot_phase=False, **kwargs):
         """
         Display the results of the power sweep experiment.
-        
+
         Args:
             data: Data to display (if None, use self.data)
             fit: Whether to show the fit results
+            plot_phase: Whether to show phase heatmap and phase line plots
             **kwargs: Additional arguments for the display
         """
         data = self.data if data is None else data
@@ -874,6 +897,53 @@ class ResSpecPower(QickExperiment2DSimple):
         
         # Save figure
         super().save_fig(fig)
+
+        # Phase plots
+        if plot_phase and 'phases_corrected' in data:
+            freqs = x_sweep
+            gains = y_sweep
+            phases_corrected = data['phases_corrected']
+
+            # 2D corrected phase heatmap
+            fig2, ax2 = plt.subplots(1, 1, figsize=(10, 8))
+            plt.pcolormesh(freqs, gains, phases_corrected, shading="auto", rasterized=True)
+            plt.xlabel(self.xlabel)
+            plt.ylabel(self.ylabel)
+            plt.colorbar(label='Phase (radians)')
+            if self.cfg.expt.get('log', False):
+                plt.yscale('log')
+            plt.title(f"Resonator Phase vs Power Q{qubit}")
+            ax2.tick_params(top=True, bottom=True, right=True)
+            plt.tight_layout()
+            plt.show()
+            super().save_fig(fig2, suffix='_phase')
+
+            # Individual phase lines with color gradient
+            fig3, ax3 = plt.subplots(1, 1, figsize=(10, 8))
+            colors = plt.cm.viridis(np.linspace(1, 0, phases_corrected.shape[0]))
+            for i in range(phases_corrected.shape[0] - 1, -1, -1):
+                plt.plot(freqs, phases_corrected[i, :], label=f'Gain={gains[i]:.4f}',
+                         color=colors[i], alpha=0.7)
+            plt.xlabel(self.xlabel)
+            plt.ylabel('Phase (radians)')
+            plt.grid(True, alpha=0.3)
+            if phases_corrected.shape[0] <= 20:
+                plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)
+            else:
+                if self.cfg.expt.get('log', False):
+                    from matplotlib.colors import LogNorm
+                    norm = LogNorm(vmin=gains.min(), vmax=gains.max())
+                else:
+                    norm = plt.Normalize(vmin=gains.min(), vmax=gains.max())
+                sm = plt.cm.ScalarMappable(cmap=plt.cm.viridis, norm=norm)
+                sm.set_array([])
+                cbar = plt.colorbar(sm, ax=ax3)
+                cbar.set_label(self.ylabel)
+            plt.title(f"Phase Lines Q{qubit}")
+            ax3.tick_params(top=True, bottom=True, right=True)
+            plt.tight_layout()
+            plt.show()
+            super().save_fig(fig3, suffix='_phase_lines')
 
 class ResSpec2D(QickExperiment2DSimple):
     """
@@ -1033,8 +1103,7 @@ class ResSpec2D(QickExperiment2DSimple):
         plt.show()
         
         # Save figure
-        imname = self.fname.split("\\")[-1]
-        fig.savefig(self.fname[0 : -len(imname)] + "images\\" + imname[0:-3] + ".png")
+        self.save_fig(fig)
 
 
 def get_homophase(params):

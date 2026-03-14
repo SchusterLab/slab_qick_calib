@@ -1,17 +1,15 @@
 """
-Experiment handling modules for quantum control experiments.
+Experiment handling for quantum control experiments.
 
-This package provides modules for data management, analysis, and experiment
-control in quantum physics laboratories. It includes classes for experiment
-orchestration, HDF5-based data storage, instrument management via Pyro4,
-and common analysis utilities.
-
-Original code by David Schuster
-Taken from the slab repository
-
-Modules:
-    experiment: Base experiment class and framework
-    datamanagement: HDF5 data storage and management utilities  
-    dataanalysis: Analysis functions and plotting helpers
-    instrumentmanager: Instrument control via Pyro4 distributed objects
+Core components:
+    Experiment          - Base class for experiment orchestration
+    NpEncoder           - JSON encoder for numpy types
+    YamlNpEncoder       - YAML encoder for numpy types
+    SlabFile            - HDF5 data storage wrapper
+    AttrDict            - Dictionary with attribute-style access
+    InstrumentManager   - Pyro4-based remote instrument access
 """
+
+from .experiment import Experiment, NpEncoder, YamlNpEncoder
+from .datamanagement import SlabFile, AttrDict
+from .instrumentmanager import InstrumentManager

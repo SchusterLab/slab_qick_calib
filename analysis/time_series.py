@@ -3,6 +3,8 @@ import numpy as np
 from scipy.optimize import curve_fit
 import matplotlib.pyplot as plt
 import warnings
+from pathlib import Path
+from .collections import _get_tracking_base
 
 def welch_psd(
     data,
@@ -117,6 +119,7 @@ def analyze_qubit_psd(
     nperseg=None,
     plot=True,
     save_path=None,
+    tracking_id=None,
     fname="",
 ):
     """
@@ -142,7 +145,11 @@ def analyze_qubit_psd(
     plot : bool, optional
         Whether to create plots. Default is True.
     save_path : str, optional
-        Base path for saving plots
+        Base path for saving plots (will save to Tracking/images/)
+    tracking_id : str, optional
+        Tracking ID to include in filename
+    fname : str, optional
+        Additional string to append to filename
 
     Returns:
     --------
@@ -320,11 +327,20 @@ def analyze_qubit_psd(
 
         # Save plot if path provided
         if save_path:
-            filename = f"{parameter_name}_psd_analysis_{fname}"
+            # Save to Tracking/images/ with tracking_id in filename
+            tracking_base = _get_tracking_base(save_path)
+            images_dir = tracking_base / "images"
+            images_dir.mkdir(parents=True, exist_ok=True)
+
+            prefix = f"{tracking_id}_" if tracking_id else ""
+            filename = f"{prefix}{parameter_name}_psd"
             if qubit_id is not None:
-                filename += f"_qubit_{qubit_id}"
+                filename += f"_q{qubit_id}"
+            if fname:
+                filename += f"_{fname}"
             filename += ".png"
-            full_path = f"{save_path}/{filename}" if save_path else filename
+
+            full_path = images_dir / filename
             plt.savefig(full_path, dpi=300, bbox_inches="tight")
 
         plt.show()

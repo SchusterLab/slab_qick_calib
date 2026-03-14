@@ -220,8 +220,11 @@ class DisplayManager:
             debug: Whether to show debug info
         """
         # Plot data points (excluding first and last points)
-        ax.plot(data["xpts"][1:-1], data[ydata][1:-1], "o-", rasterized=True)
-        
+        plot_full=True
+        if plot_full:
+            ax.plot(data["xpts"], data[ydata], "o-", rasterized=True)
+        else:
+            ax.plot(data["xpts"][1:-1], data[ydata][1:-1], "o", rasterized=True)
         if fit_params is not None and fitfunc is not None:
             p = fit_params
             pCov = data.get("fit_err_" + ydata, None)
@@ -609,20 +612,17 @@ class QickExperiment(Experiment):
         fig.tight_layout()
 
         file_path = Path(self.fname)
-        parent_dir = file_path.parent
         new_filename = file_path.name.rsplit(".", 1)[0] + suffix + ".png"
-        output_path = parent_dir / "images" / new_filename
-        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path = Path(self.path) / "images" / new_filename
 
         fig.savefig(output_path)
         plt.show()
 
     def save_config(self, suffix=''):
         file_path = Path(self.fname)
-        parent_dir = file_path.parent
         new_filename = file_path.name.rsplit(".", 1)[0] + suffix + ".yml"
-        output_path = parent_dir / "images" / new_filename
-        
+        output_path = Path(self.path) / "images" / new_filename
+
         with open(output_path, "w") as f:
             YamlNpEncoder.dump(self.cfg, f, default_flow_style=None)
 

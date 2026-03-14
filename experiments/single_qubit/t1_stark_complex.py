@@ -453,8 +453,7 @@ class T1StarkPowerContTimeExperiment(QickExperiment2DSimple):
         plt.tight_layout()
         plt.show()
 
-        imname = self.fname.split("\\")[-1]
-        fig.savefig(self.fname[0 : -len(imname)] + "images\\" + imname[0:-3] + ".png")
+        self.save_fig(fig)
 
 
 class T1StarkPowerContTime(QickExperiment2DSimple):
@@ -673,8 +672,7 @@ class T1StarkPowerContTime(QickExperiment2DSimple):
         plt.tight_layout()
         plt.show()
 
-        imname = self.fname.split("\\")[-1]
-        fig.savefig(self.fname[0 : -len(imname)] + "images\\" + imname[0:-3] + ".png")
+        self.save_fig(fig)
 
 
 def find_inverse_quad_fit(y, a, b, c):

@@ -1,4 +1,5 @@
 import numpy as np
+from pathlib import Path
 from qick import *
 
 from ...exp_handling.datamanagement import AttrDict
@@ -533,10 +534,9 @@ class T1Cont2QExperiment(QickExperiment2Q):
                     fig_comb_raw,
                 ]:
                     fig.tight_layout()
-                    imname = self.fname.split("\\")[-1]
+                    imname = Path(self.fname).stem
                     fig.savefig(
-                        self.fname[0 : -len(imname)]
-                        + f"images\\{imname[0:-3]}_Q{self.cfg.expt.qubit[q]}_{date_time}_{i}.png"
+                        Path(self.path) / "images" / f"{imname}_Q{self.cfg.expt.qubit[q]}_{date_time}_{i}.png"
                     )
                     i += 1
 

@@ -590,13 +590,9 @@ class RepMeasExperiment(QickExperiment):
         if self.cfg.expt.check_f:
             print(f"Threshold gf: {thresholds[1]:.3f}")
             print(f"Threshold ef: {thresholds[2]:.3f}")
-        imname = self.fname.split("\\")[-1]
-
         if savefig:
             plt.show()
-            fig.savefig(
-                self.fname[0 : -len(imname)] + "images\\" + imname[0:-3] + ".png"
-            )
+            self.save_fig(fig)
 
     def check_reset(self):
         nbins = 75

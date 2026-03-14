@@ -1,0 +1,67 @@
+aliases: {ip: 192.168.137.93, soc: smpd_qick}
+device:
+  qubit:
+    T1: [1, 50]
+    T2e: [100, 100]
+    T2r: [50, 50]
+    f_ef: [3800, 3800]
+    f_ge: [7407.77, 4000]
+    kappa: [0, 0]
+    low_gain: 0.003
+    max_gain: 1
+    pop: [0, 0]
+    pulses:
+      pi_ef:
+        gain: [0.15, 0.15]
+        phase: [0, 0]
+        sigma: [0.1, 0.1]
+        sigma_inc: [5, 5]
+        type: [gauss, gauss]
+      pi_ge:
+        gain: [1, 0.15]
+        phase: [0, 0]
+        sigma: [1.051, 0.1]
+        sigma_inc: [5, 5]
+        type: [const, gauss]
+    spec_gain: [1, 1]
+    temp: [0, 0]
+    tuned_up: [false, false]
+  readout:
+    active_reset: [false, false]
+    chi: [0, 0]
+    fidelity: [0, 0]
+    final_delay: [10, 300]
+    frequency: [6530.5442, 7000]
+    gain: [0.005, 0.05]
+    kappa: [0.4406, 0.5]
+    lamb: [1.3999, 0]
+    max_gain: 0.005
+    phase: [0, 0]
+    qe: [2.6744, 0]
+    qi: [3.3243, 0]
+    readout_length: [2, 5]
+    reps: [1, 1]
+    reps_base: 150
+    rescale: [false, false]
+    reset: [3, 3]
+    rounds: [1, 1]
+    rounds_base: 1
+    sigma: [0, 0]
+    threshold: [10, 10]
+    tm: [0, 0]
+    trig_offset: [0.5241, 0.5]
+hw:
+  soc:
+    adcs:
+      readout:
+        ch: [0, 0]
+        type: [dyn, dyn]
+    dacs:
+      qubit:
+        ch: [1, 1]
+        nyquist: [1, 1]
+        type: [full, full]
+      readout:
+        ch: [0, 0]
+        nyquist: [2, 2]
+        type: [full, full]

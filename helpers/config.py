@@ -458,6 +458,7 @@ def init_config(file_name, num_qubits, type="full", t1=50, aliases="Qick001", ip
             "readout_length": init_array(5),    # Readout pulse duration (μs)
             "threshold": init_array(10),        # State discrimination threshold
             "fidelity": init_array(0),          # Readout fidelity
+            "nstark": init_array(None),         # Stark photon number per unit gain²
             "tm": init_array(0),                # Measurement time constant
             "sigma": init_array(0),             # Readout histogram width
             "rescale": init_array(False),       # Rescaling flag

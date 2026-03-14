@@ -17,7 +17,7 @@ from qick.asm_v2 import QickSweep1D
 from qick import *
 from scipy.optimize import curve_fit
 
-
+from ...helpers import config
 from ...exp_handling.datamanagement import AttrDict
 from ..general.qick_experiment import QickExperiment2DSweep
 from ..general.qick_program import QickProgram
@@ -215,7 +215,7 @@ class StarkSpec(QickExperiment2DSweep):
         # Additional default parameters
         params_def2 = {
             "rounds": self.rounds,
-            "final_delay": 10,
+            "final_delay": 20,
             "length": 5,
             "stark_length":15,
             "stark_expts": 30,
@@ -290,8 +290,9 @@ class StarkSpec(QickExperiment2DSweep):
         # Acquire data using the QubitStarkSpecProgram
 
         super().acquire(QubitStarkSpecProgram, progress=progress, get_hist=False)
+
         self.data["stark_gain"] = np.linspace(
-            self.cfg.expt.max_stark_gain / self.cfg.expt.stark_rng,
+            self.cfg.expt.min_stark_gain,
             self.cfg.expt.max_stark_gain,
             self.cfg.expt.stark_expts,
         )
@@ -318,22 +319,23 @@ class StarkSpec(QickExperiment2DSweep):
 
         # Fit each row (y value) separately
         for i, ydata in enumerate(ydata_lab):
-            data["fit_" + ydata] = []
-            data["fit_err_" + ydata] = []
+            self.data["fit_" + ydata] = []
+            self.data["fit_err_" + ydata] = []
 
             # Iterate through each y value
-            for j in range(len(data["ypts"])):
+            for j in range(len(self.data["ypts"])):
                 # Fit this row to the model function
                 fit_pars, fit_err, init = self.fitterfunc(
-                    data["xpts"], data[ydata][j], fitparams=None
+                    self.data["xpts"], self.data[ydata][j], fitparams=None
                 )
                 # Store fit parameters and errors
-                data["fit_" + ydata].append(fit_pars)
-                data["fit_err_" + ydata].append(fit_err)
-
+                self.data["fit_" + ydata].append(fit_pars)
+                self.data["fit_err_" + ydata].append(fit_err)   
         # fit frequency of resonance moving
         f = [self.data["fit_avgi"][i][2] for i in range(len(self.data["fit_avgi"]))]
+        gamma = [self.data["fit_avgi"][i][3] for i in range(len(self.data["fit_avgi"]))]
         self.data['f'] = f
+        self.data['gamma'] = gamma
         # Remove entries where f is NaN from f and corresponding stark_gain (and ypts)
         f_arr = np.array(self.data["f"], dtype=float)
         stark_arr = np.array(self.data["stark_gain"], dtype=float)
@@ -347,23 +349,29 @@ class StarkSpec(QickExperiment2DSweep):
         try:
             popt, pcov = curve_fit(quadratic, self.data["stark_gain"], f)
             self.data["popt"] = popt
-            Delta = (
-                self.cfg.device.qubit.f_ge[self.cfg.expt.qubit[0]]
-                - self.cfg.device.readout.frequency[self.cfg.expt.qubit[0]]
-            )
+            # Delta = (
+            #     self.cfg.device.qubit.f_ge[self.cfg.expt.qubit[0]]
+            #     - self.cfg.device.readout.frequency[self.cfg.expt.qubit[0]]
+            # )
             chi = self.cfg.device.readout.chi[self.cfg.expt.qubit[0]]
-            n = popt[0] / 2 * chi
+            n = popt[0]  / chi
             self.data["n"] = n
-            print(f"n: {n}") # This is n photons/gain
-            self.data['df_readout']=self.cfg.device.qubit.f_ge[self.cfg.expt.qubit[0]] - quadratic(gain = self.cfg.device.readout.gain[self.cfg.expt.qubit[0]], *self.data["popt"])
-            
+            print(f"n photons/unit gain: {n}") # This is n photons/gain
+            self.data['df_readout']=self.cfg.device.qubit.f_ge[self.cfg.expt.qubit[0]] - quadratic(self.cfg.device.readout.gain[self.cfg.expt.qubit[0]], *self.data["popt"])
+            self.data['n_readout'] = n * self.cfg.device.readout.gain[self.cfg.expt.qubit[0]]**2
+        
         except:
-            print('Fit failed')
+             print('Fit failed')
 
         # Store the fitted qubit frequency
         #        data["new_freq"] = data["best_fit"][2]
 
         return self.data
+
+    def update(self, verbose=True):
+        qi = self.cfg.expt.qubit[0]
+        cfg_file = self.config_file
+        config.update_readout(cfg_file, "nstark", self.data["n"], qi, verbose=verbose)
 
     def display(self, data=None, fit=True, ax=None, plot_all=True, **kwargs):
         """
@@ -402,21 +410,26 @@ class StarkSpec(QickExperiment2DSweep):
         )
 
         # Plot the fitted curve
-        plt.plot(self.data["stark_gain"], self.data["f"], "o")
+        fig, ax = plt.subplots(2, 1, figsize=(8, 10), sharex=True)
+        ax[0].plot(self.data["stark_gain"], self.data["f"], "o")
+        ax[0].axhline(self.cfg.device.qubit.f_ge[self.cfg.expt.qubit[0]]+self.cfg.device.readout.chi[self.cfg.expt.qubit[0]]/2, color="k")
+        ax[0].axhline(self.cfg.device.qubit.f_ge[self.cfg.expt.qubit[0]], color="k")
         x_fit = np.linspace(
-            min(self.data["stark_gain"]), max(self.data["stark_gain"]), 100
+            0, max(self.data["stark_gain"]), 100
         )
         try:
             y_fit = quadratic(x_fit, *self.data["popt"])
-
-            plt.plot(x_fit, y_fit, label="Quadratic Fit")
+            ax[0].plot(x_fit, y_fit, label="Quadratic Fit")
         except:
             print('No fit to plot')
         gain = self.cfg.device.readout.gain[self.cfg.expt.qubit[0]]
-        plt.axvline(gain, color="k", linestyle="--", label="Readout gain")
-        plt.legend()
+        ax[0].axvline(gain, color="k", linestyle="--", label="Readout gain")
+        ax[0].legend()
+        ax[1].plot(self.data["stark_gain"], self.data["gamma"], "o")
+        ax[1].set_xlabel("Stark Gain")
+        ax[0].set_ylabel("Frequency (MHz)")
+        ax[1].set_ylabel("Gamma (MHz)")
         
-
 
 # Define a quadratic function
 def quadratic(x, a, c):

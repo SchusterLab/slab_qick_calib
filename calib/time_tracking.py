@@ -1,7 +1,7 @@
-import os
 import time
 from copy import deepcopy
 from datetime import datetime
+from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -334,7 +334,7 @@ def measure_setup(qi, cfg_dict):
 
 
 def measure_fast(qi, cfg_dict, i, tdir, t1_val, t2_val, display=False,t2_type='T2r'):
-    fname = os.path.join(tdir, f"t1_qubit{qi}_{i:05d}")
+    fname = str(Path(tdir) / f"t1_qubit{qi}_{i:05d}")
     t1 = meas.T1Experiment(
         cfg_dict,
         qi=qi,
@@ -345,7 +345,7 @@ def measure_fast(qi, cfg_dict, i, tdir, t1_val, t2_val, display=False,t2_type='T
         params={"span": 3.7 * t1_val},
     )
 
-    fname = os.path.join(tdir, f"{t2_type}_qubit{qi}_{i:05d}")
+    fname = str(Path(tdir) / f"{t2_type}_qubit{qi}_{i:05d}")
     if t2_type=='T2r':
         params = {"span": 3.2 * t2_val, 'experiment_type': 'ramsey'}
     else:
@@ -370,20 +370,20 @@ def measure_fast2(qi, cfg_dict, i, t2e=None, t1=None, t1_val=30, t2_val=30):
             cfg_dict, qi=qi, display=False, progress=False, style="fast"
         )
     else:
-        t1.fname = os.path.join(t1.fname.split("\\")[0:-1], f"t1_qubit{qi}_{i:%5d}")
+        t1.fname = str(Path(t1.fname).parent / f"t1_qubit{qi}_{i:%5d}")
         t1.span = 3.7 * t1_val
 
     if t2e is None:
         t2e = meas.T2Experiment(
             cfg_dict, qi=qi, display=False, progress=False, style="fast", params={'experiment_type':'echo'}
         )
-        t2e.fname = os.path.join(t2e.fname.split("\\")[0:-1], f"t2_qubit{qi}_{i:%5d}")
+        t2e.fname = str(Path(t2e.fname).parent / f"t2_qubit{qi}_{i:%5d}")
     t2e.span = 3 * t2_val
 
     return t1, t2e
 
 
-def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True):
+def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True, bf_client=None):
     """
     Track qubit parameters over time.
 
@@ -409,13 +409,14 @@ def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True)
         path where the data is saved
     """
     # Create directory for tracking data
-    base_path = "\\".join(cfg_dict["expt_path"].split("\\")[:-2]) + "\\Tracking\\"
+    base_path = Path(cfg_dict["expt_path"]).parent / "Tracking"
     tracking_id = f'{datetime.now().strftime("%Y_%m_%d_%H_%M")}_{total_time:.1f}hrs'
-    tracking_path = os.path.join(base_path, tracking_id)
-    os.makedirs(tracking_path, exist_ok=True)
-    os.mkdir(os.path.join(tracking_path, "images"))
+    tracking_path = base_path / tracking_id
+    tracking_path.mkdir(parents=True, exist_ok=True)
+    (base_path / "images").mkdir(exist_ok=True)
+    (tracking_path / "data").mkdir()
     cfg_dict = deepcopy(cfg_dict)  # Avoid modifying original cfg_dict
-    cfg_dict["expt_path"] = tracking_path
+    cfg_dict["expt_path"] = str(tracking_path)
 
     # Initialize timing variables
     start_time = time.time()
@@ -424,6 +425,19 @@ def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True)
 
     # Run measurements until total_time is reached
     while elapsed < total_time:
+        # Read MXC temperature and pulsetube status at start of each iteration
+        mxc_temp = np.nan
+        pulsetube_on = np.nan
+        if bf_client is not None:
+            try:
+                mxc_temp = bf_client.get_mxc_temperature()
+            except Exception as e:
+                print(f"Warning: failed to read MXC temperature: {e}")
+            try:
+                pulsetube_on = float(bf_client.is_pulsetube_on())
+            except Exception as e:
+                print(f"Warning: failed to read pulsetube status: {e}")
+
         for j, qi in enumerate(qubit_list):
             # Measure current time
             tm = time.time()
@@ -455,6 +469,9 @@ def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True)
                 )
             d["time"] = tm
             d["elapsed"] = elapsed
+            if bf_client is not None:
+                d["mxc_temp"] = mxc_temp
+                d["pulsetube_on"] = pulsetube_on
 
             # Store data for this iteration
             if i == 0 and j == 0:
@@ -471,11 +488,9 @@ def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True)
 
         # Save tracking data to CSV files
         for j, qi in enumerate(qubit_list):
-            csv_dir = os.path.join(base_path, "csv")
-            os.makedirs(csv_dir, exist_ok=True)
-            csv_path = os.path.join(
-                csv_dir, f"{tracking_id}_qubit_{qi}_tracking.csv"
-            )
+            csv_dir = base_path / "csv"
+            csv_dir.mkdir(exist_ok=True)
+            csv_path = str(csv_dir / f"{tracking_id}_qubit_{qi}_tracking.csv")
 
             # Convert tracking data dict to numpy arrays for saving
             data_arrays = {}
@@ -487,15 +502,80 @@ def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True)
             rows = np.vstack(list(data_arrays.values())).T
             # Future change to only add a new row 
             # Save to CSV
-            np.savetxt(csv_path, rows, delimiter=",", header=header, comments="")
+            np.savetxt(csv_path, rows, delimiter=",", header=header, comments="", fmt="%.5f")
 
-    
+
     tt_stats = calc_stats(tracking_data)
 
-    return tracking_data, tracking_path, tt_stats
+    return tracking_data, tracking_path, tt_stats, tracking_id
 
 
-def calc_stats(tracking_data): 
+def load_tracking(csv_dir, tracking_id=None, qubit_list=None):
+    """
+    Load tracking data from CSV files saved by time_tracking.
+
+    Parameters
+    ----------
+    csv_dir : str or Path
+        Path to the csv directory containing tracking CSV files
+    tracking_id : str, optional
+        Identifier for a specific run (e.g. "2026_02_09_14_30_12.0hrs").
+        If None, uses the most recent run.
+    qubit_list : list, optional
+        List of qubit indices to load. If None, inferred from filenames.
+
+    Returns
+    -------
+    tuple
+        (tracking_data, csv_dir, tt_stats) matching the time_tracking return format
+    """
+    import re
+
+    csv_dir = Path(csv_dir)
+    csv_files = sorted(csv_dir.glob("*_qubit_*_tracking.csv"))
+    if not csv_files:
+        raise FileNotFoundError(f"No tracking CSV files found in {csv_dir}")
+
+    # Group files by tracking_id (everything before '_qubit_')
+    runs = {}
+    for f in csv_files:
+        match = re.match(r"(.+)_qubit_(\d+)_tracking\.csv", f.name)
+        if match:
+            tid, qi = match.group(1), int(match.group(2))
+            runs.setdefault(tid, []).append((qi, f))
+
+    if tracking_id is None:
+        tracking_id = sorted(runs.keys())[-1]
+    if tracking_id not in runs:
+        available = ", ".join(sorted(runs.keys()))
+        raise ValueError(
+            f"tracking_id '{tracking_id}' not found. Available: {available}"
+        )
+
+    files = sorted(runs[tracking_id], key=lambda x: x[0])
+
+    if qubit_list is not None:
+        files = [(qi, f) for qi, f in files if qi in qubit_list]
+    else:
+        qubit_list = [qi for qi, _ in files]
+
+    tracking_data = []
+    for qi, fpath in files:
+        data = np.genfromtxt(fpath, delimiter=",", names=True)
+        qubit_dict = {name: data[name] for name in data.dtype.names}
+        tracking_data.append(qubit_dict)
+
+    tt_stats = calc_stats(tracking_data)
+
+    # Ensure images directory exists in Tracking folder
+    tracking_base = csv_dir.parent  # csv_dir is Tracking/csv, so parent is Tracking
+    (tracking_base / "images").mkdir(exist_ok=True)
+
+    print(f"Loaded tracking_id='{tracking_id}', qubits={qubit_list}")
+    return tracking_data, str(csv_dir), tt_stats, tracking_id
+
+
+def calc_stats(tracking_data):
 
     for qubit in tracking_data:
         t1_arr = np.array(qubit['t1'])
