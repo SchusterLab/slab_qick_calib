@@ -1,11 +1,16 @@
 import matplotlib.pyplot as plt
 import copy
+import functools
 import numpy as np
 from tqdm import tqdm_notebook as tqdm
 from datetime import datetime
 import time
 from pathlib import Path
-from visdom import Visdom
+try:
+    from IPython.display import display as ipy_display, clear_output
+    _HAS_IPYTHON = True
+except ImportError:
+    _HAS_IPYTHON = False
 from scipy.optimize import curve_fit
 import yaml
 from qick import *
@@ -158,20 +163,30 @@ class HistogramProcessor:
 
 DISPLAY_PRESETS = {
     "talk": {
-        "font.size": 18,
-        "axes.titlesize": 18,
-        "axes.labelsize": 20,
-        "xtick.labelsize": 16,
-        "ytick.labelsize": 16,
-        "legend.fontsize": 13,
-        "figure.titlesize": 24,
-        "lines.linewidth": 2,
+        "font.size": 16,
+        "axes.titlesize": 16,
+        "axes.labelsize": 17,
+        "xtick.labelsize": 15,
+        "ytick.labelsize": 15,
+        "legend.fontsize": 15,
+        "figure.titlesize": 18,
+        "lines.linewidth": 3,
         "lines.markersize": 8,
     },
 }
 
 DISPLAY_FIGSCALE = {
 }
+
+
+def _wrap_display_method(method):
+    """Wrap a display method so it always resets/applies rcParams before plotting."""
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        display_mode = kwargs.get('display') or getattr(self, '_display_mode', None)
+        DisplayManager.apply_display_style(display_mode)
+        return method(self, *args, **kwargs)
+    return wrapper
 
 
 class DisplayManager:
@@ -265,7 +280,7 @@ class DisplayManager:
             debug: Whether to show debug info
         """
         # Plot data points (excluding first and last points)
-        plot_full=True
+        plot_full=False
         if plot_full:
             ax.plot(data["xpts"], data[ydata], "o-", rasterized=True)
         else:
@@ -341,6 +356,11 @@ class QickExperiment(Experiment):
     that override methods like acquire(), analyze(), and display() to implement
     specific experiment types (e.g., T1, T2, Rabi oscillations).
     """
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        if 'display' in cls.__dict__:
+            cls.display = _wrap_display_method(cls.__dict__['display'])
 
     @classmethod
     def from_h5file(cls, fname):
@@ -1398,6 +1418,113 @@ class QickExperiment2D(QickExperiment2DBase):
         return data
 
 
+class LivePlotter:
+    """Live plotting helper using IPython.display for Jupyter notebooks.
+
+    Creates a 4-panel heatmap (Amps, Phases, AvgI, AvgQ) that updates
+    in-place during 2D acquisition loops.
+    """
+
+    def __init__(self, display_mode=None, xlabel=None, ylabel=None):
+        self.display_mode = display_mode
+        self.xlabel = xlabel
+        self.ylabel = ylabel
+        self.fig = None
+        self.axs = None
+        self.meshes = None
+        self.colorbars = None
+        self._active = _HAS_IPYTHON and self._check_jupyter()
+        if not self._active:
+            print("[LivePlot] Not in a Jupyter environment, live plotting disabled.")
+
+    @staticmethod
+    def _check_jupyter():
+        try:
+            from IPython import get_ipython
+            ip = get_ipython()
+            return ip is not None and hasattr(ip, 'kernel')
+        except Exception:
+            return False
+
+    def update(self, data, y_sweep, step=None, total=None):
+        """Update the live plot with the latest data. Called once per y-iteration."""
+        if not self._active:
+            return
+        try:
+            amps = np.array(data.get("amps", []))
+            phases = np.array(data.get("phases", []))
+            avgi = np.array(data.get("avgi", []))
+            avgq = np.array(data.get("avgq", []))
+
+            if amps.size == 0:
+                return
+
+            xvals = data["xpts"][0]
+            yvals = np.array(y_sweep[0]["pts"][:amps.shape[0]])
+
+            datasets = [amps, phases, avgi, avgq]
+            titles = ["Amps", "Phases", "AvgI", "AvgQ"]
+
+            if self.fig is None:
+                self._create_figure(xvals, yvals, datasets, titles)
+            else:
+                self._update_figure(xvals, yvals, datasets)
+
+            clear_output(wait=True)
+            ipy_display(self.fig)
+
+            # Show progress after the plot since clear_output removes tqdm
+            if step is not None and total is not None:
+                print(f"Step {step}/{total} ({100*step/total:.0f}%)")
+        except Exception as e:
+            print(f"[LivePlot] Update failed: {e}")
+
+    def _create_figure(self, xvals, yvals, datasets, titles):
+        """Create the initial 4-panel figure."""
+        DisplayManager.apply_display_style(self.display_mode)
+        self.fig, self.axs = plt.subplots(
+            2, 2,
+            figsize=DisplayManager.scale_figsize((10, 8), self.display_mode),
+            dpi=100,
+        )
+        self.meshes = []
+        self.colorbars = []
+        for ax, d, title in zip(self.axs.flat, datasets, titles):
+            mesh = ax.pcolormesh(xvals, yvals, d, cmap="viridis", shading="auto")
+            ax.set_title(title)
+            cb = plt.colorbar(mesh, ax=ax)
+            self.meshes.append(mesh)
+            self.colorbars.append(cb)
+            if self.ylabel:
+                ax.set_ylabel(self.ylabel)
+            if self.xlabel:
+                ax.set_xlabel(self.xlabel)
+        self.fig.tight_layout()
+
+    def _update_figure(self, xvals, yvals, datasets):
+        """Redraw pcolormesh on existing axes (y-axis grows each iteration)."""
+        titles = ["Amps", "Phases", "AvgI", "AvgQ"]
+        for i, (ax, cb, d, title) in enumerate(
+            zip(self.axs.flat, self.colorbars, datasets, titles)
+        ):
+            ax.clear()
+            mesh = ax.pcolormesh(xvals, yvals, d, cmap="viridis", shading="auto")
+            ax.set_title(title)
+            cb.update_normal(mesh)
+            self.meshes[i] = mesh
+            if self.ylabel:
+                ax.set_ylabel(self.ylabel)
+            if self.xlabel:
+                ax.set_xlabel(self.xlabel)
+        self.fig.tight_layout()
+
+    def close(self):
+        """Close the figure to free memory."""
+        if self.fig is not None:
+            plt.close(self.fig)
+            self.fig = None
+
+
 class QickExperiment2DSimple(QickExperiment2DBase):
     """
     Simplified version of QickExperiment2D for nested experiments.
@@ -1406,7 +1533,7 @@ class QickExperiment2DSimple(QickExperiment2DBase):
     x-axis parameter is swept by a separate experiment instance.
     """
 
-    def __init__(self, cfg_dict=None, prefix="QickExp", progress=None, qi=0, live_plot=False, auto_close_visdom=True, display=None):
+    def __init__(self, cfg_dict=None, prefix="QickExp", progress=None, qi=0, live_plot=False, display=None):
         """
         Initialize the QickExperiment2DSimple.
 
@@ -1415,25 +1542,22 @@ class QickExperiment2DSimple(QickExperiment2DBase):
             prefix: Prefix for saved data files
             progress: Whether to show progress bars
             qi: Qubit index to use for the experiment
-            live_plot: Whether to enable live plotting with Visdom during acquisition
-            auto_close_visdom: Whether to automatically close visdom plots after experiment finishes
+            live_plot: Whether to enable live plotting during acquisition
             display: Display mode for plots (e.g. 'talk' for presentation-sized text)
         """
         super().__init__(cfg_dict=cfg_dict, prefix=prefix, progress=progress, qi=qi, display=display)
 
         self.live_plot = live_plot
         self.save_interim=True
-        self.viz = None
-        self.viz_window = None
-        self.auto_close_visdom = auto_close_visdom
+        self.live_plotter = None
 
         if self.live_plot:
-            try:
-                self.viz = Visdom()
-                assert self.viz.check_connection(), "Visdom server not running."
-                self.viz_window = self.viz.text("Starting 2D Scan...", opts={"title": "Qick 2D Scan"})
-            except Exception as e:
-                print(f"[Visdom] Could not connect: {e}")
+            self.live_plotter = LivePlotter(
+                display_mode=display,
+                xlabel=getattr(self, 'xlabel', None),
+                ylabel=getattr(self, 'ylabel', None),
+            )
+            if not self.live_plotter._active:
                 self.live_plot = False
 
     def acquire(self, y_sweep, progress=False):
@@ -1472,9 +1596,9 @@ class QickExperiment2DSimple(QickExperiment2DBase):
             
             data["time"].append(time.time())
             
-            # Live update heatmap plot using Visdom
+            # Live update heatmap plot
             if self.live_plot and i>0:
-                self._plot_live_update(data, y_sweep)
+                self.live_plotter.update(data, y_sweep, step=int(i)+1, total=len(yvals))
             if self.save_interim:
                 super().save_data(data=data)
 
@@ -1487,86 +1611,11 @@ class QickExperiment2DSimple(QickExperiment2DBase):
             data[k] = np.array(a)
         self.data = data
 
-        # Close visdom plot if auto_close_visdom is enabled
-        if self.auto_close_visdom and self.live_plot and self.viz is not None:
-            self._close_visdom_plots()
+        # Close live plot figure
+        if self.live_plot and self.live_plotter is not None:
+            self.live_plotter.close()
 
         return data
-    
-    def _plot_live_update(self, data, y_sweep):
-        """Update the live plot with the latest data."""
-        try:
-            from io import BytesIO
-            import PIL.Image
-
-            # Extract data arrays
-            amps_so_far = np.array(data.get("amps", []))
-            phases_so_far = np.array(data.get("phases", []))
-            avgi_so_far = np.array(data.get("avgi", []))
-            avgq_so_far = np.array(data.get("avgq", []))
-
-            if amps_so_far.size > 0:
-                # Get axis values
-                xvals = data["xpts"][0]
-                yvals = np.array(y_sweep[0]["pts"][:amps_so_far.shape[0]])
-                
-                # Create 4 subplots
-                display = getattr(self, '_display_mode', None)
-                DisplayManager.apply_display_style(display)
-                fig, axs = plt.subplots(2, 2, figsize=DisplayManager.scale_figsize((10, 8), display), dpi=100)
-
-                # Plot each data type
-                im1 = axs[0,0].pcolormesh(xvals, yvals, amps_so_far, cmap="viridis", shading="auto")
-                axs[0, 0].set_title("Amps")
-                plt.colorbar(im1, ax=axs[0, 0])
-
-                im2 = axs[0, 1].pcolormesh(xvals, yvals, phases_so_far, cmap="viridis", shading="auto")
-                axs[0, 1].set_title("Phases")
-                plt.colorbar(im2, ax=axs[0, 1])
-
-                im3 = axs[1, 0].pcolormesh(xvals, yvals, avgi_so_far, cmap="viridis", shading="auto")
-                axs[1, 0].set_title("AvgI")
-                plt.colorbar(im3, ax=axs[1, 0])
-
-                im4 = axs[1, 1].pcolormesh(xvals, yvals, avgq_so_far, cmap="viridis", shading="auto")
-                axs[1, 1].set_title("AvgQ")
-                plt.colorbar(im4, ax=axs[1, 1])
-
-                # Set labels if available
-                for ax in axs.flat:
-                    if hasattr(self, "ylabel"):
-                        ax.set_ylabel(self.ylabel)
-                    if hasattr(self,'xlabel'):
-                        ax.set_xlabel(self.xlabel)
-
-                plt.tight_layout()
-
-                # Convert to image for Visdom
-                buf = BytesIO()
-                plt.savefig(buf, format='png')
-                plt.close(fig)
-                buf.seek(0)
-                img = PIL.Image.open(buf).convert("RGB")
-                img = np.array(img).transpose(2, 0, 1)
-
-                self.viz.image(img, win=self.viz_window, opts={"title": "Live Channels"})
-
-        except Exception as e:
-            print(f"[Visdom] Live plot failed: {e}")
-
-    def _close_visdom_plots(self):
-        """Close visdom plots after experiment completion."""
-        try:
-            if self.viz_window is not None:
-                # Close the specific window
-                self.viz.close(win=self.viz_window)
-                print("[Visdom] Closed experiment plot window")
-            else:
-                # If no specific window, close all windows in the current environment
-                self.viz.close(win=None)
-                print("[Visdom] Closed all visdom windows")
-        except Exception as e:
-            print(f"[Visdom] Failed to close plots: {e}")
 
 
 class QickExperiment2DSweep(QickExperiment2DBase):

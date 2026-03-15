@@ -557,14 +557,22 @@ class T1FastFlux(T1Experiment):
     Runs a T1Experiment at each flux gain point, collecting T1 vs flux gain (and
     optionally vs frequency). Saves CSV incrementally after each point.
 
+    Automatically reads quadratic fit coefficients (quad_a, quad_b, quad_c) and
+    sweet_spot_ac from the config (saved by QubitSpecFastFlux) when available.
+    The gain sweep starts at sweet_spot_ac by default.
+
     Sweep parameters (passed via params dict):
-        gain_start: Starting flux gain value
-        gain_stop: Ending flux gain value
+        gain_start: Starting flux gain value (default: sweet_spot_ac)
+        gain_stop: Ending flux gain value (default: sweet_spot_ac + 0.4)
+        direction: 'pos' or 'neg' — sweep direction from sweet spot (default: 'pos').
+            Sets gain_stop relative to sweet spot if gain_stop not explicitly given.
+        freq_span: Frequency span in MHz. When provided with freq_coeffs, converts
+            to a gain range using the quadratic. Overrides gain_stop.
         expts_gain: Number of gain points in the sweep
-        freq_coeffs: Optional (a, b, c) tuple for quadratic freq = a*g^2 + b*g + c
+        freq_coeffs: Optional (a, b, c) tuple for quadratic freq = a*g^2 + b*g + c.
+            If not provided, reads quad_a/b/c from config.
         lin_freq: If True and freq_coeffs provided, space points linearly in
             frequency (inverting the quadratic) instead of linearly in gain.
-        update: Whether to call t1.update(no_final=True) after each point
     """
 
     def __init__(
@@ -574,7 +582,7 @@ class T1FastFlux(T1Experiment):
         go=True,
         params={},
         prefix=None,
-        progress=True,
+        progress=False,
         display=True,
     ):
         if prefix is None:
@@ -586,16 +594,67 @@ class T1FastFlux(T1Experiment):
             prefix=prefix, progress=progress, check_params=False,
         )
 
+        # Read quadratic coefficients and sweet spot from config if available
+        cfg_flux = getattr(getattr(getattr(getattr(self.cfg, "hw", None), "soc", None), "dacs", None), "flux", None)
+        cfg_qubit = getattr(getattr(self.cfg, "device", None), "qubit", None)
+
+        config_freq_coeffs = None
+        sweet_spot = 0.0
+        if cfg_flux is not None:
+            a = cfg_flux.quad_a[qi] if hasattr(cfg_flux, "quad_a") else 0
+            b = cfg_flux.quad_b[qi] if hasattr(cfg_flux, "quad_b") else 0
+            c = cfg_flux.quad_c[qi] if hasattr(cfg_flux, "quad_c") else 0
+            if a != 0 or b != 0:
+                config_freq_coeffs = (a, b, c)
+        if cfg_qubit is not None and hasattr(cfg_qubit, "sweet_spot_ac"):
+            sweet_spot = cfg_qubit.sweet_spot_ac[qi]
+
+        # Determine sweep direction and gain range
+        direction = params.get("direction", "pos")
+        sign = 1 if direction == "pos" else -1
+        freq_coeffs = params.get("freq_coeffs", config_freq_coeffs)
+        freq_span = params.get("freq_span", None)
+
+        # Convert freq_span to gain_stop using the quadratic
+        if freq_span is not None and freq_coeffs is not None and "gain_stop" not in params:
+            a, b, c = freq_coeffs
+            f_sweet = a * sweet_spot**2 + b * sweet_spot + c
+            f_target = f_sweet - freq_span  # frequency decreases away from sweet spot
+            discriminant = b**2 - 4 * a * (c - f_target)
+            if discriminant >= 0:
+                # Pick the root in the correct direction from sweet spot
+                root_pos = (-b + np.sqrt(discriminant)) / (2 * a)
+                root_neg = (-b - np.sqrt(discriminant)) / (2 * a)
+                if sign > 0:
+                    gain_stop = max(root_pos, root_neg)
+                else:
+                    gain_stop = min(root_pos, root_neg)
+            else:
+                gain_stop = sweet_spot + sign * 0.4
+        elif "gain_stop" not in params:
+            gain_stop = sweet_spot + sign * 0.4
+        else:
+            gain_stop = params["gain_stop"]
+
+        # start_t1: assumed T1 for the first gain point, sets initial span
+        start_t1 = params.pop("start_t1", None)
+
         # Define default parameters for the 2D sweep
         params_def = {
-            "gain_start": -0.4,
-            "gain_stop": 0.4,
+            "gain_start": sweet_spot,
+            "gain_stop": gain_stop,
+            "start": 0.05,
+            "expts":25,
             "expts_gain": 50,
-            "freq_coeffs": None,
-            "lin_freq": False,
-            "update": True,
+            "freq_coeffs": freq_coeffs,
+            "freq_span": freq_span,
+            "direction": direction,
+            "lin_freq": True,
         }
 
+        if start_t1 is not None:
+            params_def["span"] = 4.1 * start_t1
+        params = {**params_def, **params}
         # Create inner T1 experiment (go=False) to inherit its config
         self.expt = T1Experiment(cfg_dict, qi, go=False, params=params, check_params=False)
         params = {**self.expt.cfg.expt, **params, "flux": True}
@@ -616,7 +675,12 @@ class T1FastFlux(T1Experiment):
             freq_stop = a * cfg_e["gain_stop"]**2 + b * cfg_e["gain_stop"] + c
             self.freq_pts = np.linspace(freq_start, freq_stop, cfg_e["expts_gain"])
             discriminant = b**2 - 4 * a * (c - self.freq_pts)
-            self.gain_pts = (-b - np.sqrt(discriminant)) / (2 * a)
+            root_pos = (-b + np.sqrt(discriminant)) / (2 * a)
+            root_neg = (-b - np.sqrt(discriminant)) / (2 * a)
+            if cfg_e["direction"] == "pos":
+                self.gain_pts = np.maximum(root_pos, root_neg)
+            else:
+                self.gain_pts = np.minimum(root_pos, root_neg)
         else:
             # Linearly spaced in gain
             self.gain_pts = np.linspace(cfg_e["gain_start"], cfg_e["gain_stop"], cfg_e["expts_gain"])
@@ -648,7 +712,7 @@ class T1FastFlux(T1Experiment):
         csv_path = self.save_dir / "t1_vs_gain.csv"
 
         # Build inner T1 params from cfg.expt, excluding our 2D-specific keys
-        _2d_keys = ("update", "gain_start", "gain_stop", "expts_gain", "freq_coeffs", "lin_freq")
+        _2d_keys = ("gain_start", "gain_stop", "expts_gain", "freq_coeffs", "lin_freq", "freq_span", "direction")
         t1_params = {k: v for k, v in self.cfg.expt.items() if k not in _2d_keys}
 
         try:
@@ -662,12 +726,14 @@ class T1FastFlux(T1Experiment):
                 )
                 self.t1_data.append(t1.data)
                 best_fit = t1.data.get("best_fit", [np.nan, np.nan, np.nan])
-                t1_list.append(best_fit[2])
+                t1_val = best_fit[2]
+                t1_list.append(t1_val)
                 offset_list.append(best_fit[0])
                 amp_list.append(best_fit[1])
 
-                if self.cfg.expt["update"]:
-                    t1.update(no_final=True)
+                # Adjust span for next scan based on extracted T1
+                if np.isfinite(t1_val) and t1_val > 0:
+                    t1_params["span"] = 4.1 * t1_val
 
                 # Save CSV incrementally
                 gains_so_far = self.gain_pts[: i + 1]
@@ -678,16 +744,20 @@ class T1FastFlux(T1Experiment):
                     freqs_so_far = self.freq_pts[: i + 1]
                     table = np.column_stack((gains_so_far, freqs_so_far, t1s_so_far, offsets_so_far, amps_so_far))
                     header = "gain,freq,t1,offset,amplitude"
+                    fmt = ["%.6f", "%.10f", "%.6f", "%.6f", "%.6f"]
                 else:
                     table = np.column_stack((gains_so_far, t1s_so_far, offsets_so_far, amps_so_far))
                     header = "gain,t1,offset,amplitude"
-                np.savetxt(csv_path, table, delimiter=",", header=header, comments="")
+                    fmt = ["%.6f", "%.6f", "%.6f", "%.6f"]
+                np.savetxt(csv_path, table, delimiter=",", header=header, comments="", fmt=fmt)
         finally:
             self._cfg_dict["expt_path"] = original_path
 
         self.data = {
             "gain_pts": self.gain_pts,
             "t1_list": np.array(t1_list),
+            "offset_list": np.array(offset_list),
+            "amp_list": np.array(amp_list),
             "t1_data": self.t1_data,
         }
         if self.freq_pts is not None:
@@ -713,10 +783,28 @@ class T1FastFlux(T1Experiment):
         plt.show()
 
         if "freq_pts" in data:
+            freq_pts = data["freq_pts"]
+
             plt.figure()
-            plt.plot(data["freq_pts"], t1_list, ".-")
+            plt.plot(freq_pts, t1_list, ".-")
             plt.xlabel("Frequency (MHz)")
             plt.ylabel("$T_1$ ($\mu$s)")
             plt.title(f"$T_1$ vs Frequency Q{self._qi}")
             plt.savefig(self.save_dir / "t1_vs_freq.png")
+            plt.show()
+
+            plt.figure()
+            plt.plot(freq_pts, data["amp_list"], ".-")
+            plt.xlabel("Frequency (MHz)")
+            plt.ylabel("Amplitude")
+            plt.title(f"Amplitude vs Frequency Q{self._qi}")
+            plt.savefig(self.save_dir / "amp_vs_freq.png")
+            plt.show()
+
+            plt.figure()
+            plt.plot(freq_pts, data["offset_list"], ".-")
+            plt.xlabel("Frequency (MHz)")
+            plt.ylabel("Offset")
+            plt.title(f"Offset vs Frequency Q{self._qi}")
+            plt.savefig(self.save_dir / "offset_vs_freq.png")
             plt.show()

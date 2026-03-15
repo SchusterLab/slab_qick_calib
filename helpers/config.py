@@ -354,7 +354,7 @@ def update_lo(file_name, field, value, qi, verbose=True, sig=4, rng_vals=None):
     )
 
 
-def init_config(file_name, num_qubits, type="full", t1=50, aliases="Qick001", ip=""):
+def init_config(file_name, num_qubits, type="full", t1=50, aliases="Qick001", ip="", flux=False):
     """
     Initialize a configuration file for quantum experiments with qubits.
     
@@ -370,6 +370,9 @@ def init_config(file_name, num_qubits, type="full", t1=50, aliases="Qick001", ip
             final_delay (default: 50)
         aliases: Identifier for the System-on-Chip (SoC) (default: "Qick001")
         ip: IP address for the device (default: "")
+        flux: Whether to include flux control hardware and qubit flux parameters
+              (default: False). When True, adds dacs.flux section and qubit fields
+              f_ge_max, sweet_spot_dc, sweet_spot_ac.
 
     Returns:
         str: The YAML configuration string that was saved
@@ -408,6 +411,16 @@ def init_config(file_name, num_qubits, type="full", t1=50, aliases="Qick001", ip
             "spec_gain": init_array(1),  # Gain scaling for spectroscopy
         }
     )
+
+    # Qubit flux parameters (only when flux control is enabled)
+    if flux:
+        device["qubit"].update(
+            {
+                "f_ge_max": init_array(4000),       # Max ge frequency at sweet spot (MHz)
+                "sweet_spot_dc": init_array(0),     # DC bias value at sweet spot (V)
+                "sweet_spot_ac": init_array(0),     # AC flux gain at sweet spot
+            }
+        )
 
     # Qubit pulse parameters for ge and ef transitions
     for pulse_type in ["pi_ge", "pi_ef"]:
@@ -519,15 +532,21 @@ def init_config(file_name, num_qubits, type="full", t1=50, aliases="Qick001", ip
                 "filter_bw": init_array(1000),    # Filter bandwidth (MHz)
                 "filter_type": init_array("bypass"),  # bandpass|lowpass|highpass|bypass
             },
-            "flux": {
-                "ch": init_array(0),              # DAC channel for flux control
-                "dc_ch": init_array(0),           # DC bias channel number
-                "dc_val": init_array(0),          # DC bias value (V)
-                "nyquist": init_array(1),         # Nyquist zone (1 or 2)
-                "type": init_array("int"),        # DAC mode (interpolated for DC-like flux)
-            },
         },
     }
+
+    # Flux DAC section (only when flux control is enabled)
+    if flux:
+        soc["dacs"]["flux"] = {
+            "ch": init_array(0),              # DAC channel for flux control
+            "dc_ch": init_array(0),           # DC bias channel number
+            "dc_val": init_array(0),          # DC bias value (V)
+            "nyquist": init_array(1),         # Nyquist zone (1 or 2)
+            "type": init_array("int"),        # DAC mode (interpolated for DC-like flux)
+            "quad_a": init_array(0),          # Quadratic coeff a: freq = a*g^2 + b*g + c
+            "quad_b": init_array(0),          # Quadratic coeff b
+            "quad_c": init_array(0),          # Quadratic coeff c
+        }
 
     # Build rfboard_active from unique physical channels
     rfboard_active = {}

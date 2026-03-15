@@ -1236,10 +1236,10 @@ class ResSpecFlux(QickExperiment2DSimple):
             inner_defaults.update({"center": self.cfg.device.readout.frequency[qi], "span": 15, "expts": 300})
 
         dc_defaults = {
-            "dc_start": 0.0,
-            "dc_stop":  0.40,
+            "start_dc": 0.0,
+            "stop_dc":  0.40,
             "expts_dc":  41,
-            "bias_chan": 0,
+            "bias_chan": self.cfg.hw.soc.dacs.flux.dc_ch[qi],
             "dc_settle": 0.0,
             "dc_verify_print": False,
         }

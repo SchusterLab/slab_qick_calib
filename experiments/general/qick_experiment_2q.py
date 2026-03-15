@@ -23,7 +23,7 @@ from qick import *
 
 from ...exp_handling.experiment import Experiment
 from ...analysis import fitting as fitter
-from .qick_experiment import DisplayManager
+from .qick_experiment import DisplayManager, _wrap_display_method
 
 
 class QickExperiment2Q(Experiment):
@@ -42,6 +42,11 @@ class QickExperiment2Q(Experiment):
         reps: Number of repetitions for each measurement (maximum of the two qubits)
         rounds: Number of software averages (maximum of the two qubits)
     """
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        if 'display' in cls.__dict__:
+            cls.display = _wrap_display_method(cls.__dict__['display'])
 
     def __init__(self, cfg_dict=None, prefix="QickExp", progress=None, qi=[0], display=None):
         """

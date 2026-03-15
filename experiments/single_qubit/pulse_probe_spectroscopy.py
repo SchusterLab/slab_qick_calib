@@ -16,10 +16,13 @@ the qubit spectrum as a function of probe power.
 """
 
 import numpy as np
+from pathlib import Path
+from datetime import datetime
 from qick import *
 from qick.asm_v2 import QickSweep1D
 from tqdm import tqdm
 
+from ...helpers import config
 from ...exp_handling.datamanagement import AttrDict
 from ..general.qick_experiment import QickExperiment, QickExperiment2DSimple
 from ..general.qick_program import QickProgram
@@ -222,6 +225,7 @@ class QubitSpec(QickExperiment):
             max_err: Maximum error for fit quality
         """
         # Currently no control of readout time; may want to change for simultaneious readout
+        user_params = params  # Save original user-provided params before merging defaults
 
         # Set prefix based on whether we're checking EF transition
         ef = "ef_" if "checkEF" in params and params["checkEF"] else ""
@@ -296,6 +300,10 @@ class QubitSpec(QickExperiment):
 
         # Merge default and user-provided parameters
         params = {**params_def, **params}
+
+        # Default flux_gain to sweet spot when flux is enabled
+        if params["flux"] and "flux_gain" not in user_params:
+            params["flux_gain"] = self.cfg.device.qubit.sweet_spot_ac[qi]
 
         # Set start frequency based on transition type
         if params["checkEF"]:
@@ -903,3 +911,256 @@ class QubitSpecFlux(QickExperiment2DSimple):
             ylabel=XLABEL,
             **kwargs,
         )
+
+
+class QubitSpecFastFlux(QickExperiment2DSimple):
+    """
+    QubitSpecFastFlux: Sweep qubit spectroscopy across fast flux gain values.
+
+    Runs a QubitSpec at each flux gain point to measure qubit frequency vs flux gain.
+    Fits a quadratic to the resulting freq(gain) curve. Saves CSV incrementally.
+
+    Sweep parameters (passed via params dict):
+        gain_start: Starting flux gain value
+        gain_stop: Ending flux gain value
+        expts_gain: Number of gain points in the sweep
+        update: Whether to update config with f_ge and kappa after each point
+    """
+
+    def __init__(
+        self,
+        cfg_dict,
+        qi=0,
+        go=True,
+        params={},
+        prefix="",
+        progress=None,
+        style="fine",
+        display=True,
+        min_r2=None,
+        max_err=None,
+    ):
+        prefix = prefix or f"qspec_fastflux_qubit{qi}"
+        super().__init__(cfg_dict=cfg_dict, prefix=prefix, progress=progress, qi=qi)
+        self._cfg_dict = cfg_dict
+        self._style = style
+
+        # Default parameters for the fast flux sweep
+        flux_defaults = {
+            "gain_start": -0.4,
+            "gain_stop": 0.4,
+            "expts_gain": 50,
+            "update": True,
+            "start_center_freq": None,  # qubit freq at gain_start; None = use config f_ge
+        }
+
+        # Merge defaults with user params
+        params_def = {**flux_defaults}
+        params = {**params_def, **params, "flux": True}
+
+        # Create inner QubitSpec (go=False) to inherit its config
+        self.expt = QubitSpec(cfg_dict, qi, go=False, params=params, style=style, check_params=False)
+        params = {**self.expt.cfg.expt, **params}
+        self.cfg.expt = params
+
+        # Set up folder structure: qspec_fast_flux/{timestamp}_qspec_fastflux_Q{qi}/
+        base_dir = Path(cfg_dict["expt_path"]) / "qspec_fast_flux"
+        base_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.save_dir = base_dir / f"{timestamp}_qspec_fastflux_Q{qi}"
+        self.save_dir.mkdir(parents=True, exist_ok=True)
+
+        if go:
+            self.run(progress=progress, display=display, analyze=True,
+                     min_r2=min_r2, max_err=max_err)
+
+    def acquire(self, progress=False):
+        import time
+
+        qi = self.cfg.expt["qubit"][0]
+        gain_pts = np.linspace(
+            self.cfg.expt["gain_start"],
+            self.cfg.expt["gain_stop"],
+            int(self.cfg.expt["expts_gain"]),
+        )
+
+        data = {}
+        data["time"] = []
+        qubit_freq_list = []
+        kappa_list = []
+        csv_path = self.save_dir / "qspec_vs_gain.csv"
+
+        original_path = self._cfg_dict["expt_path"]
+        self._cfg_dict["expt_path"] = str(self.save_dir)
+
+        # Initialize center frequency from param or None (first scan uses config default)
+        start_center = self.cfg.expt.get("start_center_freq", None)
+        center_freq = start_center if start_center is not None else None
+
+        try:
+            for i in tqdm(range(len(gain_pts)), disable=not progress):
+                g = float(gain_pts[i])
+                self.expt.cfg.expt["flux_gain"] = g
+
+                # Use previous fit frequency to center the next scan
+                if center_freq is not None:
+                    self.expt.cfg.expt["start"] = center_freq - self.expt.cfg.expt["span"] / 2
+
+                # Run inner QubitSpec
+                data_new = self.expt.acquire(progress=progress)
+                self.expt.analyze(data=data_new)
+
+                # Stack raw data like QickExperiment2DSimple
+                for key in data_new:
+                    if i == 0:
+                        data[key] = []
+                    data[key].append(data_new[key])
+                data["time"].append(time.time())
+
+                # Extract fit results
+                best_fit = data_new.get("best_fit", [np.nan, np.nan, np.nan, np.nan])
+                qubit_freq_list.append(best_fit[2])
+                kappa_list.append(best_fit[3])
+
+                # Update center frequency from fit for next scan
+                if self.expt.status:
+                    center_freq = best_fit[2]
+
+                # Save CSV incrementally
+                gains_so_far = gain_pts[: i + 1]
+                table = np.column_stack((
+                    gains_so_far,
+                    np.array(qubit_freq_list),
+                    np.array(kappa_list),
+                ))
+                np.savetxt(csv_path, table, delimiter=",",
+                           header="gain,qubit_freq,kappa", comments="")
+
+                if self.save_interim:
+                    super().save_data(data=data)
+        finally:
+            self._cfg_dict["expt_path"] = original_path
+
+        # Store sweep results
+        data["gain_pts"] = gain_pts
+        data["qubit_freq_list"] = np.array(qubit_freq_list)
+        data["kappa_list"] = np.array(kappa_list)
+
+        # Convert lists to arrays
+        for k, a in data.items():
+            if not isinstance(a, np.ndarray):
+                data[k] = np.array(a)
+
+        self.data = data
+        return data
+
+    def analyze(self, data=None, **kwargs):
+        if data is None:
+            data = self.data
+
+        gain_pts = data["gain_pts"]
+        qubit_freq_list = data["qubit_freq_list"]
+
+        # Fit quadratic: freq = a*g^2 + b*g + c
+        mask = ~np.isnan(qubit_freq_list)
+        if np.sum(mask) >= 3:
+            coeffs = np.polyfit(gain_pts[mask], qubit_freq_list[mask], 2)
+            data["freq_coeffs"] = tuple(coeffs)
+            data["freq_fit"] = np.polyval(coeffs, gain_pts)
+            a, b, c = coeffs
+            data["gain_sweet_spot"] = -b / (2 * a)
+            data["f_ge_max"] = c - b**2 / (4 * a)
+        else:
+            data["freq_coeffs"] = None
+            data["freq_fit"] = None
+            data["gain_sweet_spot"] = np.nan
+            data["f_ge_max"] = np.nan
+
+        return data
+
+    def display(self, data=None, **kwargs):
+        import matplotlib.pyplot as plt
+
+        if data is None:
+            data = self.data
+
+        gain_pts = data["gain_pts"]
+        qubit_freq_list = data["qubit_freq_list"]
+        qi = self.cfg.expt["qubit"][0]
+
+        # --- Freq vs gain plot ---
+        plt.figure()
+        plt.plot(gain_pts, qubit_freq_list, "o", label="data")
+        if data.get("freq_fit") is not None:
+            plt.plot(gain_pts, data["freq_fit"], "-", label="quadratic fit")
+            plt.legend()
+        plt.xlabel("Flux Gain")
+        plt.ylabel("Qubit Frequency (MHz)")
+        plt.title(f"Qubit Spectroscopy vs Flux Gain Q{qi}")
+        plt.savefig(self.save_dir / "qspec_vs_flux_gain.png")
+        plt.show()
+
+        # --- Waterfall plot of all 1D spectra ---
+        amps_all = data.get("amps")
+        xpts_all = data.get("xpts")
+        if amps_all is not None and xpts_all is not None:
+            fig, ax = plt.subplots(figsize=(10, 8))
+            # Compute vertical offset from median signal range
+            ranges = []
+            for sig in amps_all:
+                s = np.asarray(sig)
+                if len(s) > 2:
+                    ranges.append(np.ptp(s[1:-1]))
+            offset_scale = np.median(ranges) * 0.8 if ranges else 1
+
+            for i, (xpts, signal) in enumerate(zip(xpts_all, amps_all)):
+                xpts = np.asarray(xpts)
+                signal = np.asarray(signal)
+                ax.plot(xpts[1:-1], signal[1:-1] + i * offset_scale,
+                        label=f"gain={gain_pts[i]:.3f}")
+
+            ax.set_xlabel("Qubit Frequency (MHz)")
+            ax.set_ylabel("Signal (offset)")
+            ax.set_title(f"Qubit Spec vs Flux Gain Q{qi} (waterfall)")
+            if len(gain_pts) <= 20:
+                ax.legend(bbox_to_anchor=(1.05, 1), loc="upper left", fontsize=7)
+            plt.tight_layout()
+            plt.savefig(self.save_dir / "waterfall_qubit_spec.png",
+                        dpi=150, bbox_inches="tight")
+            plt.show()
+
+            # --- Color plot of amps ---
+            amps_2d = np.array([np.asarray(a)[1:-1] for a in amps_all])
+            xpts_trimmed = np.asarray(xpts_all[0])[1:-1]
+            fig, ax = plt.subplots()
+            pcm = ax.pcolormesh(gain_pts, xpts_trimmed, amps_2d.T,
+                                cmap="viridis", shading="auto", rasterized=True)
+            plt.colorbar(pcm, ax=ax, label="Amplitude")
+            ax.set_xlabel("Flux Gain")
+            ax.set_ylabel("Qubit Frequency (MHz)")
+            ax.set_title(f"Qubit Spec vs Flux Gain Q{qi}")
+            plt.tight_layout()
+            plt.savefig(self.save_dir / "colorplot_qubit_spec_amps.png",
+                        dpi=150, bbox_inches="tight")
+            plt.show()
+
+    def update(self, verbose=True):
+        qi = self.cfg.expt["qubit"][0]
+        data = self.data
+        if data.get("freq_coeffs") is not None:
+            config.update_qubit(
+                self.config_file, "f_ge_max", data["f_ge_max"], qi, verbose=verbose,
+            )
+            config.update_qubit(
+                self.config_file, "sweet_spot_ac", data["gain_sweet_spot"], qi, verbose=verbose,
+            )
+            a, b, c = data["freq_coeffs"]
+            config.update_config(
+                self.config_file, "hw.soc.dacs.flux", "quad_a", a, qi, verbose=verbose,
+            )
+            config.update_config(
+                self.config_file, "hw.soc.dacs.flux", "quad_b", b, qi, verbose=verbose,
+            )
+            config.update_config(
+                self.config_file, "hw.soc.dacs.flux", "quad_c", c, qi, verbose=verbose,
+            )
