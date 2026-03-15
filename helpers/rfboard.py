@@ -180,6 +180,46 @@ def setup_qubit_drive_chain(
     return {"DAC_ch": dac_ch, "drive_freq": drive_freq}
 
 
+def set_dc_bias(qubit, soc, cfg, dc_val=None, cfg_file=None, verbose=True):
+    """
+    Set the DC bias for a given qubit's flux line.
+
+    Reads ``dc_ch`` and ``dc_val`` from ``cfg.hw.soc.dacs.flux``.
+    If ``dc_val`` is provided it overrides the config value and updates it.
+
+    Args:
+        qubit: Qubit index
+        soc: QICK SoC object
+        cfg: Configuration AttrDict
+        dc_val: Override DC bias voltage (default: from config)
+        cfg_file: Optional path to persist updated dc_val to disk
+        verbose: Print what was set (default: True)
+
+    Returns:
+        dict: ``{"dc_ch", "dc_val"}``
+    """
+    hw = cfg.hw.soc
+    if not hasattr(hw.dacs, "flux"):
+        raise ValueError("No flux DAC section in config")
+
+    dc_ch = hw.dacs.flux.dc_ch[qubit]
+    if dc_val is None:
+        dc_val = hw.dacs.flux.dc_val[qubit]
+    else:
+        hw.dacs.flux.dc_val[qubit] = dc_val
+
+    soc.rfb_set_bias(dc_ch, float(dc_val))
+
+    if verbose:
+        print(f"DC bias qubit {qubit}: ch={dc_ch}, val={dc_val} V")
+
+    if cfg_file is not None:
+        from . import config
+        config.save(cfg, cfg_file)
+
+    return {"dc_ch": dc_ch, "dc_val": dc_val}
+
+
 def set_bandpass_rf(
     soc,
     gen_ch,
@@ -414,13 +454,19 @@ def apply_config_rf_settings(soc, cfg, qubit=None, cfg_file=None):
             _update_active_state(cfg, "dac_qubit", dac_q_ch, dac_q_fc, dac_q_bw,
                                  dac_q_ftype, qubit=qi, attn1=dac_q_attn1, attn2=dac_q_attn2)
 
+        # --- DC bias (only if flux section with dc_ch exists) ---
+        if hasattr(hw.dacs, "flux") and hasattr(hw.dacs.flux, "dc_ch"):
+            dc_ch = hw.dacs.flux.dc_ch[qi]
+            dc_val = hw.dacs.flux.dc_val[qi]
+            soc.rfb_set_bias(dc_ch, float(dc_val))
+
     if cfg_file is not None:
         from . import config
         config.save(cfg, cfg_file)
 
 
 def activate_qubit_rf(qubit, soc, cfg, cfg_file=None,
-                      channels=("adc", "dac_readout", "dac_qubit"), verbose=True):
+                      channels=("adc", "dac_readout", "dac_qubit", "dc_bias"), verbose=True):
     """
     Switch shared RF channels to a specific qubit's ideal settings.
 
@@ -504,6 +550,12 @@ def activate_qubit_rf(qubit, soc, cfg, cfg_file=None,
         _update_active_state(cfg, "dac_qubit", dac_q_ch, dac_q_fc, dac_q_bw,
                              dac_q_ftype, qubit=qubit, attn1=dac_q_attn1, attn2=dac_q_attn2)
         parts.append(f"DAC-qb ch {dac_q_ch} (fc={dac_q_fc}, bw={dac_q_bw}, {dac_q_ftype})")
+
+    if "dc_bias" in channels and hasattr(hw.dacs, "flux") and hasattr(hw.dacs.flux, "dc_ch"):
+        dc_ch = hw.dacs.flux.dc_ch[qubit]
+        dc_val = hw.dacs.flux.dc_val[qubit]
+        soc.rfb_set_bias(dc_ch, float(dc_val))
+        parts.append(f"DC bias ch {dc_ch} (val={dc_val} V)")
 
     if verbose:
         print(f"Activated qubit {qubit}: " + ", ".join(parts))

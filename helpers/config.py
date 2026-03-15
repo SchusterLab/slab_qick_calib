@@ -521,6 +521,8 @@ def init_config(file_name, num_qubits, type="full", t1=50, aliases="Qick001", ip
             },
             "flux": {
                 "ch": init_array(0),              # DAC channel for flux control
+                "dc_ch": init_array(0),           # DC bias channel number
+                "dc_val": init_array(0),          # DC bias value (V)
                 "nyquist": init_array(1),         # Nyquist zone (1 or 2)
                 "type": init_array("int"),        # DAC mode (interpolated for DC-like flux)
             },
