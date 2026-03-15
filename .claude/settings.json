@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python *)",
+      "Bash(git *)",
+      "Bash(pip *)",
+      "Bash(jupyter *)",
+      "Bash(grep -r SimpleSweepProgram2 c:_Libpythonqqslab_qick_calib/ --include=*.py)",
+      "Bash(python3:*)"
+    ],
+    "defaultMode": "acceptEdits"
+  }
+}
