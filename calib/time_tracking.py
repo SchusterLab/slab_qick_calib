@@ -390,7 +390,7 @@ def measure_fast2(qi, cfg_dict, i, t2e=None, t1=None, t1_val=30, t2_val=30):
     return t1, t2e
 
 
-def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True, bf_client=None, soc=None):
+def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True, bf_client=None, soc=None, t1_max=None, t2_max=None):
     """
     Track qubit parameters over time.
 
@@ -410,6 +410,10 @@ def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True,
     soc : object, optional
         QICK SoC object. If provided, calls rfboard.activate_qubit_rf()
         before each qubit's measurements to switch RF filters/attenuators.
+    t1_max : float, optional
+        Maximum allowed T1 value (µs). Measured values exceeding this are clamped.
+    t2_max : float, optional
+        Maximum allowed T2 value (µs). Measured values exceeding this are clamped.
 
     Returns
     -------
@@ -494,6 +498,12 @@ def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True,
                     print(f"Measurement failed for qubit {qi} on run {i}: {e}")
                     iter_success[j] = False
                     continue
+
+            # Clamp t1/t2 to max values if specified
+            if t1_max is not None and d["t1"] > t1_max:
+                d["t1"] = t1_max
+            if t2_max is not None and d["t2"] > t2_max:
+                d["t2"] = t2_max
 
             d["time"] = tm
             d["elapsed"] = elapsed
