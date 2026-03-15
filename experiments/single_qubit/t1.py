@@ -1,4 +1,6 @@
 import numpy as np
+from pathlib import Path
+from datetime import datetime
 from qick import *
 from qick.asm_v2 import QickSweep1D
 
@@ -368,7 +370,7 @@ class T1Experiment(QickExperiment):
             **kwargs,
         )
 
-    def update(self, rng_vals=[0.5, 500], first_time=False, verbose=True):
+    def update(self, rng_vals=[0.5, 500], first_time=False, no_final=False, verbose=True):
         qi = self.cfg.expt.qubit[0]
         if self.status:
             config.update_qubit(
@@ -380,15 +382,16 @@ class T1Experiment(QickExperiment):
                 rng_vals=rng_vals,
                 verbose=verbose,
             )
-            config.update_readout(
-                self.config_file,
-                "final_delay",
-                6 * self.data["new_t1_i"],
-                qi,
-                sig=2,
-                rng_vals=[rng_vals[0] * 10, rng_vals[1] * 3],
-                verbose=verbose,
-            )
+            if not no_final:
+                config.update_readout(
+                    self.config_file,
+                    "final_delay",
+                    6 * self.data["new_t1_i"],
+                    qi,
+                    sig=2,
+                    rng_vals=[rng_vals[0] * 10, rng_vals[1] * 3],
+                    verbose=verbose,
+                )
             if first_time:
                 config.update_qubit(
                     self.config_file,
@@ -545,3 +548,175 @@ class T1_2D(QickExperiment2DSimple):
             fit=fit,
             **kwargs,
         )
+
+
+class T1FastFlux(T1Experiment):
+    """
+    T1FastFlux: Sweep T1 across flux gain values.
+
+    Runs a T1Experiment at each flux gain point, collecting T1 vs flux gain (and
+    optionally vs frequency). Saves CSV incrementally after each point.
+
+    Sweep parameters (passed via params dict):
+        gain_start: Starting flux gain value
+        gain_stop: Ending flux gain value
+        expts_gain: Number of gain points in the sweep
+        freq_coeffs: Optional (a, b, c) tuple for quadratic freq = a*g^2 + b*g + c
+        lin_freq: If True and freq_coeffs provided, space points linearly in
+            frequency (inverting the quadratic) instead of linearly in gain.
+        update: Whether to call t1.update(no_final=True) after each point
+    """
+
+    def __init__(
+        self,
+        cfg_dict,
+        qi=0,
+        go=True,
+        params={},
+        prefix=None,
+        progress=True,
+        display=True,
+    ):
+        if prefix is None:
+            prefix = f"t1_fastflux_qubit{qi}"
+
+        # Initialize parent T1Experiment without running
+        super().__init__(
+            cfg_dict=cfg_dict, qi=qi, go=False, params=params,
+            prefix=prefix, progress=progress, check_params=False,
+        )
+
+        # Define default parameters for the 2D sweep
+        params_def = {
+            "gain_start": -0.4,
+            "gain_stop": 0.4,
+            "expts_gain": 50,
+            "freq_coeffs": None,
+            "lin_freq": False,
+            "update": True,
+        }
+
+        # Create inner T1 experiment (go=False) to inherit its config
+        self.expt = T1Experiment(cfg_dict, qi, go=False, params=params, check_params=False)
+        params = {**self.expt.cfg.expt, **params, "flux": True}
+        self.cfg.expt = {**params_def, **params}
+
+        # Store references
+        self._qi = qi
+        self._cfg_dict = cfg_dict
+
+        # Build gain_pts and freq_pts from config
+        cfg_e = self.cfg.expt
+        freq_coeffs = cfg_e["freq_coeffs"]
+
+        if cfg_e["lin_freq"] and freq_coeffs is not None:
+            # Linearly spaced in frequency, invert quadratic to get gains
+            a, b, c = freq_coeffs
+            freq_start = a * cfg_e["gain_start"]**2 + b * cfg_e["gain_start"] + c
+            freq_stop = a * cfg_e["gain_stop"]**2 + b * cfg_e["gain_stop"] + c
+            self.freq_pts = np.linspace(freq_start, freq_stop, cfg_e["expts_gain"])
+            discriminant = b**2 - 4 * a * (c - self.freq_pts)
+            self.gain_pts = (-b - np.sqrt(discriminant)) / (2 * a)
+        else:
+            # Linearly spaced in gain
+            self.gain_pts = np.linspace(cfg_e["gain_start"], cfg_e["gain_stop"], cfg_e["expts_gain"])
+            if freq_coeffs is not None:
+                a, b, c = freq_coeffs
+                self.freq_pts = a * self.gain_pts**2 + b * self.gain_pts + c
+            else:
+                self.freq_pts = None
+
+        # Set up folder structure: t1_fast_flux/{timestamp}_T1_fastflux_Q{qi}/
+        base_dir = Path(cfg_dict["expt_path"]) / "t1_fast_flux"
+        base_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.save_dir = base_dir / f"{timestamp}_T1_fastflux_Q{qi}"
+        self.save_dir.mkdir(parents=True, exist_ok=True)
+
+        if go:
+            self.acquire(progress=progress)
+            if display:
+                self.display()
+
+    def acquire(self, progress=False):
+        original_path = self._cfg_dict["expt_path"]
+        self._cfg_dict["expt_path"] = str(self.save_dir)
+        self.t1_data = []
+        t1_list = []
+        offset_list = []
+        amp_list = []
+        csv_path = self.save_dir / "t1_vs_gain.csv"
+
+        # Build inner T1 params from cfg.expt, excluding our 2D-specific keys
+        _2d_keys = ("update", "gain_start", "gain_stop", "expts_gain", "freq_coeffs", "lin_freq")
+        t1_params = {k: v for k, v in self.cfg.expt.items() if k not in _2d_keys}
+
+        try:
+            for i, g in enumerate(self.gain_pts):
+                t1 = T1Experiment(
+                    self._cfg_dict,
+                    qi=self._qi,
+                    params={**t1_params, "flux_gain": float(g)},
+                    progress=progress,
+                    display=False,
+                )
+                self.t1_data.append(t1.data)
+                best_fit = t1.data.get("best_fit", [np.nan, np.nan, np.nan])
+                t1_list.append(best_fit[2])
+                offset_list.append(best_fit[0])
+                amp_list.append(best_fit[1])
+
+                if self.cfg.expt["update"]:
+                    t1.update(no_final=True)
+
+                # Save CSV incrementally
+                gains_so_far = self.gain_pts[: i + 1]
+                t1s_so_far = np.array(t1_list)
+                offsets_so_far = np.array(offset_list)
+                amps_so_far = np.array(amp_list)
+                if self.freq_pts is not None:
+                    freqs_so_far = self.freq_pts[: i + 1]
+                    table = np.column_stack((gains_so_far, freqs_so_far, t1s_so_far, offsets_so_far, amps_so_far))
+                    header = "gain,freq,t1,offset,amplitude"
+                else:
+                    table = np.column_stack((gains_so_far, t1s_so_far, offsets_so_far, amps_so_far))
+                    header = "gain,t1,offset,amplitude"
+                np.savetxt(csv_path, table, delimiter=",", header=header, comments="")
+        finally:
+            self._cfg_dict["expt_path"] = original_path
+
+        self.data = {
+            "gain_pts": self.gain_pts,
+            "t1_list": np.array(t1_list),
+            "t1_data": self.t1_data,
+        }
+        if self.freq_pts is not None:
+            self.data["freq_pts"] = self.freq_pts
+
+        return self.data
+
+    def display(self, data=None, **kwargs):
+        import matplotlib.pyplot as plt
+
+        if data is None:
+            data = self.data
+
+        gain_pts = data["gain_pts"]
+        t1_list = data["t1_list"]
+
+        plt.figure()
+        plt.plot(gain_pts, t1_list, ".-")
+        plt.xlabel("Flux Gain")
+        plt.ylabel("$T_1$ ($\mu$s)")
+        plt.title(f"$T_1$ vs Flux Gain Q{self._qi}")
+        plt.savefig(self.save_dir / "t1_vs_flux_gain.png")
+        plt.show()
+
+        if "freq_pts" in data:
+            plt.figure()
+            plt.plot(data["freq_pts"], t1_list, ".-")
+            plt.xlabel("Frequency (MHz)")
+            plt.ylabel("$T_1$ ($\mu$s)")
+            plt.title(f"$T_1$ vs Frequency Q{self._qi}")
+            plt.savefig(self.save_dir / "t1_vs_freq.png")
+            plt.show()
