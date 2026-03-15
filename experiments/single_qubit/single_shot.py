@@ -665,6 +665,7 @@ class HistogramExperiment(QickExperiment):
         if savefig:
             plt.show()
             self.save_fig(fig)
+            self.save_config()
 
     def update(self, freq=True, fast=False, verbose=True):
         """

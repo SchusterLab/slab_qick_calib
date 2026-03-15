@@ -678,7 +678,8 @@ class T1ContExperiment(QickExperiment):
         ax.set_title(f"Qubit {qubit} State Histogram")
         fig.tight_layout()
         super().save_fig(fig, "_hist")
-    
+        self.save_config()
+
     def _plot_raw_data(self, data: Dict[str, Any], qubit: int, 
                        plot_config: PlotConfig) -> None:
         """
