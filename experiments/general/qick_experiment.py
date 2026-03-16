@@ -1238,7 +1238,8 @@ class QickExperiment2DBase(QickExperimentLoop):
             # Create 2-panel figure for amplitude and phase
             fig, ax = plt.subplots(2, 1, figsize=DisplayManager.scale_figsize((8, 10), display))
             ydata_lab = ["amps", "phases"]
-            ylabels = ["Amplitude (ADC level)", "Phase (radians)"]
+            amp_label = "Normalized Amplitude" if kwargs.pop("normalized", False) else "Amplitude (ADC level)"
+            ylabels = [amp_label, "Phase (radians)"]
             fig.suptitle(title)
         else:
             # Create single panel figure for I quadrature
@@ -1270,6 +1271,7 @@ class QickExperiment2DBase(QickExperimentLoop):
         # Save figure if created in this method
         if save_fig and fig:
             self.save_fig(fig)
+            self.save_config()
             plt.show()
 
     def analyze(self, fitfunc=None, fitterfunc=None, data=None, fit=True, rescale=False, **kwargs):
@@ -1425,10 +1427,11 @@ class LivePlotter:
     in-place during 2D acquisition loops.
     """
 
-    def __init__(self, display_mode=None, xlabel=None, ylabel=None):
+    def __init__(self, display_mode=None, xlabel=None, ylabel=None, logy=False):
         self.display_mode = display_mode
         self.xlabel = xlabel
         self.ylabel = ylabel
+        self.logy = logy
         self.fig = None
         self.axs = None
         self.meshes = None
@@ -1490,7 +1493,8 @@ class LivePlotter:
         self.meshes = []
         self.colorbars = []
         for ax, d, title in zip(self.axs.flat, datasets, titles):
-            mesh = ax.pcolormesh(xvals, yvals, d, cmap="viridis", shading="auto")
+            mesh = ax.pcolormesh(xvals, yvals, d, cmap="viridis", shading="auto",
+                                 rasterized=True)
             ax.set_title(title)
             cb = plt.colorbar(mesh, ax=ax)
             self.meshes.append(mesh)
@@ -1499,6 +1503,8 @@ class LivePlotter:
                 ax.set_ylabel(self.ylabel)
             if self.xlabel:
                 ax.set_xlabel(self.xlabel)
+            if self.logy:
+                ax.set_yscale("log")
         self.fig.tight_layout()
 
     def _update_figure(self, xvals, yvals, datasets):
@@ -1508,7 +1514,8 @@ class LivePlotter:
             zip(self.axs.flat, self.colorbars, datasets, titles)
         ):
             ax.clear()
-            mesh = ax.pcolormesh(xvals, yvals, d, cmap="viridis", shading="auto")
+            mesh = ax.pcolormesh(xvals, yvals, d, cmap="viridis", shading="auto",
+                                 rasterized=True)
             ax.set_title(title)
             cb.update_normal(mesh)
             self.meshes[i] = mesh
@@ -1516,6 +1523,8 @@ class LivePlotter:
                 ax.set_ylabel(self.ylabel)
             if self.xlabel:
                 ax.set_xlabel(self.xlabel)
+            if self.logy:
+                ax.set_yscale("log")
         self.fig.tight_layout()
 
     def close(self):
@@ -1550,15 +1559,7 @@ class QickExperiment2DSimple(QickExperiment2DBase):
         self.live_plot = live_plot
         self.save_interim=True
         self.live_plotter = None
-
-        if self.live_plot:
-            self.live_plotter = LivePlotter(
-                display_mode=display,
-                xlabel=getattr(self, 'xlabel', None),
-                ylabel=getattr(self, 'ylabel', None),
-            )
-            if not self.live_plotter._active:
-                self.live_plot = False
+        self._display = display
 
     def acquire(self, y_sweep, progress=False):
         """
@@ -1571,6 +1572,17 @@ class QickExperiment2DSimple(QickExperiment2DBase):
         Returns:
             Dictionary containing 2D measurement data
         """
+        # Create live plotter now that config/labels are fully populated
+        if self.live_plot and self.live_plotter is None:
+            self.live_plotter = LivePlotter(
+                display_mode=self._display,
+                xlabel=getattr(self, 'xlabel', None),
+                ylabel=getattr(self, 'ylabel', None),
+                logy=bool(getattr(self.cfg.expt, 'log', False)),
+            )
+            if not self.live_plotter._active:
+                self.live_plot = False
+
         # Initialize data dictionary
         data = {}
         yvals = np.arange(len(y_sweep[0]["pts"]))

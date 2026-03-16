@@ -998,6 +998,8 @@ def fit_single_shot(data: IQData, plot: bool = True, rot: bool = True) -> Tuple[
         'theta_corr': theta_corr,  # Correction angle from Gaussian fits,
         'g_mean': np.mean(data_rotated['Ig']),  # Mean of ground state I data
         'e_mean': np.mean(data_rotated['Ie']),  # Mean of excited state I data
+        'g_peak': vhg[np.argmax(histg)],  # I value at ground state histogram peak
+        'e_peak': vhe[np.argmax(histe)],  # I value at excited state histogram peak
     }
     
     return data_rotated, p, paramsg, paramse2

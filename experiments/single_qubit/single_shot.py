@@ -570,6 +570,8 @@ class HistogramExperiment(QickExperiment):
             data["shots"] = self.cfg.expt.shots
             data['e_mean'] = p['e_mean']
             data['g_mean'] = p['g_mean']
+            data['g_peak'] = p['g_peak']
+            data['e_peak'] = p['e_peak']
             dv = self.data['ve'] - self.data['vg']
             data['e_norm'] = (self.data['e_mean']-self.data['vg'])/dv
 
@@ -667,7 +669,7 @@ class HistogramExperiment(QickExperiment):
             self.save_fig(fig)
             self.save_config()
 
-    def update(self, freq=True, fast=False, verbose=True):
+    def update(self, freq=True, fast=False, verbose=True, use_peak=False):
         """
         Update configuration file with the results of the experiment.
 
@@ -702,11 +704,13 @@ class HistogramExperiment(QickExperiment):
         config.update_readout(
             cfg_file, "fidelity", self.data["fids"][0], qi, verbose=verbose
         )
+        g_key = "g_peak" if use_peak else "g_mean"
+        e_key = "e_peak" if use_peak else "e_mean"
         config.update_readout(
-            cfg_file, "g_mean", self.data["g_mean"], qi, verbose=verbose
+            cfg_file, "g_mean", self.data[g_key], qi, verbose=verbose
         )
         config.update_readout(
-            cfg_file, "e_mean", self.data["e_mean"], qi, verbose=verbose
+            cfg_file, "e_mean", self.data[e_key], qi, verbose=verbose
         )
 
         # Update additional parameters if not in fast mode

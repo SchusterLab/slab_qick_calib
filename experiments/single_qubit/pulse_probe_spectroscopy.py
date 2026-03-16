@@ -1004,7 +1004,7 @@ class QubitSpecFastFlux(QickExperiment2DSimple):
 
             # Run inner QubitSpec
             data_new = self.expt.acquire(progress=progress)
-            self.expt.analyze(data=data_new)
+            self.expt.analyze(data=data_new, verbose=False)
 
             # Stack raw data like QickExperiment2DSimple
             for key in data_new:
