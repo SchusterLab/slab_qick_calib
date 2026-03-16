@@ -1,8 +1,8 @@
 import numpy as np
-from pathlib import Path
-from datetime import datetime
+import time
 from qick import *
 from qick.asm_v2 import QickSweep1D
+from tqdm import tqdm
 
 from ...helpers import config
 from ...analysis import fitting as fitter
@@ -129,7 +129,7 @@ class T1Program(QickProgram):
             # Apply flux pulse during wait time
             self.pulse(ch=cfg.expt.flux_chan, name="flux_pulse", t=0)
             # Small buffer delay after flux pulse
-            self.delay_auto(t=0.1, tag="wait")
+            self.delay_auto(t=0.15, tag="wait")
             #self.delay_auto(t=cfg.expt["end_wait"], tag="wait")
         else:
             # Simple delay for standard T1 measurement
@@ -550,12 +550,13 @@ class T1_2D(QickExperiment2DSimple):
         )
 
 
-class T1FastFlux(T1Experiment):
+class T1FastFlux(QickExperiment2DSimple):
     """
     T1FastFlux: Sweep T1 across flux gain values.
 
     Runs a T1Experiment at each flux gain point, collecting T1 vs flux gain (and
-    optionally vs frequency). Saves CSV incrementally after each point.
+    optionally vs frequency). Saves a single HDF5 file with save_interim after
+    each gain point. Performs adaptive span adjustment between scans.
 
     Automatically reads quadratic fit coefficients (quad_a, quad_b, quad_c) and
     sweet_spot_ac from the config (saved by QubitSpecFastFlux) when available.
@@ -588,11 +589,7 @@ class T1FastFlux(T1Experiment):
         if prefix is None:
             prefix = f"t1_fastflux_qubit{qi}"
 
-        # Initialize parent T1Experiment without running
-        super().__init__(
-            cfg_dict=cfg_dict, qi=qi, go=False, params=params,
-            prefix=prefix, progress=progress, check_params=False,
-        )
+        super().__init__(cfg_dict=cfg_dict, prefix=prefix, qi=qi)
 
         # Read quadratic coefficients and sweet spot from config if available
         cfg_flux = getattr(getattr(getattr(getattr(self.cfg, "hw", None), "soc", None), "dacs", None), "flux", None)
@@ -650,6 +647,7 @@ class T1FastFlux(T1Experiment):
             "freq_span": freq_span,
             "direction": direction,
             "lin_freq": True,
+            "t1_max": float("inf"),  # Upper bound on T1 when setting next span
         }
 
         if start_t1 is not None:
@@ -690,80 +688,87 @@ class T1FastFlux(T1Experiment):
             else:
                 self.freq_pts = None
 
-        # Set up folder structure: t1_fast_flux/{timestamp}_T1_fastflux_Q{qi}/
-        base_dir = Path(cfg_dict["expt_path"]) / "t1_fast_flux"
-        base_dir.mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.save_dir = base_dir / f"{timestamp}_T1_fastflux_Q{qi}"
-        self.save_dir.mkdir(parents=True, exist_ok=True)
-
         if go:
-            self.acquire(progress=progress)
-            if display:
-                self.display()
+            self.acquire(progress=progress, display=display)
+            self.display()
 
-    def acquire(self, progress=False):
-        original_path = self._cfg_dict["expt_path"]
-        self._cfg_dict["expt_path"] = str(self.save_dir)
-        self.t1_data = []
+    def acquire(self, progress=False, display=True):
+        from pathlib import Path
+
+        data = {"time": []}
         t1_list = []
         offset_list = []
         amp_list = []
-        csv_path = self.save_dir / "t1_vs_gain.csv"
+        q_offset_list = []
+        q_amp_list = []
+        csv_path = Path(self.fname).with_suffix(".csv")
 
-        # Build inner T1 params from cfg.expt, excluding our 2D-specific keys
-        _2d_keys = ("gain_start", "gain_stop", "expts_gain", "freq_coeffs", "lin_freq", "freq_span", "direction")
-        t1_params = {k: v for k, v in self.cfg.expt.items() if k not in _2d_keys}
+        for i, g in enumerate(tqdm(self.gain_pts, disable=not progress)):
+            # Update inner experiment config for this gain point
+            self.expt.cfg.expt["flux_gain"] = float(g)
 
-        try:
-            for i, g in enumerate(self.gain_pts):
-                t1 = T1Experiment(
-                    self._cfg_dict,
-                    qi=self._qi,
-                    params={**t1_params, "flux_gain": float(g)},
-                    progress=progress,
-                    display=False,
+            # Run inner T1 scan and analyze
+            data_new = self.expt.acquire(progress=False)
+            self.expt.analyze(data=data_new)
+            if display:
+                self.expt.display(data=data_new)
+
+            # Accumulate raw 2D data
+            for key in ("avgi", "avgq", "amps", "phases", "xpts"):
+                if key in data_new:
+                    if i == 0:
+                        data[key] = []
+                    data[key].append(data_new[key])
+            data["time"].append(time.time())
+
+            # Extract fit results
+            best_fit = data_new.get("best_fit", [np.nan, np.nan, np.nan])
+            t1_val = best_fit[2]
+            t1_list.append(t1_val)
+            offset_list.append(best_fit[0])
+            amp_list.append(best_fit[1])
+            fit_q = data_new.get("fit_avgq", [np.nan, np.nan, np.nan])
+            q_offset_list.append(fit_q[0])
+            q_amp_list.append(fit_q[1])
+
+            # Adjust span for next scan based on extracted T1
+            if np.isfinite(t1_val) and t1_val > 0:
+                self.expt.cfg.expt["span"] = 4.1 * min(
+                    t1_val, self.cfg.expt.get("t1_max", float("inf"))
                 )
-                self.t1_data.append(t1.data)
-                best_fit = t1.data.get("best_fit", [np.nan, np.nan, np.nan])
-                t1_val = best_fit[2]
-                t1_list.append(t1_val)
-                offset_list.append(best_fit[0])
-                amp_list.append(best_fit[1])
 
-                # Adjust span for next scan based on extracted T1
-                if np.isfinite(t1_val) and t1_val > 0:
-                    t1_params["span"] = 4.1 * t1_val
+            # Store analysis summaries in data for interim save
+            data["gain_pts"] = self.gain_pts
+            if self.freq_pts is not None:
+                data["freq_pts"] = self.freq_pts
+            data["t1_list"] = np.array(t1_list)
+            data["offset_list"] = np.array(offset_list)
+            data["amp_list"] = np.array(amp_list)
+            data["q_offset_list"] = np.array(q_offset_list)
+            data["q_amp_list"] = np.array(q_amp_list)
 
-                # Save CSV incrementally
-                gains_so_far = self.gain_pts[: i + 1]
-                t1s_so_far = np.array(t1_list)
-                offsets_so_far = np.array(offset_list)
-                amps_so_far = np.array(amp_list)
-                if self.freq_pts is not None:
-                    freqs_so_far = self.freq_pts[: i + 1]
-                    table = np.column_stack((gains_so_far, freqs_so_far, t1s_so_far, offsets_so_far, amps_so_far))
-                    header = "gain,freq,t1,offset,amplitude"
-                    fmt = ["%.6f", "%.10f", "%.6f", "%.6f", "%.6f"]
-                else:
-                    table = np.column_stack((gains_so_far, t1s_so_far, offsets_so_far, amps_so_far))
-                    header = "gain,t1,offset,amplitude"
-                    fmt = ["%.6f", "%.6f", "%.6f", "%.6f"]
-                np.savetxt(csv_path, table, delimiter=",", header=header, comments="", fmt=fmt)
-        finally:
-            self._cfg_dict["expt_path"] = original_path
+            if self.save_interim:
+                self.save_data(data=data)
 
-        self.data = {
-            "gain_pts": self.gain_pts,
-            "t1_list": np.array(t1_list),
-            "offset_list": np.array(offset_list),
-            "amp_list": np.array(amp_list),
-            "t1_data": self.t1_data,
-        }
-        if self.freq_pts is not None:
-            self.data["freq_pts"] = self.freq_pts
+            # Save CSV incrementally
+            gains_so_far = self.gain_pts[: i + 1]
+            if self.freq_pts is not None:
+                table = np.column_stack((gains_so_far, self.freq_pts[: i + 1],
+                    data["t1_list"], data["offset_list"], data["amp_list"],
+                    data["q_offset_list"], data["q_amp_list"]))
+                header = "gain,freq,t1,offset,amplitude,q_offset,q_amplitude"
+            else:
+                table = np.column_stack((gains_so_far,
+                    data["t1_list"], data["offset_list"], data["amp_list"],
+                    data["q_offset_list"], data["q_amp_list"]))
+                header = "gain,t1,offset,amplitude,q_offset,q_amplitude"
+            np.savetxt(csv_path, table, delimiter=",", header=header, comments="")
 
-        return self.data
+        # Convert lists to arrays
+        for k, a in data.items():
+            data[k] = np.array(a)
+        self.data = data
+        return data
 
     def display(self, data=None, **kwargs):
         import matplotlib.pyplot as plt
@@ -774,37 +779,203 @@ class T1FastFlux(T1Experiment):
         gain_pts = data["gain_pts"]
         t1_list = data["t1_list"]
 
-        plt.figure()
-        plt.plot(gain_pts, t1_list, ".-")
-        plt.xlabel("Flux Gain")
-        plt.ylabel("$T_1$ ($\mu$s)")
-        plt.title(f"$T_1$ vs Flux Gain Q{self._qi}")
-        plt.savefig(self.save_dir / "t1_vs_flux_gain.png")
-        plt.show()
+        fig, ax = plt.subplots()
+        ax.plot(gain_pts, t1_list, ".-")
+        ax.set_xlabel("Flux Gain")
+        ax.set_ylabel("$T_1$ ($\mu$s)")
+        self.save_fig(fig, suffix="_t1_vs_gain")
 
         if "freq_pts" in data:
             freq_pts = data["freq_pts"]
 
-            plt.figure()
-            plt.plot(freq_pts, t1_list, ".-")
-            plt.xlabel("Frequency (MHz)")
-            plt.ylabel("$T_1$ ($\mu$s)")
-            plt.title(f"$T_1$ vs Frequency Q{self._qi}")
-            plt.savefig(self.save_dir / "t1_vs_freq.png")
-            plt.show()
+            fig, ax = plt.subplots()
+            ax.plot(freq_pts, t1_list, ".-")
+            ax.set_xlabel("Frequency (MHz)")
+            ax.set_ylabel("$T_1$ ($\mu$s)")
+            self.save_fig(fig, suffix="_t1_vs_freq")
 
-            plt.figure()
-            plt.plot(freq_pts, data["amp_list"], ".-")
-            plt.xlabel("Frequency (MHz)")
-            plt.ylabel("Amplitude")
-            plt.title(f"Amplitude vs Frequency Q{self._qi}")
-            plt.savefig(self.save_dir / "amp_vs_freq.png")
-            plt.show()
+            fig, axes = plt.subplots(2, 2, figsize=(10, 7), sharex=True)
 
-            plt.figure()
-            plt.plot(freq_pts, data["offset_list"], ".-")
-            plt.xlabel("Frequency (MHz)")
-            plt.ylabel("Offset")
-            plt.title(f"Offset vs Frequency Q{self._qi}")
-            plt.savefig(self.save_dir / "offset_vs_freq.png")
-            plt.show()
+            panels = [
+                (axes[0, 0], data["amp_list"], "I Amplitude"),
+                (axes[0, 1], data["offset_list"], "I Offset"),
+                (axes[1, 0], data["q_amp_list"], "Q Amplitude"),
+                (axes[1, 1], data["q_offset_list"], "Q Offset"),
+            ]
+            for ax, vals, label in panels:
+                vals = np.array(vals, dtype=float)
+                mask = np.isfinite(vals)
+                if mask.sum() > 2:
+                    q1, q3 = np.percentile(vals[mask], [25, 75])
+                    iqr = q3 - q1
+                    inlier = mask & (vals >= q1 - 1.5 * iqr) & (vals <= q3 + 1.5 * iqr)
+                    ax.plot(freq_pts[inlier], vals[inlier], ".-")
+                    ax.plot(freq_pts[~inlier & mask], vals[~inlier & mask], "rx", ms=6)
+                else:
+                    ax.plot(freq_pts, vals, ".-")
+                ax.set_ylabel(label)
+            axes[1, 0].set_xlabel("Frequency (MHz)")
+            axes[1, 1].set_xlabel("Frequency (MHz)")
+            self.save_fig(fig, suffix="_fit_params")
+
+
+class T1FastFluxRepeated(T1FastFlux):
+    """
+    Repeatedly run T1FastFlux sweeps and build a T1(frequency, time) heatmap.
+
+    Runs T1FastFlux N times (or for a specified duration), accumulating
+    T1 vs frequency data. After each sweep, updates a live 2D heatmap
+    (x=frequency, y=elapsed time, color=T1) and appends to a master CSV.
+
+    Extra parameters (passed via params dict, in addition to T1FastFlux params):
+        n_repeats: Number of sweeps to run (default: None = run forever)
+        duration_hours: Max duration in hours (default: None = no limit).
+            If both n_repeats and duration_hours are given, stops at whichever
+            comes first. If both None, runs until KeyboardInterrupt.
+    """
+
+    def __init__(
+        self,
+        cfg_dict,
+        qi=0,
+        go=True,
+        params={},
+        prefix=None,
+        progress=False,
+        display=True,
+    ):
+        # Pop repeated-specific params before passing to parent
+        self._n_repeats = params.pop("n_repeats", None)
+        self._duration_hours = params.pop("duration_hours", None)
+
+        if prefix is None:
+            prefix = f"t1_fastflux_repeated_qubit{qi}"
+
+        # Init parent (sets up gain_pts, freq_pts) but don't run
+        super().__init__(
+            cfg_dict=cfg_dict, qi=qi, go=False, params=params,
+            prefix=prefix, progress=progress, display=display,
+        )
+
+        if go:
+            self.acquire(progress=progress, display=display)
+            self.display()
+
+    def acquire(self, progress=False, display=True):
+        try:
+            from IPython.display import display as ipy_display, clear_output
+            _has_ipy = True
+        except ImportError:
+            _has_ipy = False
+
+        self.t1_matrix = []
+        self.timestamps = []
+        t_start = time.time()
+        sweep_idx = 0
+        fig = None
+
+        # Build inner T1FastFlux params from cfg.expt, excluding repeated-specific keys
+        _repeated_keys = ("n_repeats", "duration_hours")
+        sweep_params = {k: v for k, v in self.cfg.expt.items() if k not in _repeated_keys}
+
+        try:
+            while True:
+                # Check stopping conditions
+                if self._n_repeats is not None and sweep_idx >= self._n_repeats:
+                    break
+                elapsed_h = (time.time() - t_start) / 3600
+                if self._duration_hours is not None and elapsed_h > self._duration_hours:
+                    break
+
+                # Run one T1FastFlux sweep (go=False, no save)
+                sweep = T1FastFlux(
+                    self._cfg_dict, qi=self._qi, go=False, params={**sweep_params},
+                    progress=progress, display=False,
+                )
+                sweep.gain_pts = self.gain_pts
+                sweep.freq_pts = self.freq_pts
+                data = sweep.acquire(progress=progress, display=False)
+
+                # Accumulate results
+                elapsed_h = (time.time() - t_start) / 3600
+                self.t1_matrix.append(data["t1_list"].copy())
+                self.timestamps.append(elapsed_h)
+
+                # Carry adaptive span to next sweep
+                last_t1 = data["t1_list"]
+                finite_t1s = last_t1[np.isfinite(last_t1) & (last_t1 > 0)]
+                if len(finite_t1s) > 0:
+                    median_t1 = np.median(finite_t1s)
+                    t1_max = self.cfg.expt.get("t1_max", float("inf"))
+                    sweep_params["span"] = 4.1 * min(median_t1, t1_max)
+
+                # Build and save interim data
+                self.data = {
+                    "freq_pts": self.freq_pts,
+                    "gain_pts": self.gain_pts,
+                    "t1_matrix": np.array(self.t1_matrix),
+                    "timestamps": np.array(self.timestamps),
+                }
+                self.save_data()
+
+                # Update live heatmap
+                if display and _has_ipy:
+                    fig = self._update_heatmap(fig, clear_output, ipy_display)
+
+                sweep_idx += 1
+
+        except KeyboardInterrupt:
+            print(f"\nInterrupted after {sweep_idx} sweep(s).")
+
+        self.data = {
+            "freq_pts": self.freq_pts,
+            "gain_pts": self.gain_pts,
+            "t1_matrix": np.array(self.t1_matrix) if self.t1_matrix else np.array([]).reshape(0, 0),
+            "timestamps": np.array(self.timestamps),
+        }
+        return self.data
+
+    def _update_heatmap(self, fig, clear_output, ipy_display):
+        import matplotlib.pyplot as plt
+
+        t1_2d = np.array(self.t1_matrix)
+        freq = self.freq_pts if self.freq_pts is not None else self.gain_pts
+        times = np.array(self.timestamps)
+
+        if fig is not None:
+            plt.close(fig)
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        mesh = ax.pcolormesh(freq, times, t1_2d, cmap="viridis", shading="auto")
+        ax.set_xlabel("Frequency (MHz)" if self.freq_pts is not None else "Flux Gain")
+        ax.set_ylabel("Elapsed Time (hours)")
+        ax.set_title(f"$T_1$ vs Frequency and Time — Q{self._qi}")
+        plt.colorbar(mesh, ax=ax, label="$T_1$ ($\\mu$s)")
+        fig.tight_layout()
+
+        clear_output(wait=True)
+        ipy_display(fig)
+        print(f"Completed {len(self.t1_matrix)} sweep(s), {times[-1]:.2f} hours elapsed")
+        return fig
+
+    def display(self, data=None, **kwargs):
+        import matplotlib.pyplot as plt
+
+        if data is None:
+            data = self.data
+
+        t1_2d = data["t1_matrix"]
+        if t1_2d.size == 0:
+            print("No sweep data to display.")
+            return
+
+        freq = data.get("freq_pts", data["gain_pts"])
+        times = data["timestamps"]
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        mesh = ax.pcolormesh(freq, times, t1_2d, cmap="viridis", shading="auto")
+        ax.set_xlabel("Frequency (MHz)" if "freq_pts" in data and data["freq_pts"] is not None else "Flux Gain")
+        ax.set_ylabel("Elapsed Time (hours)")
+        ax.set_title(f"$T_1$ vs Frequency and Time — Q{self._qi}")
+        plt.colorbar(mesh, ax=ax, label="$T_1$ ($\\mu$s)")
+        self.save_fig(fig, suffix="_heatmap")

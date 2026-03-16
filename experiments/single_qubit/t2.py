@@ -16,13 +16,13 @@ Additional features include:
 """
 
 import numpy as np
-from datetime import datetime
-from pathlib import Path
+import time
 from qick import *
 from qick.asm_v2 import QickSweep1D
+from tqdm import tqdm
 
 from ...analysis import fitting as fitter
-from ..general.qick_experiment import QickExperiment
+from ..general.qick_experiment import QickExperiment, QickExperiment2DSimple
 from ..general.qick_program import QickProgram
 
 from ...exp_handling.datamanagement import AttrDict
@@ -666,12 +666,13 @@ class T2Experiment(QickExperiment):
         )
 
 
-class T2FastFlux(T2Experiment):
+class T2FastFlux(QickExperiment2DSimple):
     """
     T2FastFlux: Sweep T2 across flux gain values.
 
     Runs a T2Experiment at each flux gain point, collecting T2 vs flux gain (and
-    optionally vs frequency). Saves CSV incrementally after each point.
+    optionally vs frequency). Saves a single HDF5 file with save_interim after
+    each gain point. Performs adaptive span adjustment between scans.
 
     Automatically reads quadratic fit coefficients (quad_a, quad_b, quad_c) and
     sweet_spot_ac from the config (saved by QubitSpecFastFlux) when available.
@@ -705,11 +706,7 @@ class T2FastFlux(T2Experiment):
         if prefix is None:
             prefix = f"t2_fastflux_qubit{qi}"
 
-        # Initialize parent T2Experiment without running
-        super().__init__(
-            cfg_dict=cfg_dict, qi=qi, go=False, params=params,
-            prefix=prefix, progress=progress, check_params=False,
-        )
+        super().__init__(cfg_dict=cfg_dict, prefix=prefix, qi=qi)
 
         # Read quadratic coefficients and sweet spot from config if available
         cfg_flux = getattr(getattr(getattr(getattr(self.cfg, "hw", None), "soc", None), "dacs", None), "flux", None)
@@ -807,89 +804,70 @@ class T2FastFlux(T2Experiment):
             else:
                 self.freq_pts = None
 
-        # Set up folder structure: t2_fast_flux/{timestamp}_T2_fastflux_Q{qi}/
-        base_dir = Path(cfg_dict["expt_path"]) / "t2_fast_flux"
-        base_dir.mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.save_dir = base_dir / f"{timestamp}_T2_fastflux_Q{qi}"
-        self.save_dir.mkdir(parents=True, exist_ok=True)
-
         if go:
             self.acquire(progress=progress, display=display)
             self.display()
 
     def acquire(self, progress=False, display=True):
-        original_path = self._cfg_dict["expt_path"]
-        self._cfg_dict["expt_path"] = str(self.save_dir)
-        self.t2_data = []
+        data = {"time": []}
         t2_list = []
         offset_list = []
         amp_list = []
         q_offset_list = []
         q_amp_list = []
-        csv_path = self.save_dir / "t2_vs_gain.csv"
 
-        # Build inner T2 params from cfg.expt, excluding our 2D-specific keys
-        _2d_keys = ("gain_start", "gain_stop", "expts_gain", "freq_coeffs", "lin_freq", "freq_span", "direction", "t2_max")
-        t2_params = {k: v for k, v in self.cfg.expt.items() if k not in _2d_keys}
+        for i, g in enumerate(tqdm(self.gain_pts, disable=not progress)):
+            # Update inner experiment config for this gain point
+            self.expt.cfg.expt["flux_gain"] = float(g)
 
-        try:
-            for i, g in enumerate(self.gain_pts):
-                t2 = T2Experiment(
-                    self._cfg_dict,
-                    qi=self._qi,
-                    params={**t2_params, "flux_gain": float(g)},
-                    progress=progress,
-                    display=display,
+            # Run inner T2 scan and analyze
+            data_new = self.expt.acquire(progress=False)
+            self.expt.analyze(data=data_new)
+            if display:
+                self.expt.display(data=data_new)
+
+            # Accumulate raw 2D data
+            for key in ("avgi", "avgq", "amps", "phases", "xpts"):
+                if key in data_new:
+                    if i == 0:
+                        data[key] = []
+                    data[key].append(data_new[key])
+            data["time"].append(time.time())
+
+            # T2 fit: [yscale, freq, phase_deg, decay, y0] — T2 is at index 3
+            best_fit = data_new.get("best_fit", [np.nan, np.nan, np.nan, np.nan, np.nan])
+            t2_val = best_fit[3]
+            t2_list.append(t2_val)
+            offset_list.append(best_fit[4])
+            amp_list.append(best_fit[0])
+            fit_q = data_new.get("fit_avgq", [np.nan, np.nan, np.nan, np.nan, np.nan])
+            q_offset_list.append(fit_q[4] if len(fit_q) > 4 else np.nan)
+            q_amp_list.append(fit_q[0] if len(fit_q) > 0 else np.nan)
+
+            # Adjust span for next scan based on extracted T2
+            if np.isfinite(t2_val) and t2_val > 0:
+                self.expt.cfg.expt["span"] = 4.1 * min(
+                    t2_val, self.cfg.expt.get("t2_max", float("inf"))
                 )
-                self.t2_data.append(t2.data)
-                # T2 fit: [yscale, freq, phase_deg, decay, y0] — T2 is at index 3
-                best_fit = t2.data.get("best_fit", [np.nan, np.nan, np.nan, np.nan, np.nan])
-                t2_val = best_fit[3]
-                t2_list.append(t2_val)
-                offset_list.append(best_fit[4])
-                amp_list.append(best_fit[0])
-                fit_q = t2.data.get("fit_avgq", [np.nan, np.nan, np.nan, np.nan, np.nan])
-                q_offset_list.append(fit_q[4] if len(fit_q) > 4 else np.nan)
-                q_amp_list.append(fit_q[0] if len(fit_q) > 0 else np.nan)
 
-                # Adjust span for next scan based on extracted T2
-                if np.isfinite(t2_val) and t2_val > 0:
-                    t2_params["span"] = 4.1 * min(t2_val, self.cfg.expt.get("t2_max", float("inf")))
+            # Store analysis summaries in data for interim save
+            data["gain_pts"] = self.gain_pts
+            if self.freq_pts is not None:
+                data["freq_pts"] = self.freq_pts
+            data["t2_list"] = np.array(t2_list)
+            data["offset_list"] = np.array(offset_list)
+            data["amp_list"] = np.array(amp_list)
+            data["q_offset_list"] = np.array(q_offset_list)
+            data["q_amp_list"] = np.array(q_amp_list)
 
-                # Save CSV incrementally
-                gains_so_far = self.gain_pts[: i + 1]
-                t2s_so_far = np.array(t2_list)
-                offsets_so_far = np.array(offset_list)
-                amps_so_far = np.array(amp_list)
-                q_offsets_so_far = np.array(q_offset_list)
-                q_amps_so_far = np.array(q_amp_list)
-                if self.freq_pts is not None:
-                    freqs_so_far = self.freq_pts[: i + 1]
-                    table = np.column_stack((gains_so_far, freqs_so_far, t2s_so_far, offsets_so_far, amps_so_far, q_offsets_so_far, q_amps_so_far))
-                    header = "gain,freq,t2,offset,amplitude,q_offset,q_amplitude"
-                    fmt = ["%.6f", "%.10f", "%.6f", "%.6f", "%.6f", "%.6f", "%.6f"]
-                else:
-                    table = np.column_stack((gains_so_far, t2s_so_far, offsets_so_far, amps_so_far, q_offsets_so_far, q_amps_so_far))
-                    header = "gain,t2,offset,amplitude,q_offset,q_amplitude"
-                    fmt = ["%.6f", "%.6f", "%.6f", "%.6f", "%.6f", "%.6f"]
-                np.savetxt(csv_path, table, delimiter=",", header=header, comments="", fmt=fmt)
-        finally:
-            self._cfg_dict["expt_path"] = original_path
+            if self.save_interim:
+                self.save_data(data=data)
 
-        self.data = {
-            "gain_pts": self.gain_pts,
-            "t2_list": np.array(t2_list),
-            "offset_list": np.array(offset_list),
-            "amp_list": np.array(amp_list),
-            "q_offset_list": np.array(q_offset_list),
-            "q_amp_list": np.array(q_amp_list),
-            "t2_data": self.t2_data,
-        }
-        if self.freq_pts is not None:
-            self.data["freq_pts"] = self.freq_pts
-
-        return self.data
+        # Convert lists to arrays
+        for k, a in data.items():
+            data[k] = np.array(a)
+        self.data = data
+        return data
 
     def display(self, data=None, **kwargs):
         import matplotlib.pyplot as plt
@@ -900,53 +878,42 @@ class T2FastFlux(T2Experiment):
         gain_pts = data["gain_pts"]
         t2_list = data["t2_list"]
 
-        plt.figure()
-        plt.plot(gain_pts, t2_list, ".-")
-        plt.xlabel("Flux Gain")
-        plt.ylabel("$T_2$ ($\mu$s)")
-        plt.title(f"$T_2$ vs Flux Gain Q{self._qi}")
-        plt.savefig(self.save_dir / "t2_vs_flux_gain.png")
-        plt.show()
+        fig, ax = plt.subplots()
+        ax.plot(gain_pts, t2_list, ".-")
+        ax.set_xlabel("Flux Gain")
+        ax.set_ylabel("$T_2$ ($\mu$s)")
+        ax.set_title(f"$T_2$ vs Flux Gain Q{self._qi}")
+        self.save_fig(fig, suffix="_t2_vs_gain")
 
         if "freq_pts" in data:
             freq_pts = data["freq_pts"]
 
-            plt.figure()
-            plt.plot(freq_pts, t2_list, ".-")
-            plt.xlabel("Frequency (MHz)")
-            plt.ylabel("$T_2$ ($\mu$s)")
-            plt.title(f"$T_2$ vs Frequency Q{self._qi}")
-            plt.savefig(self.save_dir / "t2_vs_freq.png")
-            plt.show()
+            fig, ax = plt.subplots()
+            ax.plot(freq_pts, t2_list, ".-")
+            ax.set_xlabel("Frequency (MHz)")
+            ax.set_ylabel("$T_2$ ($\mu$s)")
+            ax.set_title(f"$T_2$ vs Frequency Q{self._qi}")
+            self.save_fig(fig, suffix="_t2_vs_freq")
 
-            plt.figure()
-            plt.plot(freq_pts, data["amp_list"], ".-")
-            plt.xlabel("Frequency (MHz)")
-            plt.ylabel("Amplitude")
-            plt.title(f"Amplitude vs Frequency Q{self._qi}")
-            plt.savefig(self.save_dir / "amp_vs_freq.png")
-            plt.show()
-
-            plt.figure()
-            plt.plot(freq_pts, data["offset_list"], ".-")
-            plt.xlabel("Frequency (MHz)")
-            plt.ylabel("Offset")
-            plt.title(f"Offset vs Frequency Q{self._qi}")
-            plt.savefig(self.save_dir / "offset_vs_freq.png")
-            plt.show()
-
-            plt.figure()
-            plt.plot(freq_pts, data["q_amp_list"], ".-")
-            plt.xlabel("Frequency (MHz)")
-            plt.ylabel("Q Amplitude")
-            plt.title(f"Q Amplitude vs Frequency Q{self._qi}")
-            plt.savefig(self.save_dir / "q_amp_vs_freq.png")
-            plt.show()
-
-            plt.figure()
-            plt.plot(freq_pts, data["q_offset_list"], ".-")
-            plt.xlabel("Frequency (MHz)")
-            plt.ylabel("Q Offset")
-            plt.title(f"Q Offset vs Frequency Q{self._qi}")
-            plt.savefig(self.save_dir / "q_offset_vs_freq.png")
-            plt.show()
+            fig, axes = plt.subplots(2, 2, figsize=(10, 7), sharex=True)
+            panels = [
+                (axes[0, 0], data["amp_list"], "Amplitude"),
+                (axes[0, 1], data["offset_list"], "Offset"),
+                (axes[1, 0], data["q_amp_list"], "Q Amplitude"),
+                (axes[1, 1], data["q_offset_list"], "Q Offset"),
+            ]
+            for ax, vals, label in panels:
+                vals = np.array(vals, dtype=float)
+                mask = np.isfinite(vals)
+                if mask.sum() > 2:
+                    q1, q3 = np.percentile(vals[mask], [25, 75])
+                    iqr = q3 - q1
+                    inlier = mask & (vals >= q1 - 1.5 * iqr) & (vals <= q3 + 1.5 * iqr)
+                    ax.plot(freq_pts[inlier], vals[inlier], ".-")
+                    ax.plot(freq_pts[~inlier & mask], vals[~inlier & mask], "rx", ms=6)
+                else:
+                    ax.plot(freq_pts, vals, ".-")
+                ax.set_ylabel(label)
+            axes[1, 0].set_xlabel("Frequency (MHz)")
+            axes[1, 1].set_xlabel("Frequency (MHz)")
+            self.save_fig(fig, suffix="_fit_params")
