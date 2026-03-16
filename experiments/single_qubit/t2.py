@@ -16,6 +16,8 @@ Additional features include:
 """
 
 import numpy as np
+from datetime import datetime
+from pathlib import Path
 from qick import *
 from qick.asm_v2 import QickSweep1D
 
@@ -102,6 +104,39 @@ class T2Program(QickProgram):
                 "type": "flat_top",  # Constant amplitude pulse
             }
             super().make_pulse(pulse, "stark_pulse")
+        elif cfg.expt.flux:
+            self.declare_gen(cfg.expt.flux_chan, nqz=1, mixer_freq=0)
+            if cfg.expt.num_pi > 0:
+                # Echo: separate flux pulses for half-segments and full segments
+                flux_half = {
+                    "chan": cfg.expt.flux_chan,
+                    "freq": 0,
+                    "phase": 0,
+                    "gain": cfg.expt.flux_gain,
+                    "length": cfg.expt.wait_time / cfg.expt.num_pi / 2,
+                    "type": "const",
+                }
+                super().make_pulse(flux_half, "flux_half")
+                flux_full = {
+                    "chan": cfg.expt.flux_chan,
+                    "freq": 0,
+                    "phase": 0,
+                    "gain": cfg.expt.flux_gain,
+                    "length": cfg.expt.wait_time / cfg.expt.num_pi,
+                    "type": "const",
+                }
+                super().make_pulse(flux_full, "flux_full")
+            else:
+                # Ramsey: single flux pulse for full wait time
+                flux_pulse = {
+                    "chan": cfg.expt.flux_chan,
+                    "freq": 0,
+                    "phase": 0,
+                    "gain": cfg.expt.flux_gain,
+                    "length": cfg.expt.wait_time,
+                    "type": "const",
+                }
+                super().make_pulse(flux_pulse, "flux_pulse")
 
         # Create π pulse for Echo or EF check
         if cfg.expt.experiment_type == "cpmg":
@@ -158,6 +193,26 @@ class T2Program(QickProgram):
                 ch=self.qubit_ch, name="stark_pulse", t=0
             )  # Apply AC Stark pulse
             self.delay_auto(t=0.025, tag="waiting")  # Additional wait time
+        elif cfg.expt.flux:
+            # Flux pulse applied only during wait segments (not during pi pulses)
+            if cfg.expt.num_pi > 0:
+                # Echo with flux: flux on during each wait segment
+                self.pulse(ch=cfg.expt.flux_chan, name="flux_half", t=0)
+                self.delay_auto(t=0.01, tag="wait")
+
+                for i in range(cfg.expt.num_pi):
+                    self.pulse(ch=self.qubit_ch, name="pi_ge", t=0)
+                    self.delay_auto(t=0.01, tag=f"wait_pi{i}")
+                    if i < cfg.expt.num_pi - 1:
+                        self.pulse(ch=cfg.expt.flux_chan, name="flux_full", t=0)
+                        self.delay_auto(t=0.01, tag=f"wait{i}")
+
+                self.pulse(ch=cfg.expt.flux_chan, name="flux_half", t=0)
+                self.delay_auto(t=0.01, tag=f"wait{cfg.expt.num_pi}")
+            else:
+                # Ramsey with flux
+                self.pulse(ch=cfg.expt.flux_chan, name="flux_pulse", t=0)
+                self.delay_auto(t=0.05, tag="wait")
         else:
             # Standard Ramsey or Echo sequence
             # For Echo, divide wait time by (num_pi + 1) to get segments between pulses
@@ -300,6 +355,9 @@ class T2Experiment(QickExperiment):
             "acStark": False,  # No AC Stark shift by default
             "checkEF": False,  # No EF transition check by default
             "qubit_chan": self.cfg.hw.soc.adcs.readout.ch[qi],  # Readout channel
+            "flux": False,  # Whether to apply flux pulse during wait time
+            "flux_chan": self.cfg.hw.soc.dacs.flux.ch[qi],  # DAC channel for flux pulse
+            "flux_gain": 0.1,  # Gain for flux pulse
         }
 
         # Adjust parameters based on measurement style
@@ -606,3 +664,289 @@ class T2Experiment(QickExperiment):
             rescale=rescale,
             **kwargs,
         )
+
+
+class T2FastFlux(T2Experiment):
+    """
+    T2FastFlux: Sweep T2 across flux gain values.
+
+    Runs a T2Experiment at each flux gain point, collecting T2 vs flux gain (and
+    optionally vs frequency). Saves CSV incrementally after each point.
+
+    Automatically reads quadratic fit coefficients (quad_a, quad_b, quad_c) and
+    sweet_spot_ac from the config (saved by QubitSpecFastFlux) when available.
+    The gain sweep starts at sweet_spot_ac by default.
+
+    Sweep parameters (passed via params dict):
+        gain_start: Starting flux gain value (default: sweet_spot_ac)
+        gain_stop: Ending flux gain value (default: sweet_spot_ac + 0.4)
+        direction: 'pos' or 'neg' — sweep direction from sweet spot (default: 'pos').
+            Sets gain_stop relative to sweet spot if gain_stop not explicitly given.
+        freq_span: Frequency span in MHz. When provided with freq_coeffs, converts
+            to a gain range using the quadratic. Overrides gain_stop.
+        expts_gain: Number of gain points in the sweep
+        freq_coeffs: Optional (a, b, c) tuple for quadratic freq = a*g^2 + b*g + c.
+            If not provided, reads quad_a/b/c from config.
+        lin_freq: If True and freq_coeffs provided, space points linearly in
+            frequency (inverting the quadratic) instead of linearly in gain.
+        experiment_type: 'ramsey' or 'echo' (default: 'ramsey')
+    """
+
+    def __init__(
+        self,
+        cfg_dict,
+        qi=0,
+        go=True,
+        params={},
+        prefix=None,
+        progress=False,
+        display=True,
+    ):
+        if prefix is None:
+            prefix = f"t2_fastflux_qubit{qi}"
+
+        # Initialize parent T2Experiment without running
+        super().__init__(
+            cfg_dict=cfg_dict, qi=qi, go=False, params=params,
+            prefix=prefix, progress=progress, check_params=False,
+        )
+
+        # Read quadratic coefficients and sweet spot from config if available
+        cfg_flux = getattr(getattr(getattr(getattr(self.cfg, "hw", None), "soc", None), "dacs", None), "flux", None)
+        cfg_qubit = getattr(getattr(self.cfg, "device", None), "qubit", None)
+
+        config_freq_coeffs = None
+        sweet_spot = 0.0
+        if cfg_flux is not None:
+            a = cfg_flux.quad_a[qi] if hasattr(cfg_flux, "quad_a") else 0
+            b = cfg_flux.quad_b[qi] if hasattr(cfg_flux, "quad_b") else 0
+            c = cfg_flux.quad_c[qi] if hasattr(cfg_flux, "quad_c") else 0
+            if a != 0 or b != 0:
+                config_freq_coeffs = (a, b, c)
+        if cfg_qubit is not None and hasattr(cfg_qubit, "sweet_spot_ac"):
+            sweet_spot = cfg_qubit.sweet_spot_ac[qi]
+
+        # Determine sweep direction and gain range
+        direction = params.get("direction", "pos")
+        sign = 1 if direction == "pos" else -1
+        freq_coeffs = params.get("freq_coeffs", config_freq_coeffs)
+        freq_span = params.get("freq_span", None)
+
+        # Convert freq_span to gain_stop using the quadratic
+        if freq_span is not None and freq_coeffs is not None and "gain_stop" not in params:
+            a, b, c = freq_coeffs
+            f_sweet = a * sweet_spot**2 + b * sweet_spot + c
+            f_target = f_sweet - freq_span  # frequency decreases away from sweet spot
+            discriminant = b**2 - 4 * a * (c - f_target)
+            if discriminant >= 0:
+                root_pos = (-b + np.sqrt(discriminant)) / (2 * a)
+                root_neg = (-b - np.sqrt(discriminant)) / (2 * a)
+                if sign > 0:
+                    gain_stop = max(root_pos, root_neg)
+                else:
+                    gain_stop = min(root_pos, root_neg)
+            else:
+                gain_stop = sweet_spot + sign * 0.4
+        elif "gain_stop" not in params:
+            gain_stop = sweet_spot + sign * 0.4
+        else:
+            gain_stop = params["gain_stop"]
+
+        # start_t2: assumed T2 for the first gain point, sets initial span
+        start_t2 = params.pop("start_t2", None)
+
+        # Define default parameters for the 2D sweep
+        params_def = {
+            "gain_start": sweet_spot,
+            "gain_stop": gain_stop,
+            "start": 0.05,
+            "expts": 25,
+            "expts_gain": 50,
+            "freq_coeffs": freq_coeffs,
+            "freq_span": freq_span,
+            "direction": direction,
+            "lin_freq": True,
+            "t2_max": float("inf"),  # Upper bound on T2 when setting next span
+        }
+
+        if start_t2 is not None:
+            params_def["span"] = 4.1 * start_t2
+        params = {**params_def, **params}
+        # Create inner T2 experiment (go=False) to inherit its config
+        self.expt = T2Experiment(cfg_dict, qi, go=False, params=params, check_params=False)
+        params = {**self.expt.cfg.expt, **params, "flux": True}
+        self.cfg.expt = {**params_def, **params}
+
+        # Store references
+        self._qi = qi
+        self._cfg_dict = cfg_dict
+
+        # Build gain_pts and freq_pts from config
+        cfg_e = self.cfg.expt
+        freq_coeffs = cfg_e["freq_coeffs"]
+
+        if cfg_e["lin_freq"] and freq_coeffs is not None:
+            # Linearly spaced in frequency, invert quadratic to get gains
+            a, b, c = freq_coeffs
+            freq_start = a * cfg_e["gain_start"]**2 + b * cfg_e["gain_start"] + c
+            freq_stop = a * cfg_e["gain_stop"]**2 + b * cfg_e["gain_stop"] + c
+            self.freq_pts = np.linspace(freq_start, freq_stop, cfg_e["expts_gain"])
+            discriminant = b**2 - 4 * a * (c - self.freq_pts)
+            root_pos = (-b + np.sqrt(discriminant)) / (2 * a)
+            root_neg = (-b - np.sqrt(discriminant)) / (2 * a)
+            if cfg_e["direction"] == "pos":
+                self.gain_pts = np.maximum(root_pos, root_neg)
+            else:
+                self.gain_pts = np.minimum(root_pos, root_neg)
+        else:
+            # Linearly spaced in gain
+            self.gain_pts = np.linspace(cfg_e["gain_start"], cfg_e["gain_stop"], cfg_e["expts_gain"])
+            if freq_coeffs is not None:
+                a, b, c = freq_coeffs
+                self.freq_pts = a * self.gain_pts**2 + b * self.gain_pts + c
+            else:
+                self.freq_pts = None
+
+        # Set up folder structure: t2_fast_flux/{timestamp}_T2_fastflux_Q{qi}/
+        base_dir = Path(cfg_dict["expt_path"]) / "t2_fast_flux"
+        base_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.save_dir = base_dir / f"{timestamp}_T2_fastflux_Q{qi}"
+        self.save_dir.mkdir(parents=True, exist_ok=True)
+
+        if go:
+            self.acquire(progress=progress, display=display)
+            self.display()
+
+    def acquire(self, progress=False, display=True):
+        original_path = self._cfg_dict["expt_path"]
+        self._cfg_dict["expt_path"] = str(self.save_dir)
+        self.t2_data = []
+        t2_list = []
+        offset_list = []
+        amp_list = []
+        q_offset_list = []
+        q_amp_list = []
+        csv_path = self.save_dir / "t2_vs_gain.csv"
+
+        # Build inner T2 params from cfg.expt, excluding our 2D-specific keys
+        _2d_keys = ("gain_start", "gain_stop", "expts_gain", "freq_coeffs", "lin_freq", "freq_span", "direction", "t2_max")
+        t2_params = {k: v for k, v in self.cfg.expt.items() if k not in _2d_keys}
+
+        try:
+            for i, g in enumerate(self.gain_pts):
+                t2 = T2Experiment(
+                    self._cfg_dict,
+                    qi=self._qi,
+                    params={**t2_params, "flux_gain": float(g)},
+                    progress=progress,
+                    display=display,
+                )
+                self.t2_data.append(t2.data)
+                # T2 fit: [yscale, freq, phase_deg, decay, y0] — T2 is at index 3
+                best_fit = t2.data.get("best_fit", [np.nan, np.nan, np.nan, np.nan, np.nan])
+                t2_val = best_fit[3]
+                t2_list.append(t2_val)
+                offset_list.append(best_fit[4])
+                amp_list.append(best_fit[0])
+                fit_q = t2.data.get("fit_avgq", [np.nan, np.nan, np.nan, np.nan, np.nan])
+                q_offset_list.append(fit_q[4] if len(fit_q) > 4 else np.nan)
+                q_amp_list.append(fit_q[0] if len(fit_q) > 0 else np.nan)
+
+                # Adjust span for next scan based on extracted T2
+                if np.isfinite(t2_val) and t2_val > 0:
+                    t2_params["span"] = 4.1 * min(t2_val, self.cfg.expt.get("t2_max", float("inf")))
+
+                # Save CSV incrementally
+                gains_so_far = self.gain_pts[: i + 1]
+                t2s_so_far = np.array(t2_list)
+                offsets_so_far = np.array(offset_list)
+                amps_so_far = np.array(amp_list)
+                q_offsets_so_far = np.array(q_offset_list)
+                q_amps_so_far = np.array(q_amp_list)
+                if self.freq_pts is not None:
+                    freqs_so_far = self.freq_pts[: i + 1]
+                    table = np.column_stack((gains_so_far, freqs_so_far, t2s_so_far, offsets_so_far, amps_so_far, q_offsets_so_far, q_amps_so_far))
+                    header = "gain,freq,t2,offset,amplitude,q_offset,q_amplitude"
+                    fmt = ["%.6f", "%.10f", "%.6f", "%.6f", "%.6f", "%.6f", "%.6f"]
+                else:
+                    table = np.column_stack((gains_so_far, t2s_so_far, offsets_so_far, amps_so_far, q_offsets_so_far, q_amps_so_far))
+                    header = "gain,t2,offset,amplitude,q_offset,q_amplitude"
+                    fmt = ["%.6f", "%.6f", "%.6f", "%.6f", "%.6f", "%.6f"]
+                np.savetxt(csv_path, table, delimiter=",", header=header, comments="", fmt=fmt)
+        finally:
+            self._cfg_dict["expt_path"] = original_path
+
+        self.data = {
+            "gain_pts": self.gain_pts,
+            "t2_list": np.array(t2_list),
+            "offset_list": np.array(offset_list),
+            "amp_list": np.array(amp_list),
+            "q_offset_list": np.array(q_offset_list),
+            "q_amp_list": np.array(q_amp_list),
+            "t2_data": self.t2_data,
+        }
+        if self.freq_pts is not None:
+            self.data["freq_pts"] = self.freq_pts
+
+        return self.data
+
+    def display(self, data=None, **kwargs):
+        import matplotlib.pyplot as plt
+
+        if data is None:
+            data = self.data
+
+        gain_pts = data["gain_pts"]
+        t2_list = data["t2_list"]
+
+        plt.figure()
+        plt.plot(gain_pts, t2_list, ".-")
+        plt.xlabel("Flux Gain")
+        plt.ylabel("$T_2$ ($\mu$s)")
+        plt.title(f"$T_2$ vs Flux Gain Q{self._qi}")
+        plt.savefig(self.save_dir / "t2_vs_flux_gain.png")
+        plt.show()
+
+        if "freq_pts" in data:
+            freq_pts = data["freq_pts"]
+
+            plt.figure()
+            plt.plot(freq_pts, t2_list, ".-")
+            plt.xlabel("Frequency (MHz)")
+            plt.ylabel("$T_2$ ($\mu$s)")
+            plt.title(f"$T_2$ vs Frequency Q{self._qi}")
+            plt.savefig(self.save_dir / "t2_vs_freq.png")
+            plt.show()
+
+            plt.figure()
+            plt.plot(freq_pts, data["amp_list"], ".-")
+            plt.xlabel("Frequency (MHz)")
+            plt.ylabel("Amplitude")
+            plt.title(f"Amplitude vs Frequency Q{self._qi}")
+            plt.savefig(self.save_dir / "amp_vs_freq.png")
+            plt.show()
+
+            plt.figure()
+            plt.plot(freq_pts, data["offset_list"], ".-")
+            plt.xlabel("Frequency (MHz)")
+            plt.ylabel("Offset")
+            plt.title(f"Offset vs Frequency Q{self._qi}")
+            plt.savefig(self.save_dir / "offset_vs_freq.png")
+            plt.show()
+
+            plt.figure()
+            plt.plot(freq_pts, data["q_amp_list"], ".-")
+            plt.xlabel("Frequency (MHz)")
+            plt.ylabel("Q Amplitude")
+            plt.title(f"Q Amplitude vs Frequency Q{self._qi}")
+            plt.savefig(self.save_dir / "q_amp_vs_freq.png")
+            plt.show()
+
+            plt.figure()
+            plt.plot(freq_pts, data["q_offset_list"], ".-")
+            plt.xlabel("Frequency (MHz)")
+            plt.ylabel("Q Offset")
+            plt.title(f"Q Offset vs Frequency Q{self._qi}")
+            plt.savefig(self.save_dir / "q_offset_vs_freq.png")
+            plt.show()
