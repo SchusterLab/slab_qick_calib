@@ -1,12 +1,12 @@
 aliases: {ip: 10.108.30.23, soc: bf1_soc}
 device:
   qubit:
-    T1: [1, 50, 50, 50]
-    T2e: [1, 100, 100, 100]
-    T2r: [1, 50, 50, 50]
+    T1: [50, 50, 50, 50]
+    T2e: [100, 100, 100, 100]
+    T2r: [50, 50, 50, 50]
     f_ef: [3800, 3800, 3800, 3800]
-    f_ge: [5660.9747, 5657.1574, 6204.8217, 4000]
-    kappa: [189.3021, 346.8944, -20.3047, 0]
+    f_ge: [4000, 4000, 4000, 4000]
+    kappa: [0, 0, 0, 0]
     low_gain: 0.003
     max_gain: 1
     pop: [0, 0, 0, 0]
@@ -30,15 +30,16 @@ device:
     active_reset: [false, false, false, false]
     chi: [0, 0, 0, 0]
     fidelity: [0, 0, 0, 0]
-    final_delay: [10, 300, 300, 300]
-    frequency: [3941.7496, 7142.5682, 7687.8994, 8292.8916]
-    gain: [0.3, 0.3, 0.4, 0.05]
-    kappa: [0.3144, 2.9665, 2.9497, 2.6211]
-    lamb: [14.9704, -14.9796, -7.3832, -1.8339]
+    final_delay: [300, 300, 300, 300]
+    frequency: [7000, 7000, 7000, 7000]
+    gain: [0.05, 0.05, 0.05, 0.05]
+    kappa: [0.5, 0.5, 0.5, 0.5]
+    lamb: [0, 0, 0, 0]
     max_gain: 1
+    nstark: [null, null, null, null]
     phase: [0, 0, 0, 0]
-    qe: [1.6647, 0.2408, 0.2699, 0.3164]
-    qi: [5.0793, 25849609.3308, 7.6006, 33712862.0122]
+    qe: [0, 0, 0, 0]
+    qi: [0, 0, 0, 0]
     readout_length: [5, 5, 5, 5]
     reps: [1, 1, 1, 1]
     reps_base: 150
@@ -49,24 +50,42 @@ device:
     sigma: [0, 0, 0, 0]
     threshold: [10, 10, 10, 10]
     tm: [0, 0, 0, 0]
-    trig_offset: [0.52, 0.52, 0.52, 0.5]
+    trig_offset: [0.5, 0.5, 0.5, 0.5]
 hw:
   soc:
     adcs:
       readout:
         attn: [0, 0, 0, 0]
-        ch: [1, 1, 1, 1]
+        ch: [4, 1, 1, 1]
+        filter_bw: [1000, 1000, 1000, 1000]
+        filter_fc: [0, 0, 0, 0]
+        filter_type: [bypass, bypass, bypass, bypass]
         type: [dyn, dyn, dyn, dyn]
     dacs:
       qubit:
         attn1: [0, 0, 0, 0]
         attn2: [0, 0, 0, 0]
         ch: [3, 3, 3, 3]
+        filter_bw: [1000, 1000, 1000, 1000]
+        filter_fc: [0, 0, 0, 0]
+        filter_type: [bypass, bypass, bypass, bypass]
         nyquist: [1, 1, 1, 1]
         type: [full, full, full, full]
       readout:
         attn1: [0, 0, 0, 0]
         attn2: [0, 0, 0, 0]
-        ch: [2, 2, 2, 2]
+        ch: [3, 2, 2, 2]
+        filter_bw: [1000, 1000, 1000, 1000]
+        filter_fc: [0, 0, 0, 0]
+        filter_type: [bypass, bypass, bypass, bypass]
         nyquist: [2, 2, 2, 2]
         type: [full, full, full, full]
+    rfboard_active:
+      adc:
+        '0': {attn: 0, filter_bw: 0, filter_fc: 0, filter_type: unknown, qubit: null}
+      dac_qubit:
+        '1': {attn1: 0, attn2: 0, filter_bw: 0, filter_fc: 0, filter_type: unknown,
+          qubit: null}
+      dac_readout:
+        '0': {attn1: 0, attn2: 0, filter_bw: 0, filter_fc: 0, filter_type: unknown,
+          qubit: null}
