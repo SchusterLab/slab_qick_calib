@@ -1,7 +1,11 @@
 {
   "permissions": {
     "allow": [
-      "Bash(*)"
+      "Bash(*)",
+      "Read(//c/_Lib/python/fridge/**)",
+      "WebFetch(domain:github.com)",
+      "Read(//c/_Data/sample_50_new/data/t1_fastflux_loop_repeated_qubit2_00006/csvs/**)",
+      "Read(//c/_Data/sample_50_new/images/**)"
     ],
     "defaultMode": "acceptEdits"
   }

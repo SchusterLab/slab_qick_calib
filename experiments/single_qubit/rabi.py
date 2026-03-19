@@ -27,6 +27,7 @@ from ..general.qick_experiment import (
 from ..general.qick_program import QickProgram
 
 from ...exp_handling.datamanagement import AttrDict
+from ...helpers import config
 FITTER_FUNC = fitter.fitsin
 FIT_FUNC = fitter.sinfunc
 # ====================================================== #
@@ -70,7 +71,7 @@ class RabiProgram(QickProgram):
 
         # Add sweep loop for the experiment
         self.add_loop("sweep_loop", cfg.expt.expts)
-    
+
         # Create the main qubit pulse
         pulse_params = self._get_pulse_params(cfg)
         super().make_pulse(pulse_params, "qubit_pulse")
@@ -78,6 +79,7 @@ class RabiProgram(QickProgram):
         # If checking EF transition and using ge pulse, create a pi pulse
         if (cfg.expt.checkEF and cfg.expt.pulse_ge) or cfg.expt.active_reset:
             super().make_cfg_pulse(q, cfg.device.qubit.f_ge, "pi_ge")
+
 
     def _get_pulse_params(self, cfg):
         """
@@ -99,13 +101,13 @@ class RabiProgram(QickProgram):
         # Set length/sigma based on pulse type
         if cfg.expt.pulse_type == "gauss":
             pulse["sigma"] = cfg.expt.sigma
-            pulse["length"] = cfg.expt.get("length", cfg.expt.sigma * cfg.expt.sigma_inc)
+            pulse["length"] = cfg.expt.length
         elif cfg.expt.pulse_type == "flat_top":
             pulse["length"] = cfg.expt.length
-            pulse["ramp_sigma"] = cfg.expt.get("ramp_sigma", 0.02)
-            pulse["ramp_sigma_inc"] = cfg.expt.get("ramp_sigma_inc", 3)
+            pulse["ramp_sigma"] = cfg.expt.ramp_sigma
+            pulse["ramp_sigma_inc"] = cfg.expt.ramp_sigma_inc
         else:  # const
-            pulse["length"] = cfg.expt.get("length", cfg.expt.sigma)
+            pulse["length"] = cfg.expt.length
             
         return pulse
 
@@ -286,9 +288,24 @@ class RabiExperiment(QickExperiment):
                 params_def[key] = pulse_config[key][qi]
 
         # Handle pulse_type parameter as alias for type
-        
+
         params_def["pulse_type"] = params_def["type"]
         params = {**params_def, **params}
+
+        # Resolve length from pulse type so downstream code can use direct access
+        if "length" not in params or params.get("length") is None:
+            if params["pulse_type"] == "gauss":
+                params["length"] = params["sigma"] * params["sigma_inc"]
+            else:
+                params["length"] = params["sigma"]
+
+        # Resolve flat_top ramp defaults
+        if params["pulse_type"] == "flat_top":
+            if "ramp_sigma" not in params:
+                params["ramp_sigma"] = 0.02
+            if "ramp_sigma_inc" not in params:
+                params["ramp_sigma_inc"] = 3
+
         return params
         
 
@@ -327,10 +344,8 @@ class RabiExperiment(QickExperiment):
             else:
                 # For const and flat_top pulses, sweep length directly
                 params_def["start"] = 3 * self.soccfg.cycles2us(1) # Minimum length
-                # If sigma is given but not length, use that for the pulse length
-                params_def['length']=params_def.get('length', params_def['sigma'])
                 params = {**params_def, **params}
-                params_def["max_length"] = 2 * params["num_osc"] * params.get("length", params["sigma"])
+                params_def["max_length"] = 2 * params["num_osc"] * params["length"]
 
             params = {**params_def, **params}
         return params
@@ -454,6 +469,32 @@ class RabiExperiment(QickExperiment):
 
         return data
 
+    def update(self, verbose=True):
+        qi = self.cfg.expt.qubit[0]
+        if "pi_length" not in self.data:
+            print("No pi_length found in data, cannot update.")
+            return
+
+        pi_val = self.data["pi_length"]
+        pulse = "pi_ef" if self.cfg.expt.checkEF else "pi_ge"
+
+        if self.cfg.expt.sweep == "amp":
+            config.update_config(
+                self.config_file, f"device.qubit.pulses.{pulse}", "gain",
+                pi_val, index=qi, verbose=verbose,
+            )
+        elif self.cfg.expt.sweep == "length":
+            if self.cfg.expt.pulse_type == "gauss":
+                config.update_config(
+                    self.config_file, f"device.qubit.pulses.{pulse}", "sigma",
+                    pi_val, index=qi, verbose=verbose,
+                )
+            else:
+                config.update_config(
+                    self.config_file, f"device.qubit.pulses.{pulse}", "sigma",
+                    pi_val, index=qi, verbose=verbose,
+                )
+
     def display(
         self,
         data=None,
@@ -464,18 +505,6 @@ class RabiExperiment(QickExperiment):
         rescale=False,
         **kwargs,
     ):
-        """
-        Display the results of the Rabi experiment.
-
-        Args:
-            data: Data to display (if None, use self.data)
-            fit: Whether to show the fit curve
-            plot_all: Whether to plot all data types (I, Q, amplitude)
-            ax: Matplotlib axis to plot on
-            show_hist: Whether to show histogram
-            rescale: Whether to rescale the plot
-            **kwargs: Additional arguments for the display
-        """
         if data is None:
             data = self.data
 
@@ -661,7 +690,7 @@ class RabiChevronExperiment(QickExperiment2DSimple):
         params={},
         style="",
         prefix=None,
-        progress=False,
+        progress=True,
         live_plot=False,
     ):
         """Initialize the RabiChevronExperiment."""

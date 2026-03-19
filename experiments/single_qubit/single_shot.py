@@ -91,7 +91,7 @@ class HistogramProgram(QickProgram):
         self.frequency = cfg.expt.frequency
         self.gain = cfg.expt.gain
         # Set phase based on whether active reset is enabled
-        if cfg.expt.active_reset or cfg.expt.remeas:
+        if cfg.expt.active_reset or cfg.expt.remeas or cfg.expt.calibrate:
             self.phase = cfg.device.readout.phase[cfg.expt.qubit[0]]
         else:
             self.phase = 0
@@ -138,7 +138,10 @@ class HistogramProgram(QickProgram):
             self.pulse(ch=self.qubit_ch, name="pi_ef", t=0)
 
         # Add small delay before readout
-        self.delay_auto(t=0.01, tag="wait")
+        if cfg.expt.calibrate:
+            self.delay_auto(t=0.1, tag="wait")
+        else:
+            self.delay_auto(t=0.01, tag="wait")
 
         # Apply readout pulse and trigger data acquisition
         self.pulse(ch=self.res_ch, name="readout_pulse", t=0)
@@ -368,6 +371,7 @@ class HistogramExperiment(QickExperiment):
             qubit_chan=self.cfg.hw.soc.adcs.readout.ch[qi],  # Readout channel
             ddr4=False,  # Whether to use DDR4 memory
             remeas=False,  # Whether to do repeated measurement
+            calibrate=False,
             final_delay=self.cfg.device.readout.readout_length[qi],  # Final delay
         )
 

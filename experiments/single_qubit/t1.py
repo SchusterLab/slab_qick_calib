@@ -1,5 +1,6 @@
 import numpy as np
 import time
+from datetime import datetime
 from qick import *
 from qick.asm_v2 import QickSweep1D
 from tqdm import tqdm
@@ -125,11 +126,11 @@ class T1Program(QickProgram):
             self.delay_auto(t=cfg.expt["end_wait"], tag="wait")
         elif cfg.expt.flux:
             # Apply flux pulse during wait time
-            self.delay_auto(t=0.01, tag="wait_stark")
+            self.delay_auto(t=0.01, tag="wait_flux")
             # Apply flux pulse during wait time
             self.pulse(ch=cfg.expt.flux_chan, name="flux_pulse", t=0)
             # Small buffer delay after flux pulse
-            self.delay_auto(t=0.15, tag="wait")
+            self.delay_auto(t=cfg.expt.flux_readout_wait, tag="wait")
             #self.delay_auto(t=cfg.expt["end_wait"], tag="wait")
         else:
             # Simple delay for standard T1 measurement
@@ -238,7 +239,8 @@ class T1Experiment(QickExperiment):
             ],  # Readout channel for this qubit
             "flux": False, # Whether to apply flux pulse during wait time
             "flux_chan": self.cfg.hw.soc.dacs.flux.ch[qi], # DAC channel for flux pulse
-            "flux_gain": 0.1, # Gain for flux pulse
+            "flux_gain": 0.1, # Gain for flux pulse,
+            "flux_readout_wait": 0.1 # Wait time after flux pulse before readout
         }
 
         # Adjust parameters based on measurement style
@@ -264,7 +266,7 @@ class T1Experiment(QickExperiment):
                 disp_kwargs=disp_kwargs,
             )
 
-    def acquire(self, progress=False, debug=False):
+    def acquire(self, progress=False, debug=False, **kwargs):
         """
         Acquire T1 measurement data
 
@@ -291,7 +293,7 @@ class T1Experiment(QickExperiment):
         )
 
         # Run the T1Program to acquire data
-        super().acquire(T1Program, progress=progress)
+        super().acquire(T1Program, progress=progress, **kwargs)
 
         return self.data
 
@@ -347,8 +349,18 @@ class T1Experiment(QickExperiment):
         # Get qubit index for plot title
         qubit = self.cfg.expt.qubit[0]
         title = f"$T_1$ Q{qubit}"
-        if self.cfg.expt.get("flux", False):
-            title += f" (Flux Gain {self.cfg.expt.flux_gain:0.3f})"
+        if self.cfg.expt.flux:
+            flux_gain = self.cfg.expt.flux_gain
+            title += f" (Flux Gain {flux_gain:0.3f}"
+            converter = fitter.flux_converter_from_config(
+                self.cfg.hw.soc.dacs.get("flux", None),
+                self.cfg.device.qubit,
+                qubit,
+            )
+            if converter is not None:
+                freq = converter.gain_to_freq(flux_gain)
+                title += f", Freq {freq:.3f} MHz"
+            title += ")"
 
         # Define caption parameters to display T1 fit result
         caption_params = [
@@ -558,22 +570,22 @@ class T1FastFlux(QickExperiment2DSimple):
     optionally vs frequency). Saves a single HDF5 file with save_interim after
     each gain point. Performs adaptive span adjustment between scans.
 
-    Automatically reads quadratic fit coefficients (quad_a, quad_b, quad_c) and
-    sweet_spot_ac from the config (saved by QubitSpecFastFlux) when available.
-    The gain sweep starts at sweet_spot_ac by default.
+    Automatically reads flux model parameters from config (saved by QubitSpecFastFlux).
+    Supports both transmon SQUID model (transmon_*) and quadratic (quad_a/b/c) parameters,
+    preferring the transmon model when available. The gain sweep starts at sweet_spot_ac
+    by default.
 
     Sweep parameters (passed via params dict):
         gain_start: Starting flux gain value (default: sweet_spot_ac)
         gain_stop: Ending flux gain value (default: sweet_spot_ac + 0.4)
         direction: 'pos' or 'neg' — sweep direction from sweet spot (default: 'pos').
             Sets gain_stop relative to sweet spot if gain_stop not explicitly given.
-        freq_span: Frequency span in MHz. When provided with freq_coeffs, converts
-            to a gain range using the quadratic. Overrides gain_stop.
+        freq_span: Frequency span in MHz. When provided with a flux model, converts
+            to a gain range. Overrides gain_stop.
         expts_gain: Number of gain points in the sweep
-        freq_coeffs: Optional (a, b, c) tuple for quadratic freq = a*g^2 + b*g + c.
-            If not provided, reads quad_a/b/c from config.
-        lin_freq: If True and freq_coeffs provided, space points linearly in
-            frequency (inverting the quadratic) instead of linearly in gain.
+        flux_converter: Optional FluxConverter instance. If not provided, loads from config.
+        lin_freq: If True and flux model available, space points linearly in
+            frequency instead of linearly in gain.
     """
 
     def __init__(
@@ -583,7 +595,7 @@ class T1FastFlux(QickExperiment2DSimple):
         go=True,
         params={},
         prefix=None,
-        progress=False,
+        progress=True,
         display=True,
     ):
         if prefix is None:
@@ -591,43 +603,28 @@ class T1FastFlux(QickExperiment2DSimple):
 
         super().__init__(cfg_dict=cfg_dict, prefix=prefix, qi=qi)
 
-        # Read quadratic coefficients and sweet spot from config if available
+        # Load flux model from config (prefers transmon, falls back to quadratic)
         cfg_flux = getattr(getattr(getattr(getattr(self.cfg, "hw", None), "soc", None), "dacs", None), "flux", None)
         cfg_qubit = getattr(getattr(self.cfg, "device", None), "qubit", None)
 
-        config_freq_coeffs = None
         sweet_spot = 0.0
-        if cfg_flux is not None:
-            a = cfg_flux.quad_a[qi] if hasattr(cfg_flux, "quad_a") else 0
-            b = cfg_flux.quad_b[qi] if hasattr(cfg_flux, "quad_b") else 0
-            c = cfg_flux.quad_c[qi] if hasattr(cfg_flux, "quad_c") else 0
-            if a != 0 or b != 0:
-                config_freq_coeffs = (a, b, c)
         if cfg_qubit is not None and hasattr(cfg_qubit, "sweet_spot_ac"):
             sweet_spot = cfg_qubit.sweet_spot_ac[qi]
 
         # Determine sweep direction and gain range
         direction = params.get("direction", "pos")
         sign = 1 if direction == "pos" else -1
-        freq_coeffs = params.get("freq_coeffs", config_freq_coeffs)
+
+        converter = params.get("flux_converter", None)
+        if converter is None:
+            converter = fitter.flux_converter_from_config(cfg_flux, cfg_qubit, qi, direction)
         freq_span = params.get("freq_span", None)
 
-        # Convert freq_span to gain_stop using the quadratic
-        if freq_span is not None and freq_coeffs is not None and "gain_stop" not in params:
-            a, b, c = freq_coeffs
-            f_sweet = a * sweet_spot**2 + b * sweet_spot + c
+        # Convert freq_span to gain_stop using the flux model
+        if freq_span is not None and converter is not None and "gain_stop" not in params:
+            f_sweet = converter.gain_to_freq(sweet_spot)
             f_target = f_sweet - freq_span  # frequency decreases away from sweet spot
-            discriminant = b**2 - 4 * a * (c - f_target)
-            if discriminant >= 0:
-                # Pick the root in the correct direction from sweet spot
-                root_pos = (-b + np.sqrt(discriminant)) / (2 * a)
-                root_neg = (-b - np.sqrt(discriminant)) / (2 * a)
-                if sign > 0:
-                    gain_stop = max(root_pos, root_neg)
-                else:
-                    gain_stop = min(root_pos, root_neg)
-            else:
-                gain_stop = sweet_spot + sign * 0.4
+            gain_stop = float(converter.freq_to_gain(f_target))
         elif "gain_stop" not in params:
             gain_stop = sweet_spot + sign * 0.4
         else:
@@ -643,7 +640,6 @@ class T1FastFlux(QickExperiment2DSimple):
             "start": 0.05,
             "expts":25,
             "expts_gain": 50,
-            "freq_coeffs": freq_coeffs,
             "freq_span": freq_span,
             "direction": direction,
             "lin_freq": True,
@@ -657,34 +653,27 @@ class T1FastFlux(QickExperiment2DSimple):
         self.expt = T1Experiment(cfg_dict, qi, go=False, params=params, check_params=False)
         params = {**self.expt.cfg.expt, **params, "flux": True}
         self.cfg.expt = {**params_def, **params}
+        self.expt.cfg.expt = {**self.expt.cfg.expt, **params}
 
         # Store references
         self._qi = qi
         self._cfg_dict = cfg_dict
+        self._flux_converter = converter
 
         # Build gain_pts and freq_pts from config
         cfg_e = self.cfg.expt
-        freq_coeffs = cfg_e["freq_coeffs"]
 
-        if cfg_e["lin_freq"] and freq_coeffs is not None:
-            # Linearly spaced in frequency, invert quadratic to get gains
-            a, b, c = freq_coeffs
-            freq_start = a * cfg_e["gain_start"]**2 + b * cfg_e["gain_start"] + c
-            freq_stop = a * cfg_e["gain_stop"]**2 + b * cfg_e["gain_stop"] + c
-            self.freq_pts = np.linspace(freq_start, freq_stop, cfg_e["expts_gain"])
-            discriminant = b**2 - 4 * a * (c - self.freq_pts)
-            root_pos = (-b + np.sqrt(discriminant)) / (2 * a)
-            root_neg = (-b - np.sqrt(discriminant)) / (2 * a)
-            if cfg_e["direction"] == "pos":
-                self.gain_pts = np.maximum(root_pos, root_neg)
-            else:
-                self.gain_pts = np.minimum(root_pos, root_neg)
+        if cfg_e["lin_freq"] and converter is not None:
+            # Linearly spaced in frequency, invert flux model to get gains
+            freq_start = converter.gain_to_freq(cfg_e["gain_start"])
+            freq_stop = converter.gain_to_freq(cfg_e["gain_stop"])
+            self.freq_pts = np.linspace(float(freq_start), float(freq_stop), cfg_e["expts_gain"])
+            self.gain_pts = converter.freq_to_gain(self.freq_pts)
         else:
             # Linearly spaced in gain
             self.gain_pts = np.linspace(cfg_e["gain_start"], cfg_e["gain_stop"], cfg_e["expts_gain"])
-            if freq_coeffs is not None:
-                a, b, c = freq_coeffs
-                self.freq_pts = a * self.gain_pts**2 + b * self.gain_pts + c
+            if converter is not None:
+                self.freq_pts = converter.gain_to_freq(self.gain_pts)
             else:
                 self.freq_pts = None
 
@@ -692,7 +681,7 @@ class T1FastFlux(QickExperiment2DSimple):
             self.acquire(progress=progress, display=display)
             self.display()
 
-    def acquire(self, progress=False, display=True):
+    def acquire(self, progress=True, display=True):
         from pathlib import Path
 
         data = {"time": []}
@@ -701,25 +690,34 @@ class T1FastFlux(QickExperiment2DSimple):
         amp_list = []
         q_offset_list = []
         q_amp_list = []
+        s_offset_list = []
+        s_amp_list = []
+        timestamp_list = []
+        elapsed_list = []
+        t_acq_start = time.time()
         csv_path = Path(self.fname).with_suffix(".csv")
 
+        n_total = len(self.gain_pts)
         for i, g in enumerate(tqdm(self.gain_pts, disable=not progress)):
             # Update inner experiment config for this gain point
             self.expt.cfg.expt["flux_gain"] = float(g)
 
             # Run inner T1 scan and analyze
             data_new = self.expt.acquire(progress=False)
-            self.expt.analyze(data=data_new)
+            self.expt.analyze(data=data_new, verbose=False, rescale=True)
             if display:
                 self.expt.display(data=data_new)
 
             # Accumulate raw 2D data
-            for key in ("avgi", "avgq", "amps", "phases", "xpts"):
+            for key in ("avgi", "avgq", "amps", "phases", "xpts", "scale_data"):
                 if key in data_new:
                     if i == 0:
                         data[key] = []
                     data[key].append(data_new[key])
-            data["time"].append(time.time())
+            now = time.time()
+            data["time"].append(now)
+            timestamp_list.append(datetime.fromtimestamp(now).isoformat())
+            elapsed_list.append(now - t_acq_start)
 
             # Extract fit results
             best_fit = data_new.get("best_fit", [np.nan, np.nan, np.nan])
@@ -730,11 +728,18 @@ class T1FastFlux(QickExperiment2DSimple):
             fit_q = data_new.get("fit_avgq", [np.nan, np.nan, np.nan])
             q_offset_list.append(fit_q[0])
             q_amp_list.append(fit_q[1])
+            fit_s = data_new.get("fit_scale_data", [np.nan, np.nan, np.nan])
+            if fit_s is not None:
+                s_offset_list.append(fit_s[0])
+                s_amp_list.append(fit_s[1])
+            else:
+                s_offset_list.append(np.nan)
+                s_amp_list.append(np.nan)
 
             # Adjust span for next scan based on extracted T1
             if np.isfinite(t1_val) and t1_val > 0:
-                self.expt.cfg.expt["span"] = 4.1 * min(
-                    t1_val, self.cfg.expt.get("t1_max", float("inf"))
+                self.expt.cfg.expt["span"] = 3.7 * min(
+                    t1_val, self.cfg.expt.t1_max
                 )
 
             # Store analysis summaries in data for interim save
@@ -746,23 +751,32 @@ class T1FastFlux(QickExperiment2DSimple):
             data["amp_list"] = np.array(amp_list)
             data["q_offset_list"] = np.array(q_offset_list)
             data["q_amp_list"] = np.array(q_amp_list)
+            data["s_offset_list"] = np.array(s_offset_list)
+            data["s_amp_list"] = np.array(s_amp_list)
 
             if self.save_interim:
                 self.save_data(data=data)
 
-            # Save CSV incrementally
+            # Save CSV incrementally (with timestamp and elapsed time)
             gains_so_far = self.gain_pts[: i + 1]
             if self.freq_pts is not None:
-                table = np.column_stack((gains_so_far, self.freq_pts[: i + 1],
+                num_cols = np.column_stack((gains_so_far, self.freq_pts[: i + 1],
                     data["t1_list"], data["offset_list"], data["amp_list"],
-                    data["q_offset_list"], data["q_amp_list"]))
-                header = "gain,freq,t1,offset,amplitude,q_offset,q_amplitude"
+                    data["q_offset_list"], data["q_amp_list"],
+                    np.array(elapsed_list)))
+                header = "timestamp,gain,freq,t1,offset,amplitude,q_offset,q_amplitude,elapsed_s"
             else:
-                table = np.column_stack((gains_so_far,
+                num_cols = np.column_stack((gains_so_far,
                     data["t1_list"], data["offset_list"], data["amp_list"],
-                    data["q_offset_list"], data["q_amp_list"]))
-                header = "gain,t1,offset,amplitude,q_offset,q_amplitude"
-            np.savetxt(csv_path, table, delimiter=",", header=header, comments="")
+                    data["q_offset_list"], data["q_amp_list"],
+                    np.array(elapsed_list)))
+                header = "timestamp,gain,t1,offset,amplitude,q_offset,q_amplitude,elapsed_s"
+            with open(csv_path, "w") as f_csv:
+                f_csv.write(header + "\n")
+                for row_idx in range(num_cols.shape[0]):
+                    ts = timestamp_list[row_idx]
+                    nums = ",".join(f"{v}" for v in num_cols[row_idx])
+                    f_csv.write(f"{ts},{nums}\n")
 
         # Convert lists to arrays
         for k, a in data.items():
@@ -780,7 +794,21 @@ class T1FastFlux(QickExperiment2DSimple):
         t1_list = data["t1_list"]
 
         fig, ax = plt.subplots()
-        ax.plot(gain_pts, t1_list, ".-")
+        t1_arr = np.array(t1_list, dtype=float)
+        t1_mask = np.isfinite(t1_arr)
+        if t1_mask.sum() > 2:
+            q1, q3 = np.percentile(t1_arr[t1_mask], [25, 75])
+            iqr = q3 - q1
+            t1_inlier = t1_mask & (t1_arr >= q1 - 1.5 * iqr) & (t1_arr <= q3 + 1.5 * iqr)
+            ax.plot(gain_pts[t1_inlier], t1_arr[t1_inlier], ".-")
+            ax.plot(gain_pts[~t1_inlier & t1_mask], t1_arr[~t1_inlier & t1_mask], "rx", ms=6)
+            inlier_vals = t1_arr[t1_inlier]
+            if len(inlier_vals) > 0:
+                ymin, ymax = inlier_vals.min(), inlier_vals.max()
+                margin = (ymax - ymin) * 0.1 if ymax > ymin else abs(ymax) * 0.1 or 0.1
+                ax.set_ylim(ymin - margin, ymax + margin)
+        else:
+            ax.plot(gain_pts, t1_list, ".-")
         ax.set_xlabel("Flux Gain")
         ax.set_ylabel("$T_1$ ($\mu$s)")
         self.save_fig(fig, suffix="_t1_vs_gain")
@@ -789,21 +817,40 @@ class T1FastFlux(QickExperiment2DSimple):
             freq_pts = data["freq_pts"]
 
             fig, ax = plt.subplots()
-            ax.plot(freq_pts, t1_list, ".-")
+            t1_arr = np.array(t1_list, dtype=float)
+            t1_mask = np.isfinite(t1_arr)
+            if t1_mask.sum() > 2:
+                q1, q3 = np.percentile(t1_arr[t1_mask], [25, 75])
+                iqr = q3 - q1
+                t1_inlier = t1_mask & (t1_arr >= q1 - 1.5 * iqr) & (t1_arr <= q3 + 1.5 * iqr)
+                ax.plot(freq_pts[t1_inlier], t1_arr[t1_inlier], ".-")
+                ax.plot(freq_pts[~t1_inlier & t1_mask], t1_arr[~t1_inlier & t1_mask], "rx", ms=6)
+                inlier_vals = t1_arr[t1_inlier]
+                if len(inlier_vals) > 0:
+                    ymin, ymax = inlier_vals.min(), inlier_vals.max()
+                    margin = (ymax - ymin) * 0.1 if ymax > ymin else abs(ymax) * 0.1 or 0.1
+                    ax.set_ylim(ymin - margin, ymax + margin)
+            else:
+                ax.plot(freq_pts, t1_list, ".-")
             ax.set_xlabel("Frequency (MHz)")
             ax.set_ylabel("$T_1$ ($\mu$s)")
             self.save_fig(fig, suffix="_t1_vs_freq")
 
-            fig, axes = plt.subplots(2, 2, figsize=(10, 7), sharex=True)
+            fig, axes = plt.subplots(3, 2, figsize=(10, 10), sharex=True)
 
             panels = [
                 (axes[0, 0], data["amp_list"], "I Amplitude"),
                 (axes[0, 1], data["offset_list"], "I Offset"),
                 (axes[1, 0], data["q_amp_list"], "Q Amplitude"),
                 (axes[1, 1], data["q_offset_list"], "Q Offset"),
+                (axes[2, 0], data.get("s_amp_list", []), "Rescaled Amplitude"),
+                (axes[2, 1], data.get("s_offset_list", []), "Rescaled Offset"),
             ]
             for ax, vals, label in panels:
                 vals = np.array(vals, dtype=float)
+                if vals.size == 0:
+                    ax.set_ylabel(label)
+                    continue
                 mask = np.isfinite(vals)
                 if mask.sum() > 2:
                     q1, q3 = np.percentile(vals[mask], [25, 75])
@@ -811,11 +858,16 @@ class T1FastFlux(QickExperiment2DSimple):
                     inlier = mask & (vals >= q1 - 1.5 * iqr) & (vals <= q3 + 1.5 * iqr)
                     ax.plot(freq_pts[inlier], vals[inlier], ".-")
                     ax.plot(freq_pts[~inlier & mask], vals[~inlier & mask], "rx", ms=6)
+                    inlier_vals = vals[inlier]
+                    if len(inlier_vals) > 0:
+                        ymin, ymax = inlier_vals.min(), inlier_vals.max()
+                        margin = (ymax - ymin) * 0.1 if ymax > ymin else abs(ymax) * 0.1 or 0.1
+                        ax.set_ylim(ymin - margin, ymax + margin)
                 else:
                     ax.plot(freq_pts, vals, ".-")
                 ax.set_ylabel(label)
-            axes[1, 0].set_xlabel("Frequency (MHz)")
-            axes[1, 1].set_xlabel("Frequency (MHz)")
+            axes[2, 0].set_xlabel("Frequency (MHz)")
+            axes[2, 1].set_xlabel("Frequency (MHz)")
             self.save_fig(fig, suffix="_fit_params")
 
 
@@ -841,7 +893,7 @@ class T1FastFluxRepeated(T1FastFlux):
         go=True,
         params={},
         prefix=None,
-        progress=False,
+        progress=True,
         display=True,
     ):
         # Pop repeated-specific params before passing to parent
@@ -862,17 +914,22 @@ class T1FastFluxRepeated(T1FastFlux):
             self.display()
 
     def acquire(self, progress=False, display=True):
+        from pathlib import Path
+
         try:
             from IPython.display import display as ipy_display, clear_output
             _has_ipy = True
         except ImportError:
             _has_ipy = False
 
-        self.t1_matrix = []
+        self.t1_list = []
         self.timestamps = []
         t_start = time.time()
         sweep_idx = 0
-        fig = None
+
+        # Create a dedicated folder for this run's CSVs
+        csv_dir = Path(self.fname).with_suffix("") / "csvs"
+        csv_dir.mkdir(parents=True, exist_ok=True)
 
         # Build inner T1FastFlux params from cfg.expt, excluding repeated-specific keys
         _repeated_keys = ("n_repeats", "duration_hours")
@@ -888,17 +945,28 @@ class T1FastFluxRepeated(T1FastFlux):
                     break
 
                 # Run one T1FastFlux sweep (go=False, no save)
+                # Disable tqdm in inner sweep when live plotting — text-based
+                # tqdm stderr output interferes with clear_output in Jupyter
+                inner_progress = progress and not _has_ipy
                 sweep = T1FastFlux(
                     self._cfg_dict, qi=self._qi, go=False, params={**sweep_params},
-                    progress=progress, display=False,
+                    progress=inner_progress, display=False,
                 )
                 sweep.gain_pts = self.gain_pts
                 sweep.freq_pts = self.freq_pts
-                data = sweep.acquire(progress=progress, display=False)
+                sweep.save_interim = False  # outer loop handles saving
+                # Redirect CSV into the dedicated folder
+                ts_label = datetime.now().strftime("%Y%m%d_%H%M%S")
+                sweep.fname = str(csv_dir / f"sweep_{sweep_idx:04d}_{ts_label}")
+                if _has_ipy:
+                    print(f"Sweep {sweep_idx + 1}" +
+                          (f"/{self._n_repeats}" if self._n_repeats else "") +
+                          f" — {len(self.gain_pts)} gain points ...")
+                data = sweep.acquire(progress=inner_progress, display=False)
 
                 # Accumulate results
                 elapsed_h = (time.time() - t_start) / 3600
-                self.t1_matrix.append(data["t1_list"].copy())
+                self.t1_list.append(data["t1_list"].copy())
                 self.timestamps.append(elapsed_h)
 
                 # Carry adaptive span to next sweep
@@ -906,21 +974,21 @@ class T1FastFluxRepeated(T1FastFlux):
                 finite_t1s = last_t1[np.isfinite(last_t1) & (last_t1 > 0)]
                 if len(finite_t1s) > 0:
                     median_t1 = np.median(finite_t1s)
-                    t1_max = self.cfg.expt.get("t1_max", float("inf"))
+                    t1_max = self.cfg.expt.t1_max
                     sweep_params["span"] = 4.1 * min(median_t1, t1_max)
 
                 # Build and save interim data
                 self.data = {
                     "freq_pts": self.freq_pts,
                     "gain_pts": self.gain_pts,
-                    "t1_matrix": np.array(self.t1_matrix),
+                    "t1_list": np.array(self.t1_list),
                     "timestamps": np.array(self.timestamps),
                 }
                 self.save_data()
 
-                # Update live heatmap
-                if display and _has_ipy:
-                    fig = self._update_heatmap(fig, clear_output, ipy_display)
+                # Update live heatmap (always show in Jupyter, regardless of display)
+                if _has_ipy:
+                    self._update_heatmap(clear_output, ipy_display)
 
                 sweep_idx += 1
 
@@ -930,33 +998,55 @@ class T1FastFluxRepeated(T1FastFlux):
         self.data = {
             "freq_pts": self.freq_pts,
             "gain_pts": self.gain_pts,
-            "t1_matrix": np.array(self.t1_matrix) if self.t1_matrix else np.array([]).reshape(0, 0),
+            "t1_list": np.array(self.t1_list) if self.t1_list else np.array([]).reshape(0, 0),
             "timestamps": np.array(self.timestamps),
         }
         return self.data
 
-    def _update_heatmap(self, fig, clear_output, ipy_display):
+    def _update_heatmap(self, clear_output, ipy_display):
+        import sys
+        import io
         import matplotlib.pyplot as plt
+        from IPython.display import Image
 
-        t1_2d = np.array(self.t1_matrix)
-        freq = self.freq_pts if self.freq_pts is not None else self.gain_pts
-        times = np.array(self.timestamps)
+        try:
+            t1_2d = np.array(self.t1_list)
+            freq = self.freq_pts if self.freq_pts is not None else self.gain_pts
+            times = np.array(self.timestamps)
 
-        if fig is not None:
+            fig, ax = plt.subplots(figsize=(10, 6), dpi=100)
+            # Clamp color scale to inlier range
+            finite_vals = t1_2d[np.isfinite(t1_2d)]
+            vmin, vmax = None, None
+            if len(finite_vals) > 2:
+                q1, q3 = np.percentile(finite_vals, [25, 75])
+                iqr = q3 - q1
+                inlier_vals = finite_vals[(finite_vals >= q1 - 1.5 * iqr) & (finite_vals <= q3 + 1.5 * iqr)]
+                if len(inlier_vals) > 0:
+                    vmin, vmax = inlier_vals.min(), inlier_vals.max()
+            mesh = ax.pcolormesh(freq, times, t1_2d, cmap="viridis", shading="auto",
+                                 vmin=vmin, vmax=vmax, rasterized=True)
+            ax.set_xlabel("Frequency (MHz)" if self.freq_pts is not None else "Flux Gain")
+            ax.set_ylabel("Elapsed Time (hours)")
+            ax.set_title(f"$T_1$ vs Frequency and Time — Q{self._qi}")
+            plt.colorbar(mesh, ax=ax, label="$T_1$ ($\\mu$s)")
+            fig.tight_layout()
+
+            # Render to PNG and close figure immediately so inline backend
+            # doesn't auto-display it as SVG
+            buf = io.BytesIO()
+            fig.savefig(buf, format="png", dpi=100, bbox_inches="tight")
             plt.close(fig)
+            buf.seek(0)
 
-        fig, ax = plt.subplots(figsize=(10, 6))
-        mesh = ax.pcolormesh(freq, times, t1_2d, cmap="viridis", shading="auto")
-        ax.set_xlabel("Frequency (MHz)" if self.freq_pts is not None else "Flux Gain")
-        ax.set_ylabel("Elapsed Time (hours)")
-        ax.set_title(f"$T_1$ vs Frequency and Time — Q{self._qi}")
-        plt.colorbar(mesh, ax=ax, label="$T_1$ ($\\mu$s)")
-        fig.tight_layout()
-
-        clear_output(wait=True)
-        ipy_display(fig)
-        print(f"Completed {len(self.t1_matrix)} sweep(s), {times[-1]:.2f} hours elapsed")
-        return fig
+            # Flush stdio so tqdm output is fully written before clearing
+            sys.stdout.flush()
+            sys.stderr.flush()
+            clear_output(wait=True)
+            ipy_display(Image(buf.read()))
+            print(f"Completed {len(self.t1_list)} sweep(s), {times[-1]:.2f} hours elapsed")
+        except Exception as e:
+            print(f"[LivePlot] Heatmap update failed: {e}")
 
     def display(self, data=None, **kwargs):
         import matplotlib.pyplot as plt
@@ -964,7 +1054,7 @@ class T1FastFluxRepeated(T1FastFlux):
         if data is None:
             data = self.data
 
-        t1_2d = data["t1_matrix"]
+        t1_2d = data["t1_list"]
         if t1_2d.size == 0:
             print("No sweep data to display.")
             return
@@ -973,7 +1063,16 @@ class T1FastFluxRepeated(T1FastFlux):
         times = data["timestamps"]
 
         fig, ax = plt.subplots(figsize=(10, 6))
-        mesh = ax.pcolormesh(freq, times, t1_2d, cmap="viridis", shading="auto")
+        # Clamp color scale to inlier range
+        finite_vals = t1_2d[np.isfinite(t1_2d)]
+        vmin, vmax = None, None
+        if len(finite_vals) > 2:
+            q1, q3 = np.percentile(finite_vals, [25, 75])
+            iqr = q3 - q1
+            inlier_vals = finite_vals[(finite_vals >= q1 - 1.5 * iqr) & (finite_vals <= q3 + 1.5 * iqr)]
+            if len(inlier_vals) > 0:
+                vmin, vmax = inlier_vals.min(), inlier_vals.max()
+        mesh = ax.pcolormesh(freq, times, t1_2d, cmap="viridis", shading="auto", vmin=vmin, vmax=vmax)
         ax.set_xlabel("Frequency (MHz)" if "freq_pts" in data and data["freq_pts"] is not None else "Flux Gain")
         ax.set_ylabel("Elapsed Time (hours)")
         ax.set_title(f"$T_1$ vs Frequency and Time — Q{self._qi}")

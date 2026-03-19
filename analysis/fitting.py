@@ -167,7 +167,7 @@ def generic_fit(
         else:
             pOpt, pCov = sp.optimize.curve_fit(fitfunc, xdata, ydata, p0=fitparams)
     except RuntimeError:
-        print(error_message)
+        #print(error_message)
         pOpt = [np.nan] * len(pOpt)
 
     return pOpt, pCov, fitparams
@@ -1104,3 +1104,212 @@ def adiabatic_iqamp(
     iamp = amp * (np.cos(phase) + 1j * np.sin(phase))
     qamp = amp * (-np.sin(phase) + 1j * np.cos(phase))
     return np.real(iamp), np.real(qamp)
+
+
+# ====================================================== #
+# Transmon Flux Model
+# Koch et al., Phys. Rev. A 76, 042319 (2007)
+# ====================================================== #
+
+
+def transmon_flux(
+    g: np.ndarray,
+    f_max: float,
+    E_C: float,
+    g_period: float,
+    g_offset: float,
+    d: float,
+) -> np.ndarray:
+    """
+    Transmon qubit frequency as a function of external flux (gain).
+
+    f(g) = (f_max + E_C) * (cos^2(phi) + d^2 * sin^2(phi))^0.25 - E_C
+
+    where phi = pi * (g - g_offset) / g_period.
+
+    Args:
+        g: Flux gain values
+        f_max: Maximum qubit frequency at the sweet spot (MHz)
+        E_C: Charging energy (MHz), typically 150-300 for transmons
+        g_period: Gain period corresponding to one flux quantum
+        g_offset: Gain value at the sweet spot
+        d: Junction asymmetry, (EJ1 - EJ2) / (EJ1 + EJ2), in [0, 1]
+
+    Returns:
+        Qubit frequency in MHz
+    """
+    phi = np.pi * (g - g_offset) / g_period
+    return (f_max + E_C) * (np.cos(phi) ** 2 + d**2 * np.sin(phi) ** 2) ** 0.25 - E_C
+
+
+def fit_transmon_flux(
+    gain: np.ndarray,
+    freq: np.ndarray,
+    E_C: float,
+    fitparams: Optional[List[Optional[float]]] = None,
+) -> Tuple[List[float], np.ndarray, List[float]]:
+    """
+    Fit transmon frequency vs flux gain with E_C fixed.
+
+    Fits 4 free parameters (f_max, g_period, g_offset, d) while holding E_C
+    constant (from device config).
+
+    Args:
+        gain: Flux gain values
+        freq: Measured qubit frequencies (MHz)
+        E_C: Charging energy (MHz), held fixed
+        fitparams: Optional initial guesses [f_max, g_period, g_offset, d].
+            Use None for individual entries to auto-guess.
+
+    Returns:
+        Tuple of (pOpt, pCov, fitparams) where pOpt is the full 5-parameter
+        tuple (f_max, E_C, g_period, g_offset, d).
+    """
+    if fitparams is None:
+        fitparams = [None, None, None, None]
+
+    # Auto-guess initial parameters
+    f_max_guess = fitparams[0] if fitparams[0] is not None else np.nanmax(freq)
+    g_period_guess = fitparams[1] if fitparams[1] is not None else 2 * (gain[-1] - gain[0])
+    g_offset_guess = fitparams[2] if fitparams[2] is not None else gain[np.nanargmax(freq)]
+    d_guess = fitparams[3] if fitparams[3] is not None else 0.0
+
+    p0 = [f_max_guess, g_period_guess, g_offset_guess, d_guess]
+
+    bounds = (
+        [0, 0.001, gain.min() - abs(gain.ptp()), 0],
+        [np.inf, np.inf, gain.max() + abs(gain.ptp()), 1],
+    )
+
+    # Inner function with E_C closed over
+    def _model(g, f_max, g_period, g_offset, d):
+        return transmon_flux(g, f_max, E_C, g_period, g_offset, d)
+
+    pOpt, pCov, p0_used = generic_fit(
+        _model, gain, freq, p0, bounds=bounds,
+        error_message="Warning: transmon flux fit failed!",
+    )
+
+    # Return full 5-parameter tuple, inserting E_C
+    pOpt_full = [pOpt[0], E_C, pOpt[1], pOpt[2], pOpt[3]]
+    # Expand covariance to 5x5 with zeros for the fixed E_C row/col
+    pCov_full = np.zeros((5, 5))
+    idx = [0, 2, 3, 4]  # indices in full param list that were fitted
+    for i, ii in enumerate(idx):
+        for j, jj in enumerate(idx):
+            pCov_full[ii, jj] = pCov[i, j]
+
+    return pOpt_full, pCov_full, p0_used
+
+
+class QuadraticFluxConverter:
+    """Convert between flux gain and qubit frequency using a quadratic model."""
+
+    def __init__(self, a, b, c, direction="pos"):
+        self.a = a
+        self.b = b
+        self.c = c
+        self.direction = direction
+
+    @property
+    def sweet_spot(self):
+        return -self.b / (2 * self.a)
+
+    @property
+    def f_max(self):
+        return self.c - self.b**2 / (4 * self.a)
+
+    def gain_to_freq(self, g):
+        g = np.asarray(g)
+        return self.a * g**2 + self.b * g + self.c
+
+    def freq_to_gain(self, f):
+        f = np.asarray(f)
+        discriminant = self.b**2 - 4 * self.a * (self.c - f)
+        discriminant = np.maximum(discriminant, 0)
+        root_pos = (-self.b + np.sqrt(discriminant)) / (2 * self.a)
+        root_neg = (-self.b - np.sqrt(discriminant)) / (2 * self.a)
+        if self.direction == "pos":
+            return np.maximum(root_pos, root_neg)
+        else:
+            return np.minimum(root_pos, root_neg)
+
+
+class TransmonFluxConverter:
+    """Convert between flux gain and qubit frequency using the transmon SQUID model."""
+
+    def __init__(self, f_max, E_C, g_period, g_offset, d, direction="pos"):
+        self.params = (f_max, E_C, g_period, g_offset, d)
+        self.direction = direction
+
+    @property
+    def sweet_spot(self):
+        return self.params[3]  # g_offset
+
+    @property
+    def f_max(self):
+        return self.params[0]
+
+    def gain_to_freq(self, g):
+        return transmon_flux(np.asarray(g, dtype=float), *self.params)
+
+    def freq_to_gain(self, f):
+        """Invert the transmon model numerically using brentq on the monotonic branch."""
+        f = np.asarray(f, dtype=float)
+        scalar = f.ndim == 0
+        f = np.atleast_1d(f)
+
+        g_offset = self.params[3]
+        g_period = self.params[2]
+
+        # Search on the correct monotonic branch
+        if self.direction == "pos":
+            g_lo, g_hi = g_offset, g_offset + g_period
+        else:
+            g_lo, g_hi = g_offset - g_period, g_offset
+
+        results = np.empty_like(f)
+        for i, fi in enumerate(f):
+            try:
+                results[i] = sp.optimize.brentq(
+                    lambda g: transmon_flux(g, *self.params) - fi,
+                    g_lo, g_hi,
+                )
+            except ValueError:
+                # Target frequency outside model range — clamp to boundary
+                f_lo = transmon_flux(g_lo, *self.params)
+                f_hi = transmon_flux(g_hi, *self.params)
+                results[i] = g_lo if abs(f_lo - fi) < abs(f_hi - fi) else g_hi
+
+        return float(results[0]) if scalar else results
+
+
+def flux_converter_from_config(cfg_flux, cfg_qubit, qi, direction="pos"):
+    """
+    Factory: load a FluxConverter from config, preferring transmon params over quadratic.
+
+    Args:
+        cfg_flux: Config section for hw.soc.dacs.flux
+        cfg_qubit: Config section for device.qubit
+        qi: Qubit index
+        direction: 'pos' or 'neg' sweep direction from sweet spot
+
+    Returns:
+        TransmonFluxConverter, QuadraticFluxConverter, or None
+    """
+    if cfg_flux is not None and hasattr(cfg_flux, "transmon_f_max"):
+        return TransmonFluxConverter(
+            cfg_flux.transmon_f_max[qi],
+            cfg_flux.transmon_E_C[qi],
+            cfg_flux.transmon_g_period[qi],
+            cfg_flux.transmon_g_offset[qi],
+            cfg_flux.transmon_d[qi],
+            direction,
+        )
+    if cfg_flux is not None:
+        a = cfg_flux.quad_a[qi] if hasattr(cfg_flux, "quad_a") else 0
+        b = cfg_flux.quad_b[qi] if hasattr(cfg_flux, "quad_b") else 0
+        c = cfg_flux.quad_c[qi] if hasattr(cfg_flux, "quad_c") else 0
+        if a != 0 or b != 0:
+            return QuadraticFluxConverter(a, b, c, direction)
+    return None

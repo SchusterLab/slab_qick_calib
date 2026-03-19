@@ -674,22 +674,22 @@ class T2FastFlux(QickExperiment2DSimple):
     optionally vs frequency). Saves a single HDF5 file with save_interim after
     each gain point. Performs adaptive span adjustment between scans.
 
-    Automatically reads quadratic fit coefficients (quad_a, quad_b, quad_c) and
-    sweet_spot_ac from the config (saved by QubitSpecFastFlux) when available.
-    The gain sweep starts at sweet_spot_ac by default.
+    Automatically reads flux model parameters from config (saved by QubitSpecFastFlux).
+    Supports both transmon SQUID model (transmon_*) and quadratic (quad_a/b/c) parameters,
+    preferring the transmon model when available. The gain sweep starts at sweet_spot_ac
+    by default.
 
     Sweep parameters (passed via params dict):
         gain_start: Starting flux gain value (default: sweet_spot_ac)
         gain_stop: Ending flux gain value (default: sweet_spot_ac + 0.4)
         direction: 'pos' or 'neg' — sweep direction from sweet spot (default: 'pos').
             Sets gain_stop relative to sweet spot if gain_stop not explicitly given.
-        freq_span: Frequency span in MHz. When provided with freq_coeffs, converts
-            to a gain range using the quadratic. Overrides gain_stop.
+        freq_span: Frequency span in MHz. When provided with a flux model, converts
+            to a gain range. Overrides gain_stop.
         expts_gain: Number of gain points in the sweep
-        freq_coeffs: Optional (a, b, c) tuple for quadratic freq = a*g^2 + b*g + c.
-            If not provided, reads quad_a/b/c from config.
-        lin_freq: If True and freq_coeffs provided, space points linearly in
-            frequency (inverting the quadratic) instead of linearly in gain.
+        flux_converter: Optional FluxConverter instance. If not provided, loads from config.
+        lin_freq: If True and flux model available, space points linearly in
+            frequency instead of linearly in gain.
         experiment_type: 'ramsey' or 'echo' (default: 'ramsey')
     """
 
@@ -708,42 +708,28 @@ class T2FastFlux(QickExperiment2DSimple):
 
         super().__init__(cfg_dict=cfg_dict, prefix=prefix, qi=qi)
 
-        # Read quadratic coefficients and sweet spot from config if available
+        # Load flux model from config (prefers transmon, falls back to quadratic)
         cfg_flux = getattr(getattr(getattr(getattr(self.cfg, "hw", None), "soc", None), "dacs", None), "flux", None)
         cfg_qubit = getattr(getattr(self.cfg, "device", None), "qubit", None)
 
-        config_freq_coeffs = None
         sweet_spot = 0.0
-        if cfg_flux is not None:
-            a = cfg_flux.quad_a[qi] if hasattr(cfg_flux, "quad_a") else 0
-            b = cfg_flux.quad_b[qi] if hasattr(cfg_flux, "quad_b") else 0
-            c = cfg_flux.quad_c[qi] if hasattr(cfg_flux, "quad_c") else 0
-            if a != 0 or b != 0:
-                config_freq_coeffs = (a, b, c)
         if cfg_qubit is not None and hasattr(cfg_qubit, "sweet_spot_ac"):
             sweet_spot = cfg_qubit.sweet_spot_ac[qi]
 
         # Determine sweep direction and gain range
         direction = params.get("direction", "pos")
         sign = 1 if direction == "pos" else -1
-        freq_coeffs = params.get("freq_coeffs", config_freq_coeffs)
+
+        converter = params.get("flux_converter", None)
+        if converter is None:
+            converter = fitter.flux_converter_from_config(cfg_flux, cfg_qubit, qi, direction)
         freq_span = params.get("freq_span", None)
 
-        # Convert freq_span to gain_stop using the quadratic
-        if freq_span is not None and freq_coeffs is not None and "gain_stop" not in params:
-            a, b, c = freq_coeffs
-            f_sweet = a * sweet_spot**2 + b * sweet_spot + c
+        # Convert freq_span to gain_stop using the flux model
+        if freq_span is not None and converter is not None and "gain_stop" not in params:
+            f_sweet = converter.gain_to_freq(sweet_spot)
             f_target = f_sweet - freq_span  # frequency decreases away from sweet spot
-            discriminant = b**2 - 4 * a * (c - f_target)
-            if discriminant >= 0:
-                root_pos = (-b + np.sqrt(discriminant)) / (2 * a)
-                root_neg = (-b - np.sqrt(discriminant)) / (2 * a)
-                if sign > 0:
-                    gain_stop = max(root_pos, root_neg)
-                else:
-                    gain_stop = min(root_pos, root_neg)
-            else:
-                gain_stop = sweet_spot + sign * 0.4
+            gain_stop = float(converter.freq_to_gain(f_target))
         elif "gain_stop" not in params:
             gain_stop = sweet_spot + sign * 0.4
         else:
@@ -759,7 +745,6 @@ class T2FastFlux(QickExperiment2DSimple):
             "start": 0.05,
             "expts": 25,
             "expts_gain": 50,
-            "freq_coeffs": freq_coeffs,
             "freq_span": freq_span,
             "direction": direction,
             "lin_freq": True,
@@ -777,30 +762,22 @@ class T2FastFlux(QickExperiment2DSimple):
         # Store references
         self._qi = qi
         self._cfg_dict = cfg_dict
+        self._flux_converter = converter
 
         # Build gain_pts and freq_pts from config
         cfg_e = self.cfg.expt
-        freq_coeffs = cfg_e["freq_coeffs"]
 
-        if cfg_e["lin_freq"] and freq_coeffs is not None:
-            # Linearly spaced in frequency, invert quadratic to get gains
-            a, b, c = freq_coeffs
-            freq_start = a * cfg_e["gain_start"]**2 + b * cfg_e["gain_start"] + c
-            freq_stop = a * cfg_e["gain_stop"]**2 + b * cfg_e["gain_stop"] + c
-            self.freq_pts = np.linspace(freq_start, freq_stop, cfg_e["expts_gain"])
-            discriminant = b**2 - 4 * a * (c - self.freq_pts)
-            root_pos = (-b + np.sqrt(discriminant)) / (2 * a)
-            root_neg = (-b - np.sqrt(discriminant)) / (2 * a)
-            if cfg_e["direction"] == "pos":
-                self.gain_pts = np.maximum(root_pos, root_neg)
-            else:
-                self.gain_pts = np.minimum(root_pos, root_neg)
+        if cfg_e["lin_freq"] and converter is not None:
+            # Linearly spaced in frequency, invert flux model to get gains
+            freq_start = converter.gain_to_freq(cfg_e["gain_start"])
+            freq_stop = converter.gain_to_freq(cfg_e["gain_stop"])
+            self.freq_pts = np.linspace(float(freq_start), float(freq_stop), cfg_e["expts_gain"])
+            self.gain_pts = converter.freq_to_gain(self.freq_pts)
         else:
             # Linearly spaced in gain
             self.gain_pts = np.linspace(cfg_e["gain_start"], cfg_e["gain_stop"], cfg_e["expts_gain"])
-            if freq_coeffs is not None:
-                a, b, c = freq_coeffs
-                self.freq_pts = a * self.gain_pts**2 + b * self.gain_pts + c
+            if converter is not None:
+                self.freq_pts = converter.gain_to_freq(self.gain_pts)
             else:
                 self.freq_pts = None
 
@@ -847,7 +824,7 @@ class T2FastFlux(QickExperiment2DSimple):
             # Adjust span for next scan based on extracted T2
             if np.isfinite(t2_val) and t2_val > 0:
                 self.expt.cfg.expt["span"] = 4.1 * min(
-                    t2_val, self.cfg.expt.get("t2_max", float("inf"))
+                    t2_val, self.cfg.expt.t2_max
                 )
 
             # Store analysis summaries in data for interim save

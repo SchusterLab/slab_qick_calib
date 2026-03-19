@@ -284,7 +284,7 @@ class DisplayManager:
         if plot_full:
             ax.plot(data["xpts"], data[ydata], "o-", rasterized=True)
         else:
-            ax.plot(data["xpts"][1:-1], data[ydata][1:-1], "o", rasterized=True)
+            ax.plot(data["xpts"][1:-1], data[ydata][1:-1], "o-", rasterized=True)
         if fit_params is not None and fitfunc is not None:
             p = fit_params
             pCov = data.get("fit_err_" + ydata, None)
@@ -543,6 +543,13 @@ class QickExperiment(Experiment):
         )
 
         self.data = data
+
+        # Rescale g/e using config means so scale_data is saved with h5
+        try:
+            self.scale_ge_config()
+        except Exception:
+            pass
+
         return data
 
     def _get_final_delay(self):
@@ -593,9 +600,8 @@ class QickExperiment(Experiment):
         # Determine which data sets to fit
         ydata_lab = ["amps", "avgi", "avgq"]
 
-        # Scale data based on config g_mean/e_mean if requested
-        if rescale:
-            self.scale_ge_config()
+        # Fit rescaled data if it exists (computed during acquire)
+        if rescale and "scale_data" in data:
             ydata_lab.append("scale_data")
 
         # Perform fits on each data set
@@ -1141,6 +1147,13 @@ class QickExperimentLoop(QickExperiment):
         # Add metadata and store data
         data["start_time"] = current_time
         self.data = data
+
+        # Rescale g/e using config means so scale_data is saved with h5
+        try:
+            self.scale_ge_config()
+        except Exception:
+            pass
+
         return data
 
     def _stow_data(self, iq_list, data):
@@ -1293,7 +1306,7 @@ class QickExperiment2DBase(QickExperimentLoop):
 
         # Define which data sets to fit (focus on I quadrature)
         ydata_lab = ["avgi"]  # Typically only fit I quadrature for speed
-        if rescale:
+        if rescale and "scale_data" not in data:
             self.scale_ge_config()
 
         # Fit each row (y value) separately
@@ -1381,7 +1394,7 @@ class QickExperiment2D(QickExperiment2DBase):
         current_time = get_current_time_string()
 
         # Iterate through each point in the y-axis parameter sweep
-        for i in tqdm(yvals):
+        for i in tqdm(yvals, disable=not progress):
             # Update configuration with current y-axis parameter value
             for j in range(len(y_sweep)):
                 self.cfg.expt[y_sweep[j]["var"]] = y_sweep[j]["pts"][i]
@@ -1396,7 +1409,7 @@ class QickExperiment2D(QickExperiment2DBase):
                 self.im[self.cfg.aliases.soc],
                 rounds=self.cfg.expt.rounds,
                 threshold=None,
-                progress=progress,
+                progress=False,
             )
 
             # Store measurement data for this y value
@@ -1417,6 +1430,13 @@ class QickExperiment2D(QickExperiment2DBase):
         # Add metadata and store data
         data["start_time"] = current_time
         self.data = data
+
+        # Rescale g/e using config means so scale_data is saved with h5
+        try:
+            self.scale_ge_config()
+        except Exception:
+            pass
+
         return data
 
 
@@ -1424,18 +1444,24 @@ class LivePlotter:
     """Live plotting helper using IPython.display for Jupyter notebooks.
 
     Creates a 4-panel heatmap (Amps, Phases, AvgI, AvgQ) that updates
-    in-place during 2D acquisition loops.
+    in-place during 2D acquisition loops.  Updates are throttled to avoid
+    overwhelming the VSCode notebook renderer.
     """
 
-    def __init__(self, display_mode=None, xlabel=None, ylabel=None, logy=False):
+    def __init__(self, display_mode=None, xlabel=None, ylabel=None, logy=False,
+                 update_interval=5.0):
         self.display_mode = display_mode
         self.xlabel = xlabel
         self.ylabel = ylabel
         self.logy = logy
+        self.update_interval = update_interval  # minimum seconds between display updates
         self.fig = None
         self.axs = None
         self.meshes = None
         self.colorbars = None
+        self._display_handle = None
+        self._progress_handle = None
+        self._last_update_time = 0.0
         self._active = _HAS_IPYTHON and self._check_jupyter()
         if not self._active:
             print("[LivePlot] Not in a Jupyter environment, live plotting disabled.")
@@ -1449,10 +1475,30 @@ class LivePlotter:
         except Exception:
             return False
 
+    def _render_to_image(self):
+        """Render the current figure to an IPython Image to keep display lightweight."""
+        import io
+        from IPython.display import Image
+        buf = io.BytesIO()
+        self.fig.savefig(buf, format="png", bbox_inches="tight", dpi=80)
+        buf.seek(0)
+        return Image(data=buf.getvalue())
+
     def update(self, data, y_sweep, step=None, total=None):
-        """Update the live plot with the latest data. Called once per y-iteration."""
+        """Update the live plot with the latest data. Called once per y-iteration.
+
+        Skips rendering if less than ``update_interval`` seconds have elapsed
+        since the last update (always renders the first and last frame).
+        """
         if not self._active:
             return
+
+        now = time.time()
+        is_last = (step is not None and total is not None and step >= total)
+        if self.fig is not None and not is_last:
+            if (now - self._last_update_time) < self.update_interval:
+                return
+
         try:
             amps = np.array(data.get("amps", []))
             phases = np.array(data.get("phases", []))
@@ -1470,15 +1516,31 @@ class LivePlotter:
 
             if self.fig is None:
                 self._create_figure(xvals, yvals, datasets, titles)
+                img = self._render_to_image()
+                self._display_handle = ipy_display(img, display_id=True)
+                if step is not None and total is not None:
+                    from IPython.display import HTML
+                    self._progress_handle = ipy_display(
+                        HTML(f"<pre>Step {step}/{total} ({100*step/total:.0f}%)</pre>"),
+                        display_id=True,
+                    )
             else:
                 self._update_figure(xvals, yvals, datasets)
-
-            clear_output(wait=True)
-            ipy_display(self.fig)
-
-            # Show progress after the plot since clear_output removes tqdm
-            if step is not None and total is not None:
-                print(f"Step {step}/{total} ({100*step/total:.0f}%)")
+                img = self._render_to_image()
+                if self._display_handle is not None:
+                    self._display_handle.update(img)
+                if step is not None and total is not None:
+                    from IPython.display import HTML
+                    if self._progress_handle is not None:
+                        self._progress_handle.update(
+                            HTML(f"<pre>Step {step}/{total} ({100*step/total:.0f}%)</pre>")
+                        )
+                    else:
+                        self._progress_handle = ipy_display(
+                            HTML(f"<pre>Step {step}/{total} ({100*step/total:.0f}%)</pre>"),
+                            display_id=True,
+                        )
+            self._last_update_time = time.time()
         except Exception as e:
             print(f"[LivePlot] Update failed: {e}")
 
@@ -1488,7 +1550,7 @@ class LivePlotter:
         self.fig, self.axs = plt.subplots(
             2, 2,
             figsize=DisplayManager.scale_figsize((10, 8), self.display_mode),
-            dpi=100,
+            dpi=80,
         )
         self.meshes = []
         self.colorbars = []
@@ -1506,6 +1568,8 @@ class LivePlotter:
             if self.logy:
                 ax.set_yscale("log")
         self.fig.tight_layout()
+        # Prevent matplotlib from rendering this figure to the notebook output
+        plt.close(self.fig)
 
     def _update_figure(self, xvals, yvals, datasets):
         """Redraw pcolormesh on existing axes (y-axis grows each iteration)."""
@@ -1561,7 +1625,7 @@ class QickExperiment2DSimple(QickExperiment2DBase):
         self.live_plotter = None
         self._display = display
 
-    def acquire(self, y_sweep, progress=False):
+    def acquire(self, y_sweep, progress=True):
         """
         Acquire data for a 2D parameter sweep using a nested experiment.
 
@@ -1592,13 +1656,13 @@ class QickExperiment2DSimple(QickExperiment2DBase):
         self._store_sweep_parameters(data, y_sweep)
 
         # Iterate through each point in the y-axis parameter sweep
-        for i in tqdm(yvals):
+        for i in tqdm(yvals, disable=not progress):
             # Update nested experiment configuration
             for j in range(len(y_sweep)):
                 self.expt.cfg.expt[y_sweep[j]["var"]] = y_sweep[j]["pts"][i]
 
-            # Run the nested experiment
-            data_new = self.expt.acquire(progress=progress)
+            # Run the nested experiment (suppress inner progress bar)
+            data_new = self.expt.acquire(progress=False)
 
             # Store all data from the nested experiment
             for key in data_new:
@@ -1622,6 +1686,13 @@ class QickExperiment2DSimple(QickExperiment2DBase):
         for k, a in data.items():
             data[k] = np.array(a)
         self.data = data
+
+        # Rescale g/e using config means if not already present from nested acquire
+        if "scale_data" not in data:
+            try:
+                self.scale_ge_config()
+            except Exception:
+                pass
 
         # Close live plot figure
         if self.live_plot and self.live_plotter is not None:
@@ -1683,8 +1754,15 @@ class QickExperiment2DSweep(QickExperiment2DBase):
         )
 
         self.data = data
+
+        # Rescale g/e using config means so scale_data is saved with h5
+        try:
+            self.scale_ge_config()
+        except Exception:
+            pass
+
         return data
-    
+
     def display(
         self,
         data=None,

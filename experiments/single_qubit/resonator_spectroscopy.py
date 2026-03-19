@@ -129,11 +129,47 @@ class ResSpecProgram(QickProgram):
         self.add_loop("freq_loop", cfg.expt.expts)
 
         # Create pi pulse if needed for excited state measurement
+        # Use f_ge_max when flux is enabled (qubit freq shifts at sweet spot)
+        f_ge = cfg.device.qubit.f_ge_max if cfg.expt.flux else cfg.device.qubit.f_ge
         if cfg.expt.pulse_e:
-            super().make_cfg_pulse(q, cfg.device.qubit.f_ge, "pi_ge")
+            super().make_cfg_pulse(q, f_ge, "pi_ge")
 
         if cfg.expt.pulse_f:
             super().make_cfg_pulse(q, cfg.device.qubit.f_ef, "pi_ef")
+
+        # Set up flux pulse if enabled
+        if cfg.expt.flux:
+            self.flux_ch = cfg.expt.flux_chan
+            self.declare_gen(self.flux_ch, nqz=1, mixer_freq=0)
+
+            # Estimate pi pulse duration if pulsing to e/f
+            pi_dur = 0
+            if cfg.expt.pulse_e:
+                pi_cfg = cfg.device.qubit.pulses.pi_ge
+                if pi_cfg.type[q] == "gauss":
+                    pi_dur += pi_cfg.sigma[q] * pi_cfg.sigma_inc[q]
+                else:
+                    pi_dur += pi_cfg.get("length", pi_cfg.sigma)[q]
+            if cfg.expt.pulse_f:
+                pi_ef_cfg = cfg.device.qubit.pulses.pi_ef
+                if pi_ef_cfg.type[q] == "gauss":
+                    pi_dur += pi_ef_cfg.sigma[q] * pi_ef_cfg.sigma_inc[q]
+                else:
+                    pi_dur += pi_ef_cfg.get("length", pi_ef_cfg.sigma)[q]
+
+            # Flux length covers: settle + pi pulses + wait + readout
+            flux_length = (cfg.expt.flux_settle + pi_dur + 0.1
+                           + cfg.expt.length + 0.1)
+
+            flux_pulse = {
+                "chan": self.flux_ch,
+                "freq": 0,
+                "phase": 0,
+                "gain": cfg.expt.flux_gain,
+                "length": flux_length,
+                "type": "const",
+            }
+            super().make_pulse(flux_pulse, "flux_pulse")
 
     def _body(self, cfg):
         """
@@ -148,18 +184,23 @@ class ResSpecProgram(QickProgram):
         if self.adc_type == 'dyn':
             self.send_readoutconfig(ch=self.adc_ch, name="readout", t=0)
         
+        # Start flux pulse if enabled (stays on through pi pulses and readout)
+        if cfg.expt.flux:
+            self.pulse(ch=self.flux_ch, name="flux_pulse", t=0)
+            self.delay(t=cfg.expt.flux_settle, tag="wait_flux_on")
+
         # Apply pi pulses if measuring in excited state
         if cfg.expt.pulse_e:
             # Apply pi pulse to go from |g> to |e>
             self.pulse(ch=self.qubit_ch, name="pi_ge", t=0)
-            
+
             # Apply additional pi pulse to go from |e> to |f> if requested
             if cfg.expt.pulse_f:
                 self.pulse(ch=self.qubit_ch, name="pi_ef", t=0)
-                
+
             # Wait for qubit to settle
             self.delay_auto(t=0.02, tag="waiting")
-        
+
         # Perform measurement
         super().measure(cfg)
 
@@ -255,6 +296,10 @@ class ResSpec(QickExperiment):
             'phase_const': False,
             "active_reset": False,
             'kappa': self.cfg.device.readout.kappa[qi],
+            "flux": False,
+            "flux_chan": self.cfg.hw.soc.dacs.flux.ch[qi],
+            "flux_gain": self.cfg.device.qubit.sweet_spot_ac[qi],
+            "flux_settle": 0.05,
         }
         
         # Set style-specific parameters
@@ -757,7 +802,7 @@ class ResSpecPower(QickExperiment2DSimple):
             Acquired data
         """
         # Generate gain points and repetition counts
-        if self.cfg.expt.get('log', False):
+        if self.cfg.expt.log:
             # Use logarithmic gain spacing for better dynamic range
             rng = self.cfg.expt.rng
             rat = rng ** (-1 / (self.cfg.expt.expts_gain - 1))
@@ -897,7 +942,7 @@ class ResSpecPower(QickExperiment2DSimple):
         plt.pcolormesh(x_sweep, y_sweep, amps, cmap="viridis", shading="auto", rasterized=True)
         
         # Use logarithmic y-axis if requested
-        if self.cfg.expt.get('log', False):
+        if self.cfg.expt.log:
             plt.yscale("log")
             
         # Show fit results if requested
@@ -944,7 +989,7 @@ class ResSpecPower(QickExperiment2DSimple):
             plt.xlabel(self.xlabel)
             plt.ylabel(self.ylabel)
             plt.colorbar(label='Phase (radians)')
-            if self.cfg.expt.get('log', False):
+            if self.cfg.expt.log:
                 plt.yscale('log')
             plt.title(f"Resonator Phase vs Power Q{qubit}")
             ax2.tick_params(top=True, bottom=True, right=True)
@@ -964,7 +1009,7 @@ class ResSpecPower(QickExperiment2DSimple):
             if phases_corrected.shape[0] <= 20:
                 plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)
             else:
-                if self.cfg.expt.get('log', False):
+                if self.cfg.expt.log:
                     from matplotlib.colors import LogNorm
                     norm = LogNorm(vmin=gains.min(), vmax=gains.max())
                 else:
@@ -1242,6 +1287,7 @@ class ResSpecFlux(QickExperiment2DSimple):
             "bias_chan": self.cfg.hw.soc.dacs.flux.dc_ch[qi],
             "dc_settle": 0.0,
             "dc_verify_print": False,
+            "auto_analyze": True,
         }
 
         # Merge user params
@@ -1289,10 +1335,10 @@ class ResSpecFlux(QickExperiment2DSimple):
 
             # 1) set DC bias
             soc.rfb_set_bias(chan, dc_val)
-            if self.cfg.expt.get("dc_settle", 0) > 0:
+            if self.cfg.expt.dc_settle > 0:
                 time.sleep(self.cfg.expt.dc_settle)
             rb = soc.rfb_get_bias(chan)
-            if self.cfg.expt.get("dc_verify_print", False):
+            if self.cfg.expt.dc_verify_print:
                 print(f"[DC Bias] ch {chan}: set {dc_val:.6f} V, read {rb:.6f} V")
 
             # 2) update inner expt’s cfg (record the dc in metadata)
@@ -1327,7 +1373,7 @@ class ResSpecFlux(QickExperiment2DSimple):
         self.data = data
 
          # Automatically analyze after collecting all rows
-        if self.cfg.expt.get("auto_analyze", True):   # optional toggle
+        if self.cfg.expt.auto_analyze:
             self.analyze(fit=True, hanger=True, verbose=False)
 
         return data

@@ -751,11 +751,21 @@ class T1ContExperiment(QickExperiment):
                      smoothed_data['e'], normalized_t1]
         
         for i, (data_array, (label, ylabel)) in enumerate(zip(plot_data, data_labels)):
+            arr = np.array(data_array, dtype=float)
+            finite = arr[np.isfinite(arr)]
+            if len(finite) > 2:
+                q1, q3 = np.percentile(finite, [25, 75])
+                iqr = q3 - q1
+                inlier_vals = finite[(finite >= q1 - 1.5 * iqr) & (finite <= q3 + 1.5 * iqr)]
+                if len(inlier_vals) > 0:
+                    ymin, ymax = inlier_vals.min(), inlier_vals.max()
+                    margin = (ymax - ymin) * 0.1 if ymax > ymin else abs(ymax) * 0.1 or 0.1
+                    axes[i].set_ylim(ymin - margin, ymax + margin)
             axes[i].plot(times, data_array, label=f"Smoothed {label}", **plot_params)
             axes[i].set_ylabel(ylabel)
-        
+
         # Add reference line for e^-1 on normalized plot
-        axes[3].axhline(np.exp(-1), linestyle="--", color='red', 
+        axes[3].axhline(np.exp(-1), linestyle="--", color='red',
                        alpha=0.7, label="$e^{-1}$")
         axes[3].legend()
         axes[3].set_xlabel("Time (s)")
@@ -768,7 +778,7 @@ class T1ContExperiment(QickExperiment):
                           qubit: int, plot_config: PlotConfig) -> None:
         """
         Plot calculated T1 values over time.
-        
+
         Args:
             normalized_t1: Normalized T1 signal
             times: Time array for x-axis
@@ -778,8 +788,24 @@ class T1ContExperiment(QickExperiment):
         fig, ax = plt.subplots(1, 1, figsize=plot_config.figure_size_t1)
         fig.suptitle(f"Qubit {qubit} Continuous T1 Estimate")
 
-        ax.plot(times, t1_estimates, "k.-", linewidth=0.1, 
-                markersize=plot_config.marker_size, label="T1 Data")
+        t1_arr = np.array(t1_estimates, dtype=float)
+        finite_mask = np.isfinite(t1_arr) & (t1_arr > 0)
+        if finite_mask.sum() > 2:
+            q1, q3 = np.percentile(t1_arr[finite_mask], [25, 75])
+            iqr = q3 - q1
+            inlier = finite_mask & (t1_arr >= q1 - 1.5 * iqr) & (t1_arr <= q3 + 1.5 * iqr)
+            ax.plot(times[inlier], t1_arr[inlier], "k.-", linewidth=0.1,
+                    markersize=plot_config.marker_size, label="T1 Data")
+            ax.plot(times[~inlier & finite_mask], t1_arr[~inlier & finite_mask], "rx",
+                    ms=4, label="Outliers")
+            inlier_vals = t1_arr[inlier]
+            if len(inlier_vals) > 0:
+                ymin, ymax = inlier_vals.min(), inlier_vals.max()
+                margin = (ymax - ymin) * 0.1 if ymax > ymin else abs(ymax) * 0.1 or 0.1
+                ax.set_ylim(ymin - margin, ymax + margin)
+        else:
+            ax.plot(times, t1_estimates, "k.-", linewidth=0.1,
+                    markersize=plot_config.marker_size, label="T1 Data")
         ax.set_xlabel("Time (s)")
         ax.set_ylabel("$T_1$ (μs)")
         super().save_fig(fig, "_t1")
@@ -915,15 +941,26 @@ class T1ContExperiment(QickExperiment):
         axes[0].legend()
         axes[0].set_title("Normalized T1 Signal")
         
-        # Plot T1 estimates
-        axes[1].plot(uniform_times, uniform_t1_est, color='blue', 
+        # Plot T1 estimates with outlier-aware y-axis
+        axes[1].plot(uniform_times, uniform_t1_est, color='blue',
                     label="Uniform Filter", **plot_params)
-        axes[1].plot(boxcar_times, boxcar_t1_est, color='red', 
+        axes[1].plot(boxcar_times, boxcar_t1_est, color='red',
                     label="Boxcar Filter", **plot_params)
         axes[1].set_ylabel("$T_1$ (μs)")
         axes[1].set_xlabel("Time (s)")
         axes[1].legend()
         axes[1].set_title("T1 Estimates")
+        # Clamp y-axis to inlier range across both estimates
+        all_t1 = np.concatenate([uniform_t1_est, boxcar_t1_est])
+        finite_t1 = all_t1[np.isfinite(all_t1) & (all_t1 > 0)]
+        if len(finite_t1) > 2:
+            q1, q3 = np.percentile(finite_t1, [25, 75])
+            iqr = q3 - q1
+            inlier_t1 = finite_t1[(finite_t1 >= q1 - 1.5 * iqr) & (finite_t1 <= q3 + 1.5 * iqr)]
+            if len(inlier_t1) > 0:
+                ymin, ymax = inlier_t1.min(), inlier_t1.max()
+                margin = (ymax - ymin) * 0.1 if ymax > ymin else abs(ymax) * 0.1 or 0.1
+                axes[1].set_ylim(ymin - margin, ymax + margin)
         
         fig.tight_layout()
         super().save_fig(fig, "_normalized_comparison")
