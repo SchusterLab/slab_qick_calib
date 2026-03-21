@@ -8,7 +8,7 @@ from qick import QickConfig
 from slab_qick_calib.exp_handling.instrumentmanager import InstrumentManager
 import slab_qick_calib.experiments as meas
 from slab_qick_calib.helpers import rfboard, config
-from slab_qick_calib.experiments.single_qubit.t1_cont_flux import T1ContFluxProgram
+from slab_qick_calib.experiments.flux.t1_cont_flux import T1ContFluxProgram
 from slab_qick_calib.exp_handling.datamanagement import AttrDict
 
 cfg_file = 'sample_50_rfboard.yml'

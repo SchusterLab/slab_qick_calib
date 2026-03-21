@@ -141,8 +141,8 @@ def test_flux_in_body():
 
 def test_default_params():
     """Verify flux experiment classes default to sweet_spot_ac."""
-    from slab_qick_calib.experiments.single_qubit.rabi_flux import RabiFluxExperiment
-    from slab_qick_calib.experiments.single_qubit.single_shot_flux import HistogramFluxExperiment
+    from slab_qick_calib.experiments.flux.rabi_flux import RabiFluxExperiment
+    from slab_qick_calib.experiments.flux.single_shot_flux import HistogramFluxExperiment
 
     # Check source code for sweet_spot_ac reference in defaults
     for cls in [RabiFluxExperiment, HistogramFluxExperiment]:

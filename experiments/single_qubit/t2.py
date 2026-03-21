@@ -356,9 +356,13 @@ class T2Experiment(QickExperiment):
             "checkEF": False,  # No EF transition check by default
             "qubit_chan": self.cfg.hw.soc.adcs.readout.ch[qi],  # Readout channel
             "flux": False,  # Whether to apply flux pulse during wait time
-            "flux_chan": self.cfg.hw.soc.dacs.flux.ch[qi],  # DAC channel for flux pulse
-            "flux_gain": 0.1,  # Gain for flux pulse
         }
+        if params.get("flux", False):
+            flux_params = {
+                "flux_chan": self.cfg.hw.soc.dacs.flux.ch[qi],
+                "flux_gain": 0.1,
+            }
+            params_def = {**params_def, **flux_params}
 
         # Adjust parameters based on measurement style
         if style == "fine":

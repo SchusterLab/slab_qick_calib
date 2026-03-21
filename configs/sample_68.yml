@@ -55,8 +55,8 @@ hw:
     adcs:
       readout:
         attn: [0, 0, 0, 0]
-        ch: [1, 1, 1, 1]
-        type: [dyn, dyn, dyn, dyn]
+        ch: [10, 10, 10, 10]
+        type: [std, std, std, std]
     dacs:
       qubit:
         attn1: [0, 0, 0, 0]

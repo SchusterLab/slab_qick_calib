@@ -66,7 +66,7 @@ def test_data_extraction():
 
 def test_import():
     """Verify module imports correctly."""
-    from slab_qick_calib.experiments.single_qubit.t1_cont_flux import (
+    from slab_qick_calib.experiments.flux.t1_cont_flux import (
         T1ContFluxProgram, T1ContFluxExperiment
     )
     print(f"T1ContFluxProgram: {T1ContFluxProgram}")

@@ -238,10 +238,14 @@ class T1Experiment(QickExperiment):
                 qi
             ],  # Readout channel for this qubit
             "flux": False, # Whether to apply flux pulse during wait time
-            "flux_chan": self.cfg.hw.soc.dacs.flux.ch[qi], # DAC channel for flux pulse
-            "flux_gain": 0.1, # Gain for flux pulse,
-            "flux_readout_wait": 0.1 # Wait time after flux pulse before readout
         }
+        if params.get("flux", False):
+            flux_params = {
+                "flux_chan": self.cfg.hw.soc.dacs.flux.ch[qi],
+                "flux_gain": 0.1,
+                "flux_readout_wait": 0.1,
+            }
+            params_def = {**params_def, **flux_params}
 
         # Adjust parameters based on measurement style
         if style == "fine":
@@ -648,10 +652,10 @@ class T1FastFlux(QickExperiment2DSimple):
 
         if start_t1 is not None:
             params_def["span"] = 4.1 * start_t1
-        params = {**params_def, **params}
+        params = {**params_def, **params, "flux": True}
         # Create inner T1 experiment (go=False) to inherit its config
         self.expt = T1Experiment(cfg_dict, qi, go=False, params=params, check_params=False)
-        params = {**self.expt.cfg.expt, **params, "flux": True}
+        params = {**self.expt.cfg.expt, **params}
         self.cfg.expt = {**params_def, **params}
         self.expt.cfg.expt = {**self.expt.cfg.expt, **params}
 

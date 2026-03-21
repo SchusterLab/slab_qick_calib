@@ -297,11 +297,14 @@ class ResSpec(QickExperiment):
             "active_reset": False,
             'kappa': self.cfg.device.readout.kappa[qi],
             "flux": False,
+
+        }
+        if params.get("flux", False):
+            flux_params = {
             "flux_chan": self.cfg.hw.soc.dacs.flux.ch[qi],
             "flux_gain": self.cfg.device.qubit.sweet_spot_ac[qi],
-            "flux_settle": 0.05,
-        }
-        
+            "flux_settle": 0.05}
+            params_def = {**params_def, **flux_params}
         # Set style-specific parameters
         if style == "coarse":
             # Coarse scan uses wide frequency range

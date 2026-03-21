@@ -185,6 +185,14 @@ def format_value(value, sig=4, rng_vals=None):
     return value
 
 
+def _infer_array_length(section, skip=None):
+    """Infer array length from sibling list fields in the same config section."""
+    for k, v in section.items():
+        if k != skip and isinstance(v, list) and len(v) > 0:
+            return len(v)
+    return 0
+
+
 def update_config(
     file_name, path, field, value, index=None, verbose=True, sig=4, rng_vals=None
 ):
@@ -237,14 +245,22 @@ def update_config(
     # Update the value
     if isinstance(field, tuple):  # For nested fields
         v = recursive_get(section, field)
+        if index is not None and (not isinstance(v, list) or len(v) == 0):
+            # Field doesn't exist yet; create NaN-filled array
+            n = _infer_array_length(section, skip=field[0])
+            v = [float("nan")] * n
         old_value = v[index]
         v[index] = value
         nested_set(section, field, v)
     elif index is not None:  # For array values
+        if field not in section or not isinstance(section[field], list):
+            # Field doesn't exist yet; create NaN-filled array
+            n = _infer_array_length(section, skip=field)
+            section[field] = [float("nan")] * n
         old_value = section[field][index]
         section[field][index] = value
     else:  # For scalar values
-        old_value = section[field]
+        old_value = section.get(field, float("nan"))
         section[field] = value
 
     # Print update information if requested

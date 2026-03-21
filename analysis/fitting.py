@@ -1170,15 +1170,20 @@ def fit_transmon_flux(
 
     # Auto-guess initial parameters
     f_max_guess = fitparams[0] if fitparams[0] is not None else np.nanmax(freq)
-    g_period_guess = fitparams[1] if fitparams[1] is not None else 2 * (gain[-1] - gain[0])
+    g_period_guess = fitparams[1] if fitparams[1] is not None else 2 * abs(gain[-1] - gain[0])
     g_offset_guess = fitparams[2] if fitparams[2] is not None else gain[np.nanargmax(freq)]
-    d_guess = fitparams[3] if fitparams[3] is not None else 0.0
+    d_guess = fitparams[3] if fitparams[3] is not None else 0.01
 
     p0 = [f_max_guess, g_period_guess, g_offset_guess, d_guess]
 
+    # Filter out NaN/inf entries before fitting
+    mask = np.isfinite(freq) & np.isfinite(gain)
+    gain_fit = gain[mask]
+    freq_fit = freq[mask]
+
     bounds = (
-        [0, 0.001, gain.min() - abs(gain.ptp()), 0],
-        [np.inf, np.inf, gain.max() + abs(gain.ptp()), 1],
+        [0, 0.001, gain_fit.min() - abs(np.ptp(gain_fit)), 0],
+        [np.inf, np.inf, gain_fit.max() + abs(np.ptp(gain_fit)), 1],
     )
 
     # Inner function with E_C closed over
@@ -1186,7 +1191,7 @@ def fit_transmon_flux(
         return transmon_flux(g, f_max, E_C, g_period, g_offset, d)
 
     pOpt, pCov, p0_used = generic_fit(
-        _model, gain, freq, p0, bounds=bounds,
+        _model, gain_fit, freq_fit, p0, bounds=bounds,
         error_message="Warning: transmon flux fit failed!",
     )
 
@@ -1262,11 +1267,14 @@ class TransmonFluxConverter:
         g_offset = self.params[3]
         g_period = self.params[2]
 
-        # Search on the correct monotonic branch
+        # Search on the monotonic half-period branch.
+        # g_period is a full period of the cosine, so f(g_offset) = f(g_offset ± g_period) = f_max.
+        # Using the full period makes brentq fail (same value at both endpoints).
+        half = g_period / 2
         if self.direction == "pos":
-            g_lo, g_hi = g_offset, g_offset + g_period
+            g_lo, g_hi = g_offset, g_offset + half
         else:
-            g_lo, g_hi = g_offset - g_period, g_offset
+            g_lo, g_hi = g_offset - half, g_offset
 
         results = np.empty_like(f)
         for i, fi in enumerate(f):
