@@ -53,19 +53,20 @@ class T1ContFluxProgram(QickProgram):
         # n_e short-wait calibration measurements (excited state proxy)
         for i in range(cfg.expt.n_e):
             self.pulse(ch=self.qubit_ch, name="pi_ge", t=0)
-            self.delay_auto(t=0.01, tag=f"wait_flux_e_{i}")
-            self.pulse(ch=cfg.expt.flux_chan, name="flux_pulse_short", t=0)
+            #self.delay_auto(t=0.01, tag=f"wait_flux_e_{i}")
+            #self.pulse(ch=cfg.expt.flux_chan, name="flux_pulse_short", t=0)
             self.delay_auto(t=cfg.expt.flux_readout_wait, tag=f"wait_post_e_{i}")
             self.measure(cfg)
             self.delay_auto(t=cfg.expt["final_delay"] + 0.01, tag=f"final_delay_e_{i}")
 
         # n_g long-wait calibration measurements (ground state proxy)
         for i in range(cfg.expt.n_g):
-            self.pulse(ch=self.qubit_ch, name="pi_ge", t=0)
-            self.delay_auto(t=0.01, tag=f"wait_flux_g_{i}")
-            self.pulse(ch=cfg.expt.flux_chan, name="flux_pulse_long", t=0)
+            #self.pulse(ch=self.qubit_ch, name="pi_ge", t=0)
+            #self.delay_auto(t=0.01, tag=f"wait_flux_g_{i}")
+            #self.pulse(ch=cfg.expt.flux_chan, name="flux_pulse_long", t=0)
             #self.pulse(ch=cfg.expt.flux_chan, name="flux_pulse_short", t=0)
-            self.delay_auto(t=cfg.expt.flux_readout_wait, tag=f"wait_post_g_{i}")
+            #self.delay_auto(t=cfg.expt.flux_readout_wait, tag=f"wait_post_g_{i}")
+            self.delay(t=cfg.expt.flux_readout_wait, tag=f"wait_post_g_{i}")
             self.measure(cfg)
             self.delay_auto(t=cfg.expt["final_delay"] + 0.01, tag=f"final_delay_g_{i}")
 

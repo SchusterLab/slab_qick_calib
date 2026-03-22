@@ -874,6 +874,42 @@ class T1FastFlux(QickExperiment2DSimple):
             axes[2, 1].set_xlabel("Frequency (MHz)")
             self.save_fig(fig, suffix="_fit_params")
 
+        # Waterfall plot of all T1 decay curves
+        if "scale_data" in data:
+            curves = data["scale_data"]
+        elif "avgi" in data:
+            curves = data["avgi"]
+        else:
+            curves = None
+
+        if curves is not None and len(curves) > 0:
+            xpts_list = data.get("xpts", None)
+            use_freq = "freq_pts" in data and data["freq_pts"] is not None
+            label_pts = data["freq_pts"] if use_freq else gain_pts
+
+            fig, ax = plt.subplots(figsize=(8, max(6, len(curves) * 0.25)))
+            # Normalize each curve to [0, 1] and stack with vertical offsets
+            for i, curve in enumerate(curves):
+                y = np.array(curve, dtype=float)
+                x = np.array(xpts_list[i], dtype=float) if xpts_list is not None else np.arange(len(y))
+                ymin, ymax = np.nanmin(y), np.nanmax(y)
+                if ymax > ymin:
+                    y_norm = (y - ymin) / (ymax - ymin)
+                else:
+                    y_norm = np.zeros_like(y)
+                ax.plot(x, y_norm + i, "-", lw=0.8)
+            ax.set_xlabel("Time ($\\mu$s)")
+            ax.set_ylabel("Frequency (MHz)" if use_freq else "Flux Gain")
+            # Replace integer tick positions with actual gain/freq labels
+            n = len(curves)
+            max_ticks = 20
+            step = max(1, n // max_ticks)
+            tick_idx = np.arange(0, n, step)
+            ax.set_yticks(tick_idx)
+            ax.set_yticklabels([f"{label_pts[j]:.1f}" for j in tick_idx])
+            ax.set_ylim(-0.5, n - 0.5)
+            self.save_fig(fig, suffix="_waterfall")
+
 
 class T1FastFluxRepeated(T1FastFlux):
     """

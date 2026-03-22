@@ -2,7 +2,7 @@
 *.h5
 *__pycache__
 configs\*
-
+*.png
 # Python package build artifacts
 *.py[cod]
 *$py.class

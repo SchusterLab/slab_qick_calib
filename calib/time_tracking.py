@@ -14,9 +14,27 @@ plt.rcParams["legend.handlelength"] = 0.5
 
 # Default parameters
 MAX_T1 = 500  # Maximum T1 time in microseconds
+DEFAULT_MIN_T1 = 1.0  # Default minimum T1 time in microseconds
+DEFAULT_MIN_T2 = 1.0  # Default minimum T2 time in microseconds
 MAX_ERR = 1  # Maximum acceptable error in fits
 MIN_R2 = 0.35  # Minimum acceptable R² value for fits
 TOL = 0.3  # Tolerance for parameter convergence
+
+
+def get_min_t1(cfg, qi):
+    """Get per-qubit minimum T1 from config, falling back to DEFAULT_MIN_T1."""
+    try:
+        return cfg.device.qubit.min_T1[qi]
+    except (AttributeError, KeyError, IndexError):
+        return DEFAULT_MIN_T1
+
+
+def get_min_t2(cfg, qi):
+    """Get per-qubit minimum T2 from config, falling back to DEFAULT_MIN_T2."""
+    try:
+        return cfg.device.qubit.min_T2[qi]
+    except (AttributeError, KeyError, IndexError):
+        return DEFAULT_MIN_T2
 
 
 def measure_params(
@@ -56,6 +74,9 @@ def measure_params(
         Dictionary containing measured qubit parameters
     """
     cfg_path = cfg_dict["cfg_file"]
+    auto_cfg = config.load(cfg_path)
+    min_t1 = get_min_t1(auto_cfg, qi)
+    min_t2 = get_min_t2(auto_cfg, qi)
     err_dict = {}
 
     if not fast:
@@ -116,7 +137,7 @@ def measure_params(
             "T2r",
             t2r.data["best_fit"][3],
             qi,
-            rng_vals=[1, max_t1],
+            rng_vals=[min_t2, max_t1],
             sig=2,
             verbose=False,
         )
@@ -133,7 +154,7 @@ def measure_params(
         cfg_dict, qi=qi, display=display, progress=False, params={"span": 300}
     )
     if update:
-        t1.update(rng_vals=[1, max_t1], verbose=False)
+        t1.update(rng_vals=[min_t1, max_t1], verbose=False)
 
     if not t1.status:
         t1.data["new_t1_i"] = np.nan
@@ -158,7 +179,7 @@ def measure_params(
                 "T2e",
                 t2e.data["best_fit"][3],
                 qi,
-                rng_vals=[1, max_t1],
+                rng_vals=[min_t2, max_t1],
                 sig=2,
                 verbose=False,
             )
@@ -255,6 +276,9 @@ def measure_cohere(qi, cfg_dict, update=True, display=False, max_t1=MAX_T1):
         Dictionary containing measured qubit parameters
     """
     cfg_path = cfg_dict["cfg_file"]
+    auto_cfg = config.load(cfg_path)
+    min_t1 = get_min_t1(auto_cfg, qi)
+    min_t2 = get_min_t2(auto_cfg, qi)
 
     # Step 1: T2 Ramsey
     t2r = meas.T2Experiment(
@@ -268,7 +292,7 @@ def measure_cohere(qi, cfg_dict, update=True, display=False, max_t1=MAX_T1):
             "T2r",
             t2r.data["best_fit"][3],
             qi,
-            rng_vals=[1, max_t1],
+            rng_vals=[min_t2, max_t1],
             sig=2,
             verbose=False,
         )
@@ -282,7 +306,7 @@ def measure_cohere(qi, cfg_dict, update=True, display=False, max_t1=MAX_T1):
     )
     # t1 = meas.T1Experiment(cfg_dict, qi=qi, display=display, progress=False, params={'span':300})
     if update:
-        t1.update(rng_vals=[1, max_t1], verbose=False)
+        t1.update(rng_vals=[min_t1, max_t1], verbose=False)
 
     if not t1.status:
         t1.data["new_t1_i"] = np.nan
@@ -352,10 +376,11 @@ def measure_fast(qi, cfg_dict, i, tdir, t1_val, t2_val, display=False,t2_type='T
 
 
     fname = str(Path(tdir) / f"{t2_type}_qubit{qi}_{i:05d}")
+    ramsey_freq = 1.5 / t2_val
     if t2_type=='T2r':
-        params = {"span": 3.2 * t2_val, 'experiment_type': 'ramsey'}
+        params = {"span": 3.2 * t2_val, 'experiment_type': 'ramsey', 'ramsey_freq': ramsey_freq}
     else:
-        params = {"span": 3.2 * t2_val, 'experiment_type': 'echo'}
+        params = {"span": 3.2 * t2_val, 'experiment_type': 'echo', 'ramsey_freq': ramsey_freq}
     
     t2 = meas.T2Experiment(
         cfg_dict,
@@ -469,7 +494,7 @@ def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True,
             # Measure qubit parameters
             if fast:
                 if i == 0:
-                    t2 = 'T2e'
+                    t2 = 'T2r'
                     if soc is None:
                         auto_cfg = config.load(cfg_dict["cfg_file"])
                     t1_val = auto_cfg["device"]["qubit"]["T1"][qi]
@@ -664,6 +689,8 @@ def recenter(qi, cfg_dict, t2r, update=True, display=False, max_t1=MAX_T1):
         qubit_tuning.find_spec(qi, cfg_dict, start="fine")
         t2r = meas.T2Experiment(cfg_dict, qi=qi, display=display, progress=False)
         if t2r.status and update:
+            auto_cfg = config.load(cfg_dict["cfg_file"])
+            min_t2 = get_min_t2(auto_cfg, qi)
             config.update_qubit(
                 cfg_dict["cfg_file"], "f_ge", t2r.data["new_freq"], qi, verbose=False
             )
@@ -672,7 +699,7 @@ def recenter(qi, cfg_dict, t2r, update=True, display=False, max_t1=MAX_T1):
                 "T2r",
                 t2r.data["best_fit"][3],
                 qi,
-                rng_vals=[1, max_t1],
+                rng_vals=[min_t2, max_t1],
                 sig=2,
                 verbose=False,
             )

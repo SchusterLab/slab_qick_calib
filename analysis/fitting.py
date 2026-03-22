@@ -124,7 +124,7 @@ def validate_bounds(
     """
     for i, param in enumerate(fitparams):
         if not (bounds[0][i] < param < bounds[1][i]):
-            fitparams[i] = np.mean((bounds[0][i], bounds[1][i]))
+            fitparams[i] = np.clip(param, bounds[0][i], bounds[1][i])
             print(
                 f"Attempted to init fitparam {i} to {param}, which is out of bounds {bounds[0][i]} to {bounds[1][i]}. Instead init to {fitparams[i]}"
             )
@@ -676,7 +676,7 @@ def fitdecayslopesin(
         fitparams[5] = 0  # slope
 
     bounds = (
-        [0.6 * fitparams[0], 1e-3, -360, 0.05, np.min(ydata), -np.inf],
+        [0.6 * fitparams[0], 1e-3, -360, 0.03, np.min(ydata), -np.inf],
         [1.5 * fitparams[0], 1e3, 360, np.inf, np.max(ydata), np.inf],
     )
 

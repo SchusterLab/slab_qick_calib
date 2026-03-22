@@ -40,15 +40,27 @@ def _get_tracking_base(path):
     return path if path.name == "Tracking" else path.parent
 
 
-def get_parameter_config():
+def get_parameter_config(t2_type=None):
     """
     Get the parameter configuration dictionary that maps parameter keys to their properties.
-    
+
+    Parameters
+    ----------
+    t2_type : str, optional
+        'T2e' or 'T2r' to set T2-related labels. If None, uses generic labels.
+
     Returns:
     --------
     dict
         Dictionary mapping parameter keys to configuration with 'key', 'r2_scan', and 'label' fields
     """
+    if t2_type == 'T2r':
+        t2_sub = '2,R'
+    elif t2_type == 'T2e':
+        t2_sub = '2,E'
+    else:
+        t2_sub = '2'
+
     return {
         "t1": {
             "key": "t1",
@@ -63,7 +75,7 @@ def get_parameter_config():
         "t2": {
             "key": "t2",
             "r2_scan": "t2_r2",
-            "label": "$T_{2,E}$ ($\mu$s)"
+            "label": f"$T_{{{t2_sub}}}$ ($\\mu$s)"
         },
         "f_ge": {
             "key": "f_ge",
@@ -108,7 +120,7 @@ def get_parameter_config():
         "t2et1": {
             "key": "t2et1",
             "r2_scan": "t2_r2",
-            "label": "$T_{2,E}/2 T_1$"
+            "label": f"$T_{{{t2_sub}}}/2 T_1$"
         },
         "t1_off": {
             "key": "t1_off",
@@ -153,12 +165,12 @@ def get_parameter_config():
         "Gamma2": {
             "key": "Gamma2",
             "r2_scan": "t2_r2",
-            "label": "$\Gamma_{2,E}$ (ms$^{-1}$)"
+            "label": f"$\\Gamma_{{{t2_sub}}}$ (ms$^{{-1}}$)"
         },
         "Gamma2e": {
             "key": "Gamma2e",
             "r2_scan": "t2_r2",
-            "label": "$\Gamma_{2,E}$ (ms$^{-1}$)"
+            "label": f"$\\Gamma_{{{t2_sub}}}$ (ms$^{{-1}}$)"
         }, 
         "Gammaphi": {
             "key": "Gammaphi",
@@ -172,6 +184,35 @@ def get_parameter_config():
         },
     }
 
+def detect_t2_type(tracking_dir, qi=0):
+    """
+    Detect whether tracking used T2 echo or T2 Ramsey from HDF5 filenames.
+
+    Parameters
+    ----------
+    tracking_dir : str or Path
+        Path to the tracking run directory containing HDF5 files.
+    qi : int, optional
+        Qubit index to check (default 0).
+
+    Returns
+    -------
+    str
+        'T2e' or 'T2r'
+    """
+    tracking_dir = Path(tracking_dir)
+    t2e_files = list(tracking_dir.glob(f'T2e_qubit{qi}_*'))
+    t2r_files = list(tracking_dir.glob(f'T2r_qubit{qi}_*'))
+    if t2e_files and not t2r_files:
+        return 'T2e'
+    elif t2r_files and not t2e_files:
+        return 'T2r'
+    elif t2e_files and t2r_files:
+        # Both exist — use whichever has more files (more recent campaign)
+        return 'T2e' if len(t2e_files) >= len(t2r_files) else 'T2r'
+    return 'T2e'  # default fallback
+
+
 def process_data(tt, qubit_list=None):
 
     if qubit_list is None:
@@ -181,19 +222,20 @@ def process_data(tt, qubit_list=None):
 
     for j, qi in enumerate(qubit_list):
         for k in list(tt[j].keys()):
-            # try:
             tt[j][k] = np.array(tt[j][k])
-            # except Exception:
-            #     pass
+
+        # Normalize t2e key to t2 if t2 doesn't exist
+        if "t2e" in tt[j] and "t2" not in tt[j]:
+            tt[j]["t2"] = tt[j].pop("t2e")
 
         tt[j]["q"] = tt[j]["t1"] * tt[j]["f_ge"] * 2 * np.pi
-        if "t2r" in tt[j].keys():
+        if "t2r" in tt[j]:
             tt[j]["t2rt1"] = tt[j]["t2r"] / 2 / tt[j]["t1"]
             tsphi = 1 / (1 / tt[j]["t2r"] - 1 / tt[j]["t1"] / 2)
             tsphi[(tsphi < 0) | (tsphi > 1000)] = np.nan
             tt[j]["tsphi"] = tsphi
             tt[j]["q2"] = tt[j]["tsphi"] * tt[j]["f_ge"] * 2 * np.pi
-        if "t2" in tt[j].keys() or "t2e" in tt[j].keys():
+        if "t2" in tt[j]:
             tt[j]["t2et1"] = tt[j]["t2"] / 2 / tt[j]["t1"]
             tphi = 1 / (1 / tt[j]["t2"] - 1 / tt[j]["t1"] / 2)
             tphi[(tphi < 0) | (tphi > 1000)] = np.nan
@@ -211,14 +253,20 @@ def process_data(tt, qubit_list=None):
     return tt, b
 
 
-def plot_all(tt, qubit_list=None, fname='def', param_keys=None, use_mean=False, nbins=40, plot_time=False, save_path=None, tracking_id=None):
+def plot_all(tt, qubit_list=None, fname='def', param_keys=None, use_mean=False, nbins=40, plot_time=False, save_path=None, tracking_id=None, t2_type=None):
 
     if qubit_list is None:
         qubit_list = [i for i in range(len(tt))]
     if param_keys is None:
         param_keys = ["t1", "t2r", "t2", "f_ge", "fidelity", "kappa", "frequency", "pi_length", "tphi", "tsphi", "t2_r2"]
 
-    parameter_config = get_parameter_config()
+    # Auto-detect T2 type from tracking directory if not specified
+    if t2_type is None and save_path is not None and tracking_id is not None:
+        tracking_dir = _get_tracking_base(save_path) / tracking_id
+        if tracking_dir.is_dir():
+            t2_type = detect_t2_type(tracking_dir)
+
+    parameter_config = get_parameter_config(t2_type=t2_type)
     
     nrows, ncols, sz = calculate_subplot_layout(len(param_keys))
     mpl.rcParams["lines.markersize"] = 1
@@ -457,10 +505,10 @@ def nice_dates():
     return locator
 
 
-def plot_violin(tt, qubit_list=None, fname='def', param_keys=None, use_mean=False, csv_path="data.csv"):
+def plot_violin(tt, qubit_list=None, fname='def', param_keys=None, use_mean=False, csv_path="data.csv", t2_type=None):
     """
     Create violin plots for tracking data parameters across qubits.
-    
+
     Parameters:
     -----------
     tt : list
@@ -479,8 +527,20 @@ def plot_violin(tt, qubit_list=None, fname='def', param_keys=None, use_mean=Fals
         qubit_list = [i for i in range(len(tt))]
     if param_keys is None:
         param_keys = ["t1", "t2r", "t2", "f_ge", "fidelity", "kappa", "frequency", "pi_length", "tphi", "tsphi", "t2_r2", "t2et1", "t1_off", "t1_amp", "t2r_off", "t2r_amp", "q", "phase"]
-    
-    parameter_config = get_parameter_config()
+
+    # Auto-detect T2 type from tracking directory if not specified
+    if t2_type is None:
+        tracking_base = _get_tracking_base(csv_path)
+        # Try to find tracking_id from csv filename
+        import re
+        csv_name = Path(csv_path).name
+        match = re.match(r"(.+)_qubit_\d+_tracking\.csv", csv_name)
+        if match:
+            tracking_dir = tracking_base / match.group(1)
+            if tracking_dir.is_dir():
+                t2_type = detect_t2_type(tracking_dir)
+
+    parameter_config = get_parameter_config(t2_type=t2_type)
     
     nrows, ncols, sz = calculate_subplot_layout(len(param_keys))
     
@@ -634,7 +694,7 @@ def plot_sets(d, xvals, yvals, cols=4, nrep=10, fit_func=None, params=None):
     return fig, ax
 
 
-def plot_vs_temperature(tt, qubit_list=None, param_keys=None, use_mean=False, save_path=None, tracking_id=None):
+def plot_vs_temperature(tt, qubit_list=None, param_keys=None, use_mean=False, save_path=None, tracking_id=None, t2_type=None):
     """
     Plot tracking data parameters as a function of mixing chamber temperature.
 
@@ -662,7 +722,13 @@ def plot_vs_temperature(tt, qubit_list=None, param_keys=None, use_mean=False, sa
     if param_keys is None:
         param_keys = ["t1", "t2r", "t2", "f_ge", "fidelity", "kappa", "frequency", "pi_length", "tphi", "tsphi"]
 
-    parameter_config = get_parameter_config()
+    # Auto-detect T2 type from tracking directory if not specified
+    if t2_type is None and save_path is not None and tracking_id is not None:
+        tracking_dir = _get_tracking_base(save_path) / tracking_id
+        if tracking_dir.is_dir():
+            t2_type = detect_t2_type(tracking_dir)
+
+    parameter_config = get_parameter_config(t2_type=t2_type)
     figs = []
 
     for j, qi in enumerate(qubit_list):
@@ -755,7 +821,7 @@ def plot_vs_temperature(tt, qubit_list=None, param_keys=None, use_mean=False, sa
 
 
 def add_losses(tt):
-    par_list = ['t1','t2r','t2','t2e', 'tphi', 'tsphi']
+    par_list = ['t1','t2r','t2', 'tphi', 'tsphi']
     for j in range(len(tt)):
         for par in par_list:
             if par in tt[j].keys():

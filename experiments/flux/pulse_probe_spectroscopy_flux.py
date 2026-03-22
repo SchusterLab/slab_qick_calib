@@ -7,6 +7,7 @@ as a function of flux (DC bias or fast flux gain).
 Classes:
 - QubitSpecFlux: 2D spectroscopy: frequency × DC bias
 - QubitSpecFastFlux: Spectroscopy vs fast flux gain
+- QubitSpecFluxSweep: Spectroscopy vs arbitrary parameter
 """
 
 import numpy as np
@@ -335,7 +336,7 @@ class QubitSpecFastFlux(QickExperiment2DSimple):
 
         # Load flux model from config (prefers transmon, falls back to quadratic)
         cfg_flux = getattr(getattr(getattr(getattr(self.cfg, "hw", None), "soc", None), "dacs", None), "flux", None)
-        cfg_qubit = getattr(getattr(self.cfg, "device", None), "qubit", None)
+        cfg_qubit = self.cfg.device.qubit
 
         sweet_spot = 0.0
         if cfg_qubit is not None and hasattr(cfg_qubit, "sweet_spot_ac"):
@@ -407,6 +408,8 @@ class QubitSpecFastFlux(QickExperiment2DSimple):
         data = {"time": []}
         qubit_freq_list = []
         kappa_list = []
+        fit_params_list = []
+        r2_list = []
         timestamp_list = []
         elapsed_list = []
         t_acq_start = time.time()
@@ -470,6 +473,8 @@ class QubitSpecFastFlux(QickExperiment2DSimple):
             best_fit = data_new.get("best_fit", [np.nan, np.nan, np.nan, np.nan])
             qubit_freq_list.append(best_fit[2])
             kappa_list.append(best_fit[3])
+            fit_params_list.append(list(best_fit))
+            r2_list.append(data_new.get("r2", np.nan))
 
             # Update center frequency from fit for next scan
             if self.expt.status:
@@ -481,6 +486,8 @@ class QubitSpecFastFlux(QickExperiment2DSimple):
                 data["freq_pts"] = self.freq_pts
             data["qubit_freq_list"] = np.array(qubit_freq_list)
             data["kappa_list"] = np.array(kappa_list)
+            data["fit_params_list"] = np.array(fit_params_list)
+            data["r2_list"] = np.array(r2_list)
 
             if self.save_interim:
                 self.save_data(data=data)
@@ -706,3 +713,291 @@ class QubitSpecFastFlux(QickExperiment2DSimple):
             config.update_config(
                 self.config_file, "hw.soc.dacs.flux", "transmon_d", d, qi, verbose=verbose,
             )
+
+
+class QubitSpecFluxSweep(QickExperiment2DSimple):
+    """
+    QubitSpecFluxSweep: Sweep qubit spectroscopy across an arbitrary parameter.
+
+    Like QubitSpecFastFlux, runs a QubitSpec at each sweep point and fits each
+    scan's qubit frequency to center the next scan on it. The swept parameter
+    is specified via ``sweep_var``.
+
+    Sweep parameters (passed via params dict):
+        sweep_var: Name of the inner-experiment parameter to vary (e.g. "flux_gain",
+            "length", "gain"). Required.
+        sweep_pts: Explicit array of sweep values. If provided, overrides
+            sweep_start/sweep_stop/expts_sweep.
+        sweep_start, sweep_stop: Start and stop values for the sweep.
+        expts_sweep: Number of sweep points (default: 50).
+        sweep_label: Y-axis label for plots (default: sweep_var).
+        update: Whether to update inner config with fit results after each point.
+        start_center_freq: Initial qubit frequency center; None = use config f_ge.
+    """
+
+    def __init__(
+        self,
+        cfg_dict,
+        qi=0,
+        go=True,
+        params={},
+        prefix="",
+        progress=True,
+        style="fine",
+        display=True,
+        min_r2=None,
+        max_err=None,
+    ):
+        sweep_var = params.get("sweep_var", "flux_gain")
+        prefix = prefix or f"qspec_sweep_{sweep_var}_qubit{qi}"
+        super().__init__(cfg_dict=cfg_dict, prefix=prefix, progress=progress, qi=qi)
+        self._cfg_dict = cfg_dict
+        self._qi = qi
+        self._style = style
+
+        params_def = {
+            "sweep_var": sweep_var,
+            "sweep_pts": None,
+            "sweep_start": 0.0,
+            "sweep_stop": 1.0,
+            "expts_sweep": 50,
+            "sweep_label": sweep_var,
+            "log_sweep": False,
+            "update": True,
+            "start_center_freq": None,
+        }
+
+        params = {**params_def, **params, "flux": True}
+
+        # Create inner QubitSpec (go=False) to inherit its config
+        self.expt = QubitSpec(cfg_dict, qi, go=False, params=params, style=style, check_params=False)
+        params = {**self.expt.cfg.expt, **params}
+        self.cfg.expt = params
+
+        # Build sweep_pts
+        cfg_e = self.cfg.expt
+        if cfg_e["sweep_pts"] is not None:
+            self.sweep_pts = np.asarray(cfg_e["sweep_pts"])
+        else:
+            self.sweep_pts = np.linspace(
+                cfg_e["sweep_start"], cfg_e["sweep_stop"], int(cfg_e["expts_sweep"]),
+            )
+
+        self._sweep_var = cfg_e["sweep_var"]
+        self._sweep_label = cfg_e["sweep_label"]
+        self._log_sweep = cfg_e["log_sweep"]
+
+        if go:
+            self.run(progress=progress, display=display, analyze=True,
+                     min_r2=min_r2, max_err=max_err)
+
+    def acquire(self, progress=True, display=False):
+        from pathlib import Path
+
+        data = {"time": []}
+        qubit_freq_list = []
+        kappa_list = []
+        fit_params_list = []
+        r2_list = []
+        timestamp_list = []
+        elapsed_list = []
+        t_acq_start = time.time()
+        csv_path = Path(self.fname).with_suffix(".csv")
+
+        center_freq = self.cfg.expt.start_center_freq
+
+        max_retries = 3
+        first_data = None
+
+        for i, val in enumerate(tqdm(self.sweep_pts, disable=not progress)):
+            self.expt.cfg.expt[self._sweep_var] = float(val)
+
+            # Use previous fit frequency to center the next scan
+            if center_freq is not None:
+                self.expt.cfg.expt["start"] = center_freq - self.expt.cfg.expt["span"] / 2
+
+            # Run inner QubitSpec with retry on QICK errors
+            data_new = None
+            for attempt in range(max_retries):
+                try:
+                    data_new = self.expt.acquire(progress=False)
+                    self.expt.analyze(data=data_new, verbose=False)
+                    if first_data is None:
+                        first_data = data_new
+                    break
+                except RuntimeError as e:
+                    if attempt < max_retries - 1:
+                        print(f"  Retry {attempt+1}/{max_retries} for {self._sweep_var}={val:.4f}: {e}")
+                        time.sleep(1)
+                    else:
+                        print(f"  SKIP {self._sweep_var}={val:.4f} after {max_retries} retries: {e}")
+                        if first_data is not None:
+                            data_new = {}
+                            for k, v in first_data.items():
+                                if isinstance(v, np.ndarray):
+                                    data_new[k] = np.full_like(v, np.nan)
+                                else:
+                                    data_new[k] = v
+                            data_new["best_fit"] = [np.nan, np.nan, np.nan, np.nan]
+                        else:
+                            raise
+
+            if display:
+                self.expt.display(data=data_new)
+
+            # Accumulate raw 2D data
+            for key in ("avgi", "avgq", "amps", "phases", "xpts"):
+                if key in data_new:
+                    if i == 0:
+                        data[key] = []
+                    data[key].append(data_new[key])
+            now = time.time()
+            data["time"].append(now)
+            timestamp_list.append(datetime.fromtimestamp(now).isoformat())
+            elapsed_list.append(now - t_acq_start)
+
+            # Extract fit results
+            best_fit = data_new.get("best_fit", [np.nan, np.nan, np.nan, np.nan])
+            qubit_freq_list.append(best_fit[2])
+            kappa_list.append(best_fit[3])
+            fit_params_list.append(list(best_fit))
+            r2_list.append(data_new.get("r2", np.nan))
+
+            # Update center frequency from fit for next scan
+            if self.expt.status:
+                center_freq = best_fit[2]
+
+            # Store analysis summaries in data for interim save
+            data["sweep_pts"] = self.sweep_pts
+            data["qubit_freq_list"] = np.array(qubit_freq_list)
+            data["kappa_list"] = np.array(kappa_list)
+            data["fit_params_list"] = np.array(fit_params_list)
+            data["r2_list"] = np.array(r2_list)
+
+            if self.save_interim:
+                self.save_data(data=data)
+
+            # Save CSV incrementally
+            sweep_so_far = self.sweep_pts[:i + 1]
+            num_cols = np.column_stack([
+                sweep_so_far,
+                data["qubit_freq_list"], data["kappa_list"],
+                np.array(elapsed_list),
+            ])
+            header = f"timestamp,{self._sweep_var},qubit_freq,kappa,elapsed_s"
+            with open(csv_path, "w") as f_csv:
+                f_csv.write(header + "\n")
+                for row_idx in range(num_cols.shape[0]):
+                    ts = timestamp_list[row_idx]
+                    nums = ",".join(f"{v}" for v in num_cols[row_idx])
+                    f_csv.write(f"{ts},{nums}\n")
+
+        # Convert lists to arrays
+        for k, a in data.items():
+            if not isinstance(a, np.ndarray):
+                data[k] = np.array(a)
+
+        self.data = data
+        return data
+
+    def analyze(self, data=None, **kwargs):
+        if data is None:
+            data = self.data
+        return data
+
+    def display(self, data=None, **kwargs):
+        import matplotlib.pyplot as plt
+
+        if data is None:
+            data = self.data
+
+        sweep_pts = data["sweep_pts"]
+        qubit_freq_list = data["qubit_freq_list"]
+        qi = self.cfg.expt["qubit"][0]
+        sweep_label = self._sweep_label
+
+        # --- Freq vs sweep parameter plot ---
+        fig, ax = plt.subplots()
+        ax.plot(sweep_pts, qubit_freq_list, "o")
+        ax.set_xlabel(sweep_label)
+        ax.set_ylabel("Qubit Frequency (MHz)")
+        if self._log_sweep:
+            ax.set_xscale("log")
+        self.save_fig(fig, suffix="_qspec_vs_sweep")
+
+        # --- Waterfall plot of all 1D spectra ---
+        amps_all = data.get("amps")
+        xpts_all = data.get("xpts")
+        if amps_all is not None and xpts_all is not None and len(sweep_pts) <= 300:
+            fig, ax = plt.subplots(figsize=(10, 8))
+            ranges = []
+            for sig in amps_all:
+                s = np.asarray(sig)
+                if len(s) > 2:
+                    ranges.append(np.ptp(s[1:-1]))
+            offset_scale = np.median(ranges) * 0.8 if ranges else 1
+
+            for i, (xpts, signal) in enumerate(zip(xpts_all, amps_all)):
+                xpts = np.asarray(xpts)
+                signal = np.asarray(signal)
+                ax.plot(xpts[1:-1], signal[1:-1] + i * offset_scale,
+                        label=f"{self._sweep_var}={sweep_pts[i]:.3f}")
+
+            ax.set_xlabel("Qubit Frequency (MHz)")
+            ax.set_ylabel("Signal (offset)")
+            if len(sweep_pts) <= 20:
+                ax.legend(bbox_to_anchor=(1.05, 1), loc="upper left", fontsize=7)
+            self.save_fig(fig, suffix="_waterfall")
+
+            # --- Color plot of I channel ---
+            from scipy.interpolate import interp1d
+
+            avgi_all = data.get("avgi")
+            freq_trimmed = [np.asarray(x) for x in xpts_all]
+            avgi_trimmed = [np.asarray(a) for a in avgi_all]
+            f_min = min(f.min() for f in freq_trimmed)
+            f_max = max(f.max() for f in freq_trimmed)
+            n_common = len(freq_trimmed[0])
+            common_freq = np.linspace(f_min, f_max, n_common)
+
+            amps_interp = np.full((len(sweep_pts), n_common), np.nan)
+            for i, (f, a) in enumerate(zip(freq_trimmed, avgi_trimmed)):
+                interp_fn = interp1d(f, a, kind="linear",
+                                     bounds_error=False, fill_value=np.nan)
+                mask = (common_freq >= f.min()) & (common_freq <= f.max())
+                amps_interp[i, mask] = interp_fn(common_freq[mask])
+
+            n_sweep = len(sweep_pts)
+            fig_w = max(8, n_sweep / 40)
+            fig, ax = plt.subplots(figsize=(fig_w, 6))
+            pcm = ax.pcolormesh(sweep_pts, common_freq, amps_interp.T,
+                                cmap="viridis", shading="nearest",
+                                rasterized=True)
+            plt.colorbar(pcm, ax=ax, label="I (ADC Units)")
+            ax.set_xlabel(sweep_label)
+            ax.set_ylabel("Qubit Frequency (MHz)")
+            if self._log_sweep:
+                ax.set_xscale("log")
+            self.save_fig(fig, suffix="_colorplot")
+
+            # --- Color plot of Q channel ---
+            avgq_all = data.get("avgq")
+            if avgq_all is not None:
+                avgq_trimmed = [np.asarray(a) for a in avgq_all]
+                avgq_interp = np.full((len(sweep_pts), n_common), np.nan)
+                for i, (f, a) in enumerate(zip(freq_trimmed, avgq_trimmed)):
+                    interp_fn = interp1d(f, a, kind="linear",
+                                         bounds_error=False, fill_value=np.nan)
+                    mask = (common_freq >= f.min()) & (common_freq <= f.max())
+                    avgq_interp[i, mask] = interp_fn(common_freq[mask])
+
+                fig, ax = plt.subplots(figsize=(fig_w, 6))
+                pcm = ax.pcolormesh(sweep_pts, common_freq, avgq_interp.T,
+                                    cmap="viridis", shading="nearest",
+                                    rasterized=True)
+                plt.colorbar(pcm, ax=ax, label="Q (ADC Units)")
+                ax.set_xlabel(sweep_label)
+                ax.set_ylabel("Qubit Frequency (MHz)")
+                if self._log_sweep:
+                    ax.set_xscale("log")
+                self.save_fig(fig, suffix="_colorplot_q")

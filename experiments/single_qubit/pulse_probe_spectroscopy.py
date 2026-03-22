@@ -83,6 +83,18 @@ class QubitSpecProgram(QickProgram):
             "type": 'const'            
             }
             super().make_pulse(pulse, "flux_pulse")
+
+        if cfg.expt.flux2:
+            self.declare_gen(cfg.expt.flux_chan, nqz=1, mixer_freq=0)
+            pulse = {
+            "chan": cfg.expt.flux_chan,
+            "freq": 0,  # Pulse frequency
+            "phase": 0,  # Pulse phase
+            "gain": cfg.expt.flux2_gain,  # Pulse amplitude
+            "length": cfg.expt.flux2_length,  # Pulse duration same as qubit pulse
+            "type": 'const'            
+            }
+            super().make_pulse(pulse, "flux_pulse2")
         
         pulse = {
             "freq": cfg.expt.frequency,
@@ -126,15 +138,14 @@ class QubitSpecProgram(QickProgram):
             self.pulse(ch=self.qubit_ch, name="qubit_pulse", t=0)
             self.delay_auto(t=cfg.expt.flux_readout_wait, tag="wait flux_2")
             # Apply the flux pulse at the same time
-
         else:
             # Apply the probe pulse with variable frequency
             self.pulse(ch=self.qubit_ch, name="qubit_pulse", t=0)
         
 
-        # Add delay if separate readout is enabled
-        if cfg.expt.sep_readout:
-            self.delay_auto(t=0.01, tag="wait")
+            # Add delay if separate readout is enabled
+            if cfg.expt.sep_readout:
+                self.delay_auto(t=0.01, tag="wait")
 
         # If checking EF transition, apply second pi pulse to return to |g> for readout
         if cfg.expt.checkEF:
@@ -143,6 +154,9 @@ class QubitSpecProgram(QickProgram):
 
         # Perform measurement
         super().measure(cfg)
+
+        if cfg.expt.flux2:
+            self.pulse(ch=cfg.expt.flux_chan, name="flux_pulse2", t=0)
 
 
 class QubitSpec(QickExperiment):
@@ -291,9 +305,12 @@ class QubitSpec(QickExperiment):
             "sep_readout": True,
             "active_reset": False,
             "flux": False, # Whether to apply flux while pulse
+            "flux2": False, # Whether to apply second flux pulse after readout
 
         }
         params_def = {**params_def2, **params_def}
+
+
         if params.get("flux", False):
             flux_params = {"flux_chan": self.cfg.hw.soc.dacs.flux.ch[qi], # DAC channel for flux pulse
             "flux_gain": self.cfg.device.qubit.sweet_spot_ac[qi], # Gain for flux pulse
@@ -302,6 +319,13 @@ class QubitSpec(QickExperiment):
             "flux_readout_wait": 0.1, # Time to wait after flux pulse before readout (μs)
             }
             params_def = {**params_def, **flux_params}
+
+        if params.get("flux2", False):
+            flux2_params = {
+            "flux2_gain": params_def['flux_gain'], # Gain for second flux pulse
+            "flux2_length": 10, # Length of second flux pulse (μs)
+            }
+            params_def = {**params_def, **flux2_params}
 
         # Merge default and user-provided parameters
         params = {**params_def, **params}
