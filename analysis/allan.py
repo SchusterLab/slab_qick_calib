@@ -149,7 +149,7 @@ def calculate_overlapping_allan_variance(data, tau_values):
     return allan_var
 
 
-def perform_analysis(tt,fname='def', param='t1', qubit_list=None, save_path=None, tracking_id=None):
+def perform_analysis(tt,fname='def', param='t1', qubit_list=None, save_path=None, tracking_id=None, normalize=False):
 
     if qubit_list is None:
         qubit_list = range(len(tt))
@@ -165,8 +165,12 @@ def perform_analysis(tt,fname='def', param='t1', qubit_list=None, save_path=None
         times_filtered = np.array(tt[i]['time'])-np.min(np.array(tt[i]['time']))
         par_filtered = np.array(tt[i][param])
 
-        # Plot T1 vs time
-        axes[0].plot(times_filtered , par_filtered, "o", markersize=1, linewidth=1, label=f"{i}")
+        # Plot time trace (optionally normalized by mean)
+        if normalize:
+            plot_data = par_filtered / np.mean(par_filtered)
+        else:
+            plot_data = par_filtered
+        axes[0].plot(times_filtered , plot_data, "o", markersize=1, linewidth=1, label=f"{i}")
 
         # Calculate tau values for Allan variance (logarithmically spaced)
         min_tau = 1
@@ -291,7 +295,7 @@ def perform_analysis(tt,fname='def', param='t1', qubit_list=None, save_path=None
         # axes[1].legend(fontsize=8)
         # Set plot labels and titles
     axes[0].set_xlabel("Time (s)")
-    axes[0].set_ylabel(param_label)
+    axes[0].set_ylabel(f"{param_label} / mean" if normalize else param_label)
     axes[0].legend()
 
     axes[1].set_xlabel("$\\tau$ (s)")

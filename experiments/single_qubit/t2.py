@@ -246,6 +246,76 @@ class T2Program(QickProgram):
         super().measure(cfg)
 
 
+class T2ProgramASM(QickProgram):
+    """
+    CPMG program using hardware ASM loops for large num_pi (e.g. 1000).
+
+    Instead of unrolling pi pulses with a Python for-loop (which generates one
+    tProc instruction per pulse and overflows instruction memory), this uses
+    open_loop/close_loop to repeat the pi-pulse + delay block in hardware.
+
+    Only supports the standard CPMG path (no flux, acStark, or EF).
+    """
+
+    def __init__(self, soccfg, final_delay, cfg, final_wait=0):
+        super().__init__(soccfg, final_delay=final_delay, cfg=cfg, final_wait=0)
+
+    def _initialize(self, cfg):
+        cfg = AttrDict(self.cfg)
+
+        self.add_loop("wait_loop", cfg.expt.expts)
+        super()._initialize(cfg, readout="standard")
+
+        # pi/2 prep pulse (phase=0)
+        pulse = {
+            "sigma": cfg.expt.sigma,
+            "sigma_inc": cfg.expt.sigma_inc,
+            "freq": cfg.expt.freq,
+            "gain": cfg.expt.gain / 2,
+            "phase": 0,
+            "type": cfg.expt.type,
+        }
+        super().make_pulse(pulse, "pi2_prep")
+
+        # pi/2 read pulse (phase advances with Ramsey freq)
+        pulse["phase"] = cfg.expt.wait_time * 360 * cfg.expt.ramsey_freq
+        super().make_pulse(pulse, "pi2_read")
+
+        # CPMG pi pulse (phase=90 relative to pi/2 pulses)
+        cfg.device.qubit.pulses.pi_ge.phase = 90 * np.ones(
+            len(cfg.device.qubit.f_ge)
+        )
+        super().make_cfg_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
+
+    def _body(self, cfg):
+        cfg = AttrDict(self.cfg)
+        if self.adc_type == "dyn":
+            self.send_readoutconfig(ch=self.adc_ch, name="readout", t=0)
+
+        tau = cfg.expt.wait_time / cfg.expt.num_pi / 2
+
+        # pi/2 preparation
+        self.pulse(ch=self.qubit_ch, name="pi2_prep", t=0.0)
+        self.delay_auto(t=tau, tag="wait_first_half")
+
+        if cfg.expt.num_pi > 1:
+            # N-1 pi pulses in hardware loop
+            self.open_loop(cfg.expt.num_pi - 1, "cpmg_loop")
+            self.pulse(ch=self.qubit_ch, name="pi_ge", t=0)
+            self.delay_auto(t=2 * tau + 0.01, tag="wait_cpmg")
+            self.close_loop()
+
+        # Last pi pulse + final half-wait
+        self.pulse(ch=self.qubit_ch, name="pi_ge", t=0)
+        self.delay_auto(t=tau + 0.01, tag="wait_last_half")
+
+        # pi/2 readout
+        self.pulse(ch=self.qubit_ch, name="pi2_read", t=0)
+        self.delay_auto(t=0.01, tag="wait_rd")
+
+        super().measure(cfg)
+
+
 class T2Experiment(QickExperiment):
     """
     T2 Experiment - Supports Ramsey, Echo, and CPMG protocols
@@ -381,7 +451,9 @@ class T2Experiment(QickExperiment):
             params["ramsey_freq"] = 1.5 / self.cfg.device.qubit[par][qi]
 
         # Set number of π pulses based on experiment type
-        if params["experiment_type"] == "echo":
+        if params["experiment_type"] == "cpmg":
+            params_def["num_pi"] = 1  # CPMG requires at least 1 π pulse
+        elif params["experiment_type"] == "echo":
             params_def["num_pi"] = 1  # Standard echo has 1 π pulse
         else:
             params_def["num_pi"] = 0  # Ramsey has 0 π pulses
@@ -443,9 +515,13 @@ class T2Experiment(QickExperiment):
             "wait_loop", self.cfg.expt.start, self.cfg.expt.start + self.cfg.expt.span
         )
 
-        # Run the T2Program to acquire data
+        # Use ASM hardware loop for CPMG with many pi pulses
+        if self.cfg.expt.experiment_type == "cpmg" and self.cfg.expt.num_pi > 10:
+            prog_cls = T2ProgramASM
+        else:
+            prog_cls = T2Program
 
-        super().acquire(T2Program, progress=progress)
+        super().acquire(prog_cls, progress=progress)
 
         # Adjust x-axis values to account for echo protocol
         # For echo, the effective wait time is longer due to the π pulses

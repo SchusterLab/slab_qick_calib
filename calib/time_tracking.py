@@ -415,7 +415,7 @@ def measure_fast2(qi, cfg_dict, i, t2e=None, t1=None, t1_val=30, t2_val=30):
     return t1, t2e
 
 
-def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True, bf_client=None, soc=None, t1_max=None, t2_max=None):
+def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True, bf_client=None, soc=None, t1_max=None, t2_max=None, csv_subdir=None):
     """
     Track qubit parameters over time.
 
@@ -439,6 +439,9 @@ def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True,
         Maximum allowed T1 value (µs). Measured values exceeding this are clamped.
     t2_max : float, optional
         Maximum allowed T2 value (µs). Measured values exceeding this are clamped.
+    csv_subdir : str, optional
+        Subdirectory within Tracking/csv/ to save CSVs into (e.g. for grouping
+        a temperature sweep). If None, saves directly in Tracking/csv/.
 
     Returns
     -------
@@ -448,7 +451,7 @@ def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True,
         path where the data is saved
     """
     # Create directory for tracking data
-    base_path = Path(cfg_dict["expt_path"]).parent / "Tracking"
+    base_path = Path(cfg_dict["expt_path"]) / "Tracking"
     tracking_id = f'{datetime.now().strftime("%Y_%m_%d_%H_%M")}_{total_time:.1f}hrs'
     tracking_path = base_path / tracking_id
     tracking_path.mkdir(parents=True, exist_ok=True)
@@ -555,7 +558,9 @@ def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True,
                 continue
 
             csv_dir = base_path / "csv"
-            csv_dir.mkdir(exist_ok=True)
+            if csv_subdir is not None:
+                csv_dir = csv_dir / csv_subdir
+            csv_dir.mkdir(parents=True, exist_ok=True)
             csv_path = str(csv_dir / f"{tracking_id}_qubit_{qi}_tracking.csv")
 
             # Convert tracking data dict to numpy arrays for saving

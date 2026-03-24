@@ -22,6 +22,7 @@ from ..general.qick_experiment import QickExperiment2DSimple
 from ...analysis import fitting as fitter
 from ..single_qubit.pulse_probe_spectroscopy import QubitSpec, XLABEL, YLABEL, DCYLABEL, FITTER_FUNC, FIT_FUNC
 from ..single_qubit.resonator_spectroscopy import ResSpec
+from .qubit_spec_predistorted import QubitSpecPredist
 
 
 class QubitSpecFlux(QickExperiment2DSimple):
@@ -733,6 +734,9 @@ class QubitSpecFluxSweep(QickExperiment2DSimple):
         sweep_label: Y-axis label for plots (default: sweep_var).
         update: Whether to update inner config with fit results after each point.
         start_center_freq: Initial qubit frequency center; None = use config f_ge.
+        predistorted: If True, use QubitSpecPredist (predistorted flux pulse)
+            as the inner experiment instead of QubitSpec. Requires flux_alphas,
+            flux_taus, and flux_alpha0 in params.
     """
 
     def __init__(
@@ -755,6 +759,8 @@ class QubitSpecFluxSweep(QickExperiment2DSimple):
         self._qi = qi
         self._style = style
 
+        predistorted = params.get("predistorted", False)
+
         params_def = {
             "sweep_var": sweep_var,
             "sweep_pts": None,
@@ -765,12 +771,32 @@ class QubitSpecFluxSweep(QickExperiment2DSimple):
             "log_sweep": False,
             "update": True,
             "start_center_freq": None,
+            "predistorted": predistorted,
         }
 
         params = {**params_def, **params, "flux": True}
 
-        # Create inner QubitSpec (go=False) to inherit its config
-        self.expt = QubitSpec(cfg_dict, qi, go=False, params=params, style=style, check_params=False)
+        # Load predistortion params from config if not provided explicitly
+        if predistorted:
+            cfg_flux = self.cfg.hw.soc.dacs.flux
+            if "flux_alphas" not in params or not params["flux_alphas"]:
+                params["flux_alphas"] = list(cfg_flux.step_alphas[qi])
+            if "flux_taus" not in params or not params["flux_taus"]:
+                params["flux_taus"] = list(cfg_flux.step_taus[qi])
+            if "flux_alpha0" not in params:
+                step_alpha0 = getattr(cfg_flux, "step_alpha0", None)
+                if step_alpha0 is not None:
+                    val = step_alpha0[qi]
+                    if val is not None and not (isinstance(val, float) and np.isnan(val)):
+                        params["flux_alpha0"] = val
+
+        # Create inner experiment (go=False) to inherit its config
+        if predistorted:
+            self.expt = QubitSpecPredist(
+                cfg_dict, qi, go=False, params=params, style=style, check_params=False)
+        else:
+            self.expt = QubitSpec(
+                cfg_dict, qi, go=False, params=params, style=style, check_params=False)
         params = {**self.expt.cfg.expt, **params}
         self.cfg.expt = params
 
@@ -790,6 +816,15 @@ class QubitSpecFluxSweep(QickExperiment2DSimple):
         if go:
             self.run(progress=progress, display=display, analyze=True,
                      min_r2=min_r2, max_err=max_err)
+
+    @classmethod
+    def from_h5file(cls, fname):
+        self = super().from_h5file(fname)
+        cfg_e = self.cfg.expt
+        self._sweep_var = cfg_e.get("sweep_var", "flux_gain")
+        self._sweep_label = cfg_e.get("sweep_label", self._sweep_var)
+        self._log_sweep = cfg_e.get("log_sweep", False)
+        return self
 
     def acquire(self, progress=True, display=False):
         from pathlib import Path
@@ -900,10 +935,158 @@ class QubitSpecFluxSweep(QickExperiment2DSimple):
         self.data = data
         return data
 
-    def analyze(self, data=None, **kwargs):
+    def analyze(self, data=None, n_exp=3, f_inf=None, t_range=None,
+                flux_converter="auto", flux_gain_target=None,
+                alpha0=None, fitparams=None, outlier_sigma=None, **kwargs):
+        """
+        Analyze sweep data. For flux_lead_time sweeps, fits a sum of exponentials
+        to characterize the step response (arXiv:2503.04610, Figure 4).
+
+        Two fitting modes:
+        1. **Flux space** (default when transmon/quadratic model is in config):
+           converts to normalized flux s(t) = α₀ + Σ αᵢ exp(-t/τᵢ), which
+           linearizes the nonlinear frequency–flux mapping.
+        2. **Frequency space** (fallback): fits f(t) = f_inf + Σ aᵢ exp(-t/τᵢ).
+           Use `f_inf` to fix the steady-state frequency when the measurement
+           window is shorter than the longest time constant.
+
+        Args:
+            data: Data dict (default: self.data)
+            n_exp: Number of exponential terms for step response fit
+            f_inf: Fix the steady-state frequency (MHz) for freq-space fitting.
+            t_range: Tuple (t_min, t_max) in µs to restrict the fit range.
+            flux_converter: FluxConverter for flux-space fitting. "auto"
+                (default) builds one from the config if transmon/quadratic
+                model params are available. Pass None to force freq-space
+                fitting, or a FluxConverter instance to use it directly.
+            flux_gain_target: Target flux gain used in the experiment. If None,
+                uses the experiment's flux_gain parameter.
+            alpha0: Steady-state value α₀ for flux-space fitting. If None
+                (default), fit as a free parameter. Use 0.0 for high-pass
+                bias tee.
+            fitparams: Optional initial parameters for the fit.
+            outlier_sigma: If set, mark data points whose fit residual exceeds
+                this many standard deviations as outliers (stored in
+                data["outlier_mask"], True = outlier).
+        """
         if data is None:
             data = self.data
+
+        if self._sweep_var == "flux_lead_time":
+            # Auto-build flux_converter from config if available
+            if flux_converter == "auto":
+                from ...analysis.fitting import flux_converter_from_config
+                qi = self.cfg.expt["qubit"][0]
+                # Determine direction from flux_gain vs sweet spot
+                flux_gain = self.cfg.expt.get("flux_gain", -0.35)
+                sweet_spot = self.cfg.device.qubit.sweet_spot_ac[qi]
+                direction = "neg" if flux_gain < sweet_spot else "pos"
+                flux_converter = flux_converter_from_config(
+                    self.cfg.hw.soc.dacs.flux, self.cfg.device.qubit, qi,
+                    direction=direction)
+
+            mask = ~np.isnan(data["qubit_freq_list"])
+            sweep_pts = data["sweep_pts"][mask]
+            freq_list = data["qubit_freq_list"][mask]
+
+            if flux_converter is not None:
+                # Flux-space fitting (fit on masked data, evaluate on all points)
+                from ...analysis.fitting import fit_step_response_flux
+
+                if flux_gain_target is None:
+                    flux_gain_target = self.cfg.expt.get("flux_gain", -0.35)
+
+                params, s_data, s_fit = fit_step_response_flux(
+                    data["sweep_pts"], data["qubit_freq_list"],
+                    flux_converter, flux_gain_target,
+                    n_exp=n_exp, alpha0=alpha0,
+                    fitparams=fitparams, t_range=t_range,
+                )
+                data["step_params"] = params
+                data["step_s_data"] = s_data
+                data["step_s_fit"] = s_fit
+                data["step_fit_mode"] = "flux"
+
+                # Convert fit back to frequency space for display
+                delta = params["delta_gain"]
+                sweet = params["gain_sweet"]
+                data["step_fit_curve"] = flux_converter.gain_to_freq(
+                    s_fit * delta + sweet
+                )
+
+            else:
+                # Frequency-space fitting
+                from ...analysis.fitting import (
+                    fit_step_response,
+                    sum_exp_func,
+                    extract_step_response_params,
+                )
+
+                pOpt, pCov, pInit = fit_step_response(
+                    sweep_pts, freq_list, n_exp=n_exp,
+                    fitparams=fitparams, f_inf=f_inf, t_range=t_range,
+                )
+                data["step_fit"] = pOpt
+                data["step_fit_err"] = pCov
+                data["step_params"] = extract_step_response_params(pOpt)
+                data["step_fit_curve"] = sum_exp_func(data["sweep_pts"], *pOpt)
+                data["step_fit_mode"] = "freq"
+
+            # Compute outlier mask based on fit residuals
+            if outlier_sigma is not None and "step_fit_curve" in data:
+                residuals = data["qubit_freq_list"] - data["step_fit_curve"]
+                valid = ~np.isnan(residuals)
+                std = np.nanstd(residuals)
+                data["outlier_mask"] = np.abs(residuals) > outlier_sigma * std
+            else:
+                data["outlier_mask"] = np.zeros(len(data["sweep_pts"]), dtype=bool)
+
         return data
+
+    def update(self, verbose=True):
+        """Save fitted step response params (alpha0, alphas, taus) to the config."""
+        qi = self.cfg.expt["qubit"][0]
+        data = self.data
+        step_params = data.get("step_params")
+        if step_params is None:
+            print("No step_params found in data — run analyze() first.")
+            return
+
+        cfg = config.load(self.config_file)
+        flux_sec = cfg["hw"]["soc"]["dacs"]["flux"]
+        n = len(flux_sec.get("ch", [0, 0, 0, 0]))
+
+        # alpha0 (flux-space fit) or f_inf (freq-space fit)
+        if "alpha0" in step_params:
+            config.update_config(
+                self.config_file, "hw.soc.dacs.flux", "step_alpha0",
+                float(step_params["alpha0"]), qi, verbose=verbose,
+            )
+            # Reload after update_config's save
+            cfg = config.load(self.config_file)
+            flux_sec = cfg["hw"]["soc"]["dacs"]["flux"]
+        elif "f_inf" in step_params:
+            config.update_config(
+                self.config_file, "hw.soc.dacs.flux", "step_f_inf",
+                float(step_params["f_inf"]), qi, verbose=verbose,
+            )
+            cfg = config.load(self.config_file)
+            flux_sec = cfg["hw"]["soc"]["dacs"]["flux"]
+
+        # alphas and taus are variable-length lists per qubit — update_config
+        # doesn't handle list values, so we load/save manually.
+        for key, vals in [
+            ("step_alphas", [round(float(a), 6) for a in step_params["alphas"]]),
+            ("step_taus", [round(float(t), 6) for t in step_params["taus"]]),
+        ]:
+            if key not in flux_sec:
+                flux_sec[key] = [[] for _ in range(n)]
+            old = flux_sec[key][qi]
+            flux_sec[key][qi] = vals
+            if verbose:
+                print(f"*Set cfg hw.soc.dacs.flux {qi} {key} to {vals} from {old}*")
+
+        config.save(cfg, self.config_file)
 
     def display(self, data=None, **kwargs):
         import matplotlib.pyplot as plt
@@ -915,12 +1098,54 @@ class QubitSpecFluxSweep(QickExperiment2DSimple):
         qubit_freq_list = data["qubit_freq_list"]
         qi = self.cfg.expt["qubit"][0]
         sweep_label = self._sweep_label
+        outliers = data.get("outlier_mask", np.zeros(len(sweep_pts), dtype=bool))
+        show = ~outliers
 
-        # --- Freq vs sweep parameter plot ---
-        fig, ax = plt.subplots()
-        ax.plot(sweep_pts, qubit_freq_list, "o")
-        ax.set_xlabel(sweep_label)
+        # --- Freq vs sweep parameter plot (with optional step response fit) ---
+        has_fit = "step_fit_curve" in data and data["step_fit_curve"] is not None
+        if has_fit:
+            fig, axes = plt.subplots(2, 1, figsize=(8, 6), sharex=True,
+                                     gridspec_kw={"height_ratios": [3, 1]})
+            ax = axes[0]
+        else:
+            fig, ax = plt.subplots()
+
+        ax.plot(sweep_pts[show], qubit_freq_list[show], "o", ms=4, label="data")
+        if has_fit:
+            # Plot fit curve
+            ax.plot(sweep_pts, data["step_fit_curve"], "-", color="C3", lw=2, label="fit")
+            ax.legend(fontsize=9)
+
+            # Print fitted parameters as text
+            p = data["step_params"]
+            fit_mode = data.get("step_fit_mode", "freq")
+            lines = []
+            if "f_inf" in p:
+                lines.append(f"$f_\\infty$ = {p['f_inf']:.2f} MHz")
+            if "alpha0" in p:
+                lines.append(f"$\\alpha_0$ = {p['alpha0']:.4f}")
+            for i, (a, tau) in enumerate(zip(p["alphas"], p["taus"])):
+                if fit_mode == "flux":
+                    lines.append(f"$\\alpha_{{{i+1}}}$ = {a:.4f}, $\\tau_{{{i+1}}}$ = {tau:.3f} µs")
+                else:
+                    lines.append(f"$a_{{{i+1}}}$ = {a:.2f} MHz, $\\tau_{{{i+1}}}$ = {tau:.3f} µs")
+            ax.text(0.02, 0.97, "\n".join(lines), transform=ax.transAxes,
+                    fontsize=10, va="top", ha="left",
+                    bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="black", lw=0.8))
+
+            # Residuals subplot
+            ax_r = axes[1]
+            residuals = qubit_freq_list - data["step_fit_curve"]
+            ax_r.plot(sweep_pts[show], residuals[show], "o", ms=3, color="C2")
+            ax_r.axhline(0, color="k", lw=0.5, ls="--")
+            ax_r.set_ylabel("Residual (MHz)")
+            ax_r.set_xlabel(sweep_label)
+            if self._log_sweep:
+                ax_r.set_xscale("log")
+
         ax.set_ylabel("Qubit Frequency (MHz)")
+        if not has_fit:
+            ax.set_xlabel(sweep_label)
         if self._log_sweep:
             ax.set_xscale("log")
         self.save_fig(fig, suffix="_qspec_vs_sweep")

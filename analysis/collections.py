@@ -228,6 +228,12 @@ def process_data(tt, qubit_list=None):
         if "t2e" in tt[j] and "t2" not in tt[j]:
             tt[j]["t2"] = tt[j].pop("t2e")
 
+        # Replace negative t1/t2 values with NaN
+        for tkey in ["t1", "t2", "t2r"]:
+            if tkey in tt[j]:
+                tt[j][tkey] = tt[j][tkey].astype(float)
+                tt[j][tkey][tt[j][tkey] < 0] = np.nan
+
         tt[j]["q"] = tt[j]["t1"] * tt[j]["f_ge"] * 2 * np.pi
         if "t2r" in tt[j]:
             tt[j]["t2rt1"] = tt[j]["t2r"] / 2 / tt[j]["t1"]
@@ -827,4 +833,139 @@ def add_losses(tt):
             if par in tt[j].keys():
                 tt[j]['Gamma' + par[1:]] = 1000 / tt[j][par]
     return tt
+
+
+def load_temp_sweep(csv_dir, tracking_ids=None, qubit_list=None, params=None):
+    """
+    Load multiple tracking runs and compute per-run averages for temperature sweep analysis.
+
+    Parameters
+    ----------
+    csv_dir : str or Path
+        Path to the Tracking/csv directory.
+    tracking_ids : list of str, optional
+        List of tracking IDs to load. If None, loads all available runs.
+    qubit_list : list of int, optional
+        Qubit indices to include. If None, inferred from files.
+    params : list of str, optional
+        Parameters to extract. Defaults to ['t1', 't2', 'tphi', 'f_ge', 'mxc_temp'].
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per (tracking_id, qubit) with columns for temperature and mean/std
+        of each parameter.
+    """
+    import re
+    from slab_qick_calib.calib.time_tracking import load_tracking
+
+    if params is None:
+        params = ['t1', 't2', 'tphi', 'f_ge', 'mxc_temp']
+
+    csv_dir = Path(csv_dir)
+    csv_files = sorted(csv_dir.glob("*_qubit_*_tracking.csv"))
+    if not csv_files:
+        raise FileNotFoundError(f"No tracking CSV files found in {csv_dir}")
+
+    # Discover available tracking IDs
+    runs = {}
+    for f in csv_files:
+        match = re.match(r"(.+)_qubit_(\d+)_tracking\.csv", f.name)
+        if match:
+            runs.setdefault(match.group(1), []).append(int(match.group(2)))
+
+    if tracking_ids is None:
+        tracking_ids = sorted(runs.keys())
+
+    rows = []
+    for tid in tracking_ids:
+        if tid not in runs:
+            print(f"Warning: tracking_id '{tid}' not found, skipping")
+            continue
+
+        tt, _, tt_stats, _ = load_tracking(csv_dir, tracking_id=tid, qubit_list=qubit_list)
+        tt, tt_ave = process_data(tt, qubit_list=qubit_list)
+        tt = add_losses(tt)
+
+        n_qubits = len(tt)
+        ql = qubit_list if qubit_list is not None else list(range(n_qubits))
+
+        for j, qi in enumerate(ql):
+            row = {'tracking_id': tid, 'qubit': qi}
+
+            # Mean MXC temp across measurements in this run
+            if 'mxc_temp' in tt[j]:
+                row['temp_K'] = np.nanmean(tt[j]['mxc_temp'])
+                row['temp_mK'] = row['temp_K'] * 1000
+            row['n_points'] = len(tt[j].get('t1', []))
+
+            for p in params:
+                if p == 'mxc_temp':
+                    continue
+                if p in tt[j]:
+                    row[f'{p}_mean'] = np.nanmean(tt[j][p])
+                    row[f'{p}_std'] = np.nanstd(tt[j][p])
+                    row[f'{p}_sem'] = row[f'{p}_std'] / np.sqrt(np.sum(~np.isnan(tt[j][p])))
+                # Also grab Gamma versions if available
+                gamma_key = 'Gamma' + p[1:] if p.startswith('t') else None
+                if gamma_key and gamma_key in tt[j]:
+                    row[f'{gamma_key}_mean'] = np.nanmean(tt[j][gamma_key])
+                    row[f'{gamma_key}_std'] = np.nanstd(tt[j][gamma_key])
+
+            rows.append(row)
+
+    df = pd.DataFrame(rows)
+    if 'temp_mK' in df.columns:
+        df = df.sort_values(['qubit', 'temp_mK']).reset_index(drop=True)
+    return df
+
+
+def plot_temp_sweep(df, params=None, figsize=(8, 5)):
+    """
+    Plot parameter averages vs MXC temperature from a temp sweep DataFrame.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Output of load_temp_sweep.
+    params : list of str, optional
+        Parameters to plot. Defaults to ['t1', 't2', 'tphi'].
+    figsize : tuple
+        Figure size per parameter.
+
+    Returns
+    -------
+    list of (fig, ax)
+    """
+    if params is None:
+        params = ['t1', 't2', 'tphi']
+
+    parameter_config = get_parameter_config()
+    qubits = sorted(df['qubit'].unique())
+    figs = []
+
+    for p in params:
+        mean_col = f'{p}_mean'
+        sem_col = f'{p}_sem'
+        if mean_col not in df.columns:
+            print(f"No data for '{p}', skipping")
+            continue
+
+        fig, ax = plt.subplots(figsize=figsize)
+        for qi in qubits:
+            qdf = df[df['qubit'] == qi]
+            ax.errorbar(
+                qdf['temp_mK'], qdf[mean_col],
+                yerr=qdf.get(sem_col, None),
+                fmt='o-', capsize=3, label=f'Q{qi}',
+            )
+
+        ax.set_xlabel('MXC Temperature (mK)')
+        label = parameter_config.get(p, {}).get('label', p)
+        ax.set_ylabel(label)
+        ax.legend()
+        fig.tight_layout()
+        figs.append((fig, ax))
+
+    return figs
         

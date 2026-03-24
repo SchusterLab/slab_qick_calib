@@ -408,6 +408,23 @@ class Experiment:
         """
         pass
 
+    def _prepare_for_hdf5(self, d):
+        """Convert data to an HDF5-compatible format.
+
+        Handles dicts (serialized as JSON bytes) and strings (encoded as bytes),
+        in addition to the standard np.array conversion.
+        """
+        if isinstance(d, dict):
+            return np.bytes_(json.dumps(d))
+        if isinstance(d, str):
+            return np.bytes_(d)
+        arr = np.array(d)
+        if arr.dtype.kind == 'U':  # Unicode string array
+            return arr.astype('S')
+        if arr.dtype == object:
+            return np.bytes_(json.dumps(d, default=str))
+        return arr
+
     def save_data(self, data=None, overwrite=True):
         """
         Save experimental data to file.
@@ -435,9 +452,9 @@ class Experiment:
             with self.datafile(swmr=True) as f:  # swmr=True uses write mode
                 for k, d in data.items():
                     try:
-                        f.add(k, np.array(d))
+                        d = self._prepare_for_hdf5(d)
+                        f.add(k, d)
                     except Exception as e:
-                        #np.array(d).astype(np.float64)
                         print(f"Error saving dataset '{k}': {e}")
         else:
             # Use append mode for non-overwrite case
@@ -447,7 +464,8 @@ class Experiment:
                     if k in f:
                         print(f"Warning: Dataset '{k}' already exists. Skipping to avoid overwrite.")
                         continue
-                    f.add(k, np.array(d))
+                    d = self._prepare_for_hdf5(d)
+                    f.add(k, d)
 
     def load_data(self, f):
         """
@@ -463,11 +481,20 @@ class Experiment:
                   - Special 'attrs' key contains file attributes dictionary
         """
         data = {}
-        
-        # Load all datasets as numpy arrays
+
+        # Load all datasets, deserializing JSON-encoded bytes back to dicts/strings
         for k in f.keys():
-            data[k] = np.array(f[k])
-            
+            arr = np.array(f[k])
+            if arr.dtype.kind == 'S' and arr.ndim == 0:
+                # Scalar bytes — try to deserialize as JSON (for saved dicts),
+                # otherwise decode to string
+                s = arr.item().decode()
+                try:
+                    arr = json.loads(s)
+                except (json.JSONDecodeError, ValueError):
+                    arr = s
+            data[k] = arr
+
         # Include file attributes for metadata
         data["attrs"] = f.get_dict()
         
