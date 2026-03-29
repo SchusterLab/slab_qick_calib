@@ -593,6 +593,7 @@ def fit_step_response_flux(
     flux_gain_target: float,
     n_exp: int = 3,
     alpha0: Optional[float] = None,
+    s0: Optional[float] = None,
     fitparams: Optional[List[float]] = None,
     t_range: Optional[Tuple[float, float]] = None,
 ) -> Tuple[dict, np.ndarray, np.ndarray]:
@@ -612,9 +613,16 @@ def fit_step_response_flux(
         alpha0: Steady-state value α₀ = s(t→∞). If None (default), fit as a
             free parameter. If a float, fix it. Use alpha0=0 for a pure
             high-pass bias tee where flux fully decays.
-        fitparams: Optional initial parameters. Layout depends on alpha0:
-            - alpha0=None (free): [alpha0, a1, tau1, a2, tau2, ...]
+        s0: Constrain the initial step response value s(0) = α₀ + Σαᵢ.
+            Reparameterizes the fit so α₀ = s0 − Σαᵢ, breaking the
+            degeneracy between α₀ and long-τ exponentials whose decay is
+            unresolvable within the measurement window. Typical value: 1.0
+            (line transmits the step immediately). Cannot be combined with
+            a fixed alpha0.
+        fitparams: Optional initial parameters. Layout depends on alpha0/s0:
+            - alpha0=None, s0=None (free): [alpha0, a1, tau1, a2, tau2, ...]
             - alpha0=fixed: [a1, tau1, a2, tau2, ...]
+            - s0=constrained: [a1, tau1, a2, tau2, ...]
         t_range: Optional (t_min, t_max) in µs to restrict the fit range
 
     Returns:
@@ -624,6 +632,8 @@ def fit_step_response_flux(
             s_data: Normalized step response data
             s_fit: Fitted normalized step response
     """
+    if alpha0 is not None and s0 is not None:
+        raise ValueError("Cannot specify both alpha0 and s0. Use one or the other.")
     tdata = np.asarray(tdata, dtype=float)
     fdata = np.asarray(fdata, dtype=float)
 
@@ -679,6 +689,46 @@ def fit_step_response_flux(
 
         alphas = [pOpt_inner[i] for i in range(0, len(pOpt_inner), 2)]
         taus = [pOpt_inner[i] for i in range(1, len(pOpt_inner), 2)]
+
+    elif s0 is not None:
+        # Constrained s(0): α₀ = s0 − Σαᵢ, so we only fit [a1, tau1, ...]
+        # This breaks the degeneracy between α₀ and long-τ terms.
+        s0_val = float(s0)
+
+        if fitparams is None:
+            tau_guesses = np.logspace(np.log10(t_min_data), np.log10(t_max_data), n_exp)
+            # At the earliest data point, s ≈ s0, and at the latest, s ≈ α₀.
+            # So α₀ ≈ s_fit_data[-1], and Σαᵢ ≈ s0 − α₀.
+            total_dev = s0_val - float(s_fit_data[-1])
+            fitparams_s0 = []
+            for i in range(n_exp):
+                fitparams_s0.extend([total_dev / n_exp, float(tau_guesses[i])])
+        else:
+            fitparams_s0 = list(fitparams)
+
+        def s_model_s0(t, *p):
+            # p = [a1, tau1, a2, tau2, ...]
+            sum_alphas = sum(p[i] for i in range(0, len(p), 2))
+            alpha0_computed = s0_val - sum_alphas
+            result = np.full_like(t, alpha0_computed, dtype=float)
+            for i in range(0, len(p), 2):
+                result += p[i] * np.exp(-t / p[i + 1])
+            return result
+
+        lower = [-2, 1e-4] * n_exp
+        upper = [2, t_max_data * 1000] * n_exp
+
+        pOpt_s0, pCov, pInit = generic_fit(
+            s_model_s0, t_fit, s_fit_data, fitparams_s0,
+            bounds=(lower, upper),
+            error_message="Warning: step response flux fit (s0-constrained) failed!",
+        )
+
+        s_fit = s_model_s0(tdata, *pOpt_s0)
+
+        alphas = [pOpt_s0[i] for i in range(0, len(pOpt_s0), 2)]
+        taus = [pOpt_s0[i] for i in range(1, len(pOpt_s0), 2)]
+        alpha0_val = s0_val - sum(alphas)
 
     else:
         # Free α₀: fit alpha0 + exponentials

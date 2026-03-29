@@ -937,7 +937,7 @@ class QubitSpecFluxSweep(QickExperiment2DSimple):
 
     def analyze(self, data=None, n_exp=3, f_inf=None, t_range=None,
                 flux_converter="auto", flux_gain_target=None,
-                alpha0=None, fitparams=None, outlier_sigma=None, **kwargs):
+                alpha0=None, s0=None, fitparams=None, outlier_sigma=None, **kwargs):
         """
         Analyze sweep data. For flux_lead_time sweeps, fits a sum of exponentials
         to characterize the step response (arXiv:2503.04610, Figure 4).
@@ -964,6 +964,9 @@ class QubitSpecFluxSweep(QickExperiment2DSimple):
             alpha0: Steady-state value α₀ for flux-space fitting. If None
                 (default), fit as a free parameter. Use 0.0 for high-pass
                 bias tee.
+            s0: Constrain the initial step response s(0) = α₀ + Σαᵢ. Breaks
+                the degeneracy between α₀ and long-τ terms unresolvable in
+                the measurement window. Typical value: 1.0.
             fitparams: Optional initial parameters for the fit.
             outlier_sigma: If set, mark data points whose fit residual exceeds
                 this many standard deviations as outliers (stored in
@@ -999,7 +1002,7 @@ class QubitSpecFluxSweep(QickExperiment2DSimple):
                 params, s_data, s_fit = fit_step_response_flux(
                     data["sweep_pts"], data["qubit_freq_list"],
                     flux_converter, flux_gain_target,
-                    n_exp=n_exp, alpha0=alpha0,
+                    n_exp=n_exp, alpha0=alpha0, s0=s0,
                     fitparams=fitparams, t_range=t_range,
                 )
                 data["step_params"] = params

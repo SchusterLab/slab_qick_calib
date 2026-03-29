@@ -108,6 +108,18 @@ class QubitSpecPredistProgram(QickProgram):
                 outsel="product",
             )
 
+            if cfg.expt.flux_negative_reset:
+                self.add_pulse(
+                    ch=flux_ch,
+                    name="flux_pulse_neg",
+                    style="arb",
+                    envelope="flux_predist",
+                    freq=0,
+                    phase=0,
+                    gain=-scaled_gain,
+                    outsel="product",
+                )
+
         # --- Qubit probe pulse ---
         pulse = {
             "freq": cfg.expt.frequency,
@@ -149,6 +161,9 @@ class QubitSpecPredistProgram(QickProgram):
             self.delay_auto(t=0.01, tag="wait 2")
 
         super().measure(cfg)
+
+        if cfg.expt.flux and cfg.expt.flux_negative_reset:
+            self.pulse(ch=cfg.expt.flux_chan, name="flux_pulse_neg", t=0)
 
 
 class QubitSpecPredist(QickExperiment):
@@ -230,6 +245,7 @@ class QubitSpecPredist(QickExperiment):
             "flux_alpha0": 1.0,
             "flux_slow_only": False,
             "flux_tau_threshold": 0.5,
+            "flux_negative_reset": False,
         }
         params_def = {**params_def, **style_defaults}
         params = {**params_def, **params}
@@ -272,7 +288,13 @@ class QubitSpecPredist(QickExperiment):
 
     def acquire(self, progress=False):
         q = self.cfg.expt.qubit[0]
-        self.cfg.device.readout.final_delay[q] = self.cfg.expt.final_delay
+        final_delay = self.cfg.expt.final_delay
+        if self.cfg.expt.flux and self.cfg.expt.flux_negative_reset:
+            flux_pulse_length = (self.cfg.expt.length
+                                 + self.cfg.expt.flux_lead_time
+                                 + self.cfg.expt.flux_trail_time)
+            final_delay = max(0, final_delay - flux_pulse_length)
+        self.cfg.device.readout.final_delay[q] = final_delay
 
         self.param = {"label": "qubit_pulse", "param": "freq", "param_type": "pulse"}
         self.cfg.expt.frequency = QickSweep1D(

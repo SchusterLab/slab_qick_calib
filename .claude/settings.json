@@ -13,7 +13,8 @@
       "Read(//c/_Lib/python/**)",
       "WebFetch(domain:qick-docs.readthedocs.io)",
       "Read(//c/Users/circu/**)",
-      "Read(//c/_Data/sample_50_new/data/**)"
+      "Read(//c/_Data/sample_50_new/data/**)",
+      "Read(//c/_Data/sample_50_new/**)"
     ],
     "defaultMode": "acceptEdits"
   }

@@ -216,11 +216,14 @@ def detect_t2_type(tracking_dir, qi=0):
 def process_data(tt, qubit_list=None):
 
     if qubit_list is None:
-        qubit_list = [i for i in range(len(tt))]
+        qubit_list = list(range(len(tt)))
+
+    # Iterate over actual tt entries; qubit_list may be longer than tt
+    n = min(len(tt), len(qubit_list))
 
     b = {}
 
-    for j, qi in enumerate(qubit_list):
+    for j in range(n):
         for k in list(tt[j].keys()):
             tt[j][k] = np.array(tt[j][k])
 
@@ -238,21 +241,21 @@ def process_data(tt, qubit_list=None):
         if "t2r" in tt[j]:
             tt[j]["t2rt1"] = tt[j]["t2r"] / 2 / tt[j]["t1"]
             tsphi = 1 / (1 / tt[j]["t2r"] - 1 / tt[j]["t1"] / 2)
-            tsphi[(tsphi < 0) | (tsphi > 1000)] = np.nan
+            tsphi = np.where((tsphi < 0) | (tsphi > 1000), np.nan, tsphi)
             tt[j]["tsphi"] = tsphi
             tt[j]["q2"] = tt[j]["tsphi"] * tt[j]["f_ge"] * 2 * np.pi
         if "t2" in tt[j]:
             tt[j]["t2et1"] = tt[j]["t2"] / 2 / tt[j]["t1"]
             tphi = 1 / (1 / tt[j]["t2"] - 1 / tt[j]["t1"] / 2)
-            tphi[(tphi < 0) | (tphi > 1000)] = np.nan
+            tphi = np.where((tphi < 0) | (tphi > 1000), np.nan, tphi)
             tt[j]["tphi"] = tphi
             tt[j]["q2"] = tt[j]["tphi"] * tt[j]["f_ge"] * 2 * np.pi
 
     for key in tt[0].keys():
-        for j, qi in enumerate(qubit_list):
+        for j in range(n):
             if j == 0:
-                b[key + "_mn"] = np.zeros(len(qubit_list))
-                b[key + "_std"] = np.zeros(len(qubit_list))
+                b[key + "_mn"] = np.zeros(n)
+                b[key + "_std"] = np.zeros(n)
             b[key + "_mn"][j] = np.nanmean(tt[j][key])
             b[key + "_std"][j] = np.nanstd(tt[j][key])
 
@@ -890,14 +893,15 @@ def load_temp_sweep(csv_dir, tracking_ids=None, qubit_list=None, params=None):
         n_qubits = len(tt)
         ql = qubit_list if qubit_list is not None else list(range(n_qubits))
 
-        for j, qi in enumerate(ql):
+        for j in range(n_qubits):
+            qi = ql[j] if j < len(ql) else j
             row = {'tracking_id': tid, 'qubit': qi}
 
             # Mean MXC temp across measurements in this run
             if 'mxc_temp' in tt[j]:
                 row['temp_K'] = np.nanmean(tt[j]['mxc_temp'])
                 row['temp_mK'] = row['temp_K'] * 1000
-            row['n_points'] = len(tt[j].get('t1', []))
+            row['n_points'] = np.size(tt[j].get('t1', []))
 
             for p in params:
                 if p == 'mxc_temp':
@@ -920,7 +924,8 @@ def load_temp_sweep(csv_dir, tracking_ids=None, qubit_list=None, params=None):
     return df
 
 
-def plot_temp_sweep(df, params=None, figsize=(8, 5)):
+def plot_temp_sweep(df, params=None, figsize=(8, 5), outlier_iqr=1.5,
+                    normalized=True):
     """
     Plot parameter averages vs MXC temperature from a temp sweep DataFrame.
 
@@ -932,6 +937,10 @@ def plot_temp_sweep(df, params=None, figsize=(8, 5)):
         Parameters to plot. Defaults to ['t1', 't2', 'tphi'].
     figsize : tuple
         Figure size per parameter.
+    outlier_iqr : float or None
+        IQR multiplier for outlier removal per qubit. None to skip.
+    normalized : bool
+        If True, also produce plots normalized to the lowest-temperature value.
 
     Returns
     -------
@@ -942,6 +951,23 @@ def plot_temp_sweep(df, params=None, figsize=(8, 5)):
 
     parameter_config = get_parameter_config()
     qubits = sorted(df['qubit'].unique())
+
+    # Remove outliers per qubit per parameter
+    if outlier_iqr is not None:
+        mask = np.ones(len(df), dtype=bool)
+        for p in params:
+            mean_col = f'{p}_mean'
+            if mean_col not in df.columns:
+                continue
+            for qi in qubits:
+                idx = df['qubit'] == qi
+                vals = df.loc[idx, mean_col]
+                q1, q3 = vals.quantile(0.25), vals.quantile(0.75)
+                iqr = q3 - q1
+                lo, hi = q1 - outlier_iqr * iqr, q3 + outlier_iqr * iqr
+                mask &= ~(idx & ((df[mean_col] < lo) | (df[mean_col] > hi)))
+        df = df[mask].copy()
+
     figs = []
 
     for p in params:
@@ -951,21 +977,45 @@ def plot_temp_sweep(df, params=None, figsize=(8, 5)):
             print(f"No data for '{p}', skipping")
             continue
 
+        label = parameter_config.get(p, {}).get('label', p)
+
+        # Absolute plot
         fig, ax = plt.subplots(figsize=figsize)
         for qi in qubits:
-            qdf = df[df['qubit'] == qi]
+            qdf = df[df['qubit'] == qi].sort_values('temp_mK')
             ax.errorbar(
                 qdf['temp_mK'], qdf[mean_col],
                 yerr=qdf.get(sem_col, None),
                 fmt='o-', capsize=3, label=f'Q{qi}',
             )
-
         ax.set_xlabel('MXC Temperature (mK)')
-        label = parameter_config.get(p, {}).get('label', p)
         ax.set_ylabel(label)
         ax.legend()
         fig.tight_layout()
         figs.append((fig, ax))
+
+        # Normalized plot
+        if normalized:
+            fig_n, ax_n = plt.subplots(figsize=figsize)
+            for qi in qubits:
+                qdf = df[df['qubit'] == qi].sort_values('temp_mK')
+                base_val = qdf[mean_col].iloc[0]
+                if base_val == 0 or np.isnan(base_val):
+                    continue
+                norm_vals = qdf[mean_col] / base_val
+                norm_err = (qdf[sem_col] / base_val
+                            if sem_col in qdf.columns else None)
+                ax_n.errorbar(
+                    qdf['temp_mK'], norm_vals,
+                    yerr=norm_err,
+                    fmt='o-', capsize=3, label=f'Q{qi}',
+                )
+            ax_n.set_xlabel('MXC Temperature (mK)')
+            ax_n.set_ylabel(f'{label} (normalized)')
+            ax_n.axhline(1, color='gray', ls='--', lw=0.8)
+            ax_n.legend()
+            fig_n.tight_layout()
+            figs.append((fig_n, ax_n))
 
     return figs
         

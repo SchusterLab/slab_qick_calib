@@ -84,6 +84,17 @@ class QubitSpecProgram(QickProgram):
             }
             super().make_pulse(pulse, "flux_pulse")
 
+            if cfg.expt.flux_negative_reset:
+                pulse_neg = {
+                "chan": cfg.expt.flux_chan,
+                "freq": 0,
+                "phase": 0,
+                "gain": -cfg.expt.flux_gain,
+                "length": cfg.expt.length+cfg.expt.flux_lead_time+cfg.expt.flux_trail_time,
+                "type": 'const'
+                }
+                super().make_pulse(pulse_neg, "flux_pulse_neg")
+
         if cfg.expt.flux2:
             self.declare_gen(cfg.expt.flux_chan, nqz=1, mixer_freq=0)
             pulse = {
@@ -154,6 +165,9 @@ class QubitSpecProgram(QickProgram):
 
         # Perform measurement
         super().measure(cfg)
+
+        if cfg.expt.flux and cfg.expt.flux_negative_reset:
+            self.pulse(ch=cfg.expt.flux_chan, name="flux_pulse_neg", t=0)
 
         if cfg.expt.flux2:
             self.pulse(ch=cfg.expt.flux_chan, name="flux_pulse2", t=0)
@@ -317,6 +331,7 @@ class QubitSpec(QickExperiment):
             "flux_lead_time": 0.035, # Time to apply flux pulse before qubit pulse (μs)
             "flux_trail_time": 0.025, # Time to keep flux pulse on after qubit pulse (μs)
             "flux_readout_wait": 0.1, # Time to wait after flux pulse before readout (μs)
+            "flux_negative_reset": False, # Play equal-and-opposite flux pulse after readout
             }
             params_def = {**params_def, **flux_params}
 
@@ -383,7 +398,13 @@ class QubitSpec(QickExperiment):
         """
         # Get qubit index and set final delay
         q = self.cfg.expt.qubit[0]
-        self.cfg.device.readout.final_delay[q] = self.cfg.expt.final_delay
+        final_delay = self.cfg.expt.final_delay
+        if self.cfg.expt.flux and self.cfg.expt.flux_negative_reset:
+            flux_pulse_length = (self.cfg.expt.length
+                                 + self.cfg.expt.flux_lead_time
+                                 + self.cfg.expt.flux_trail_time)
+            final_delay = max(0, final_delay - flux_pulse_length)
+        self.cfg.device.readout.final_delay[q] = final_delay
 
         # Set parameter to sweep
         self.param = {"label": "qubit_pulse", "param": "freq", "param_type": "pulse"}

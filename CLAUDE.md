@@ -77,6 +77,13 @@ soccfg.get_maxv(ch)       # max int16 value with safety margin
 - Program classes and `acquire`/`analyze`/`display` methods should use direct attribute access on `cfg.expt` (e.g. `cfg.expt.length`), never `cfg.expt.get("key", default)`. By the time the Program runs, every key it needs must already exist.
 - `.get()` on `params` dict (before merge into `cfg.expt`) is fine for pre-init logic. `.get()` on `data` dicts (checking optional analysis results) is also fine.
 
+## Notebooks
+- All notebooks should have autoreload at the top:
+```python
+%load_ext autoreload
+%autoreload 2
+```
+
 ## Plotting
 - Do not add titles to plots. Existing titles in user code should be left as-is.
 

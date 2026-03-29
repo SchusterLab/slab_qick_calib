@@ -92,9 +92,19 @@ class T1Program(QickProgram):
             "phase": 0,  # Pulse phase
             "gain": cfg.expt.flux_gain,  # Pulse amplitude
             "length": cfg.expt.wait_time,  # Pulse duration
-            "type": 'const'            
+            "type": 'const'
             }
             super().make_pulse(pulse, "flux_pulse")
+            if cfg.expt.neg_flux_pulse:
+                neg_pulse = {
+                    "chan": cfg.expt.flux_chan,
+                    "freq": 0,
+                    "phase": 0,
+                    "gain": -cfg.expt.flux_gain,
+                    "length": cfg.expt.neg_flux_length,
+                    "type": 'const'
+                }
+                super().make_pulse(neg_pulse, "neg_flux_pulse")
 
     def _body(self, cfg):
         """
@@ -131,13 +141,17 @@ class T1Program(QickProgram):
             self.pulse(ch=cfg.expt.flux_chan, name="flux_pulse", t=0)
             # Small buffer delay after flux pulse
             self.delay_auto(t=cfg.expt.flux_readout_wait, tag="wait")
-            #self.delay_auto(t=cfg.expt["end_wait"], tag="wait")
         else:
             # Simple delay for standard T1 measurement
             self.delay_auto(t=cfg.expt["wait_time"] + 0.03, tag="wait")
 
         # Measure the qubit state
         super().measure(cfg)
+
+        # Apply negative flux pulse after measurement to discharge flux line
+        if cfg.expt.flux and cfg.expt.neg_flux_pulse:
+            self.delay_auto(t=0.01, tag="wait_neg_flux")
+            self.pulse(ch=cfg.expt.flux_chan, name="neg_flux_pulse", t=0)
 
 
 class T1Experiment(QickExperiment):
@@ -244,6 +258,8 @@ class T1Experiment(QickExperiment):
                 "flux_chan": self.cfg.hw.soc.dacs.flux.ch[qi],
                 "flux_gain": 0.1,
                 "flux_readout_wait": 0.1,
+                "neg_flux_pulse": False,
+                "neg_flux_length": 1.0,
             }
             params_def = {**params_def, **flux_params}
 
