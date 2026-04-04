@@ -18,6 +18,7 @@ from tqdm import tqdm
 from ...helpers import config
 from ...exp_handling.datamanagement import AttrDict
 from ..general.qick_experiment import QickExperiment2DSimple
+from ..general.qick_flux_experiment import QickFluxSweep
 
 from ...analysis import fitting as fitter
 from ..single_qubit.pulse_probe_spectroscopy import QubitSpec, XLABEL, YLABEL, DCYLABEL, FITTER_FUNC, FIT_FUNC
@@ -290,7 +291,7 @@ class QubitSpecFlux(QickExperiment2DSimple):
         )
 
 
-class QubitSpecFastFlux(QickExperiment2DSimple):
+class QubitSpecFastFlux(QubitSpecFluxSweep):
     """
     QubitSpecFastFlux: Sweep qubit spectroscopy across fast flux gain values.
 
@@ -330,197 +331,47 @@ class QubitSpecFastFlux(QickExperiment2DSimple):
         max_err=None,
     ):
         prefix = prefix or f"qspec_fastflux_qubit{qi}"
-        super().__init__(cfg_dict=cfg_dict, prefix=prefix, progress=progress, qi=qi)
+        # Call QickFluxSweep.__init__ directly to skip QubitSpecFluxSweep's param
+        # setup; we build our own params and wire up the FluxSweep attributes below.
+        QickFluxSweep.__init__(self, cfg_dict=cfg_dict, prefix=prefix, progress=progress, qi=qi)
         self._cfg_dict = cfg_dict
         self._qi = qi
         self._style = style
 
-        # Load flux model from config (prefers transmon, falls back to quadratic)
-        cfg_flux = getattr(getattr(getattr(getattr(self.cfg, "hw", None), "soc", None), "dacs", None), "flux", None)
-        cfg_qubit = self.cfg.device.qubit
-
-        sweet_spot = 0.0
-        if cfg_qubit is not None and hasattr(cfg_qubit, "sweet_spot_ac"):
-            sweet_spot = cfg_qubit.sweet_spot_ac[qi]
-
-        # Determine sweep direction and gain range
+        sweet_spot, gain_stop = self._init_flux_sweep(qi, params)
         direction = params.get("direction", "pos")
-        sign = 1 if direction == "pos" else -1
-
-        converter = params.get("flux_converter", None)
-        if converter is None:
-            converter = fitter.flux_converter_from_config(cfg_flux, cfg_qubit, qi, direction)
         freq_span = params.get("freq_span", None)
+        converter = self._flux_converter
 
-        # Convert freq_span to gain_stop using the flux model
-        if freq_span is not None and converter is not None and "gain_stop" not in params:
-            f_sweet = converter.gain_to_freq(sweet_spot)
-            f_target = f_sweet - freq_span  # frequency decreases away from sweet spot
-            gain_stop = float(converter.freq_to_gain(f_target))
-        else:
-            gain_stop = None  # will use params or default
-
-        # Default parameters for the fast flux sweep
-        flux_defaults = {
+        params_def = {
             "gain_start": sweet_spot if converter is not None else -0.4,
-            "gain_stop": gain_stop if gain_stop is not None else 0.4,
+            "gain_stop": gain_stop,
             "expts_gain": 50,
             "update": True,
-            "start_center_freq": None,  # qubit freq at gain_start; None = use config f_ge
+            "start_center_freq": None,
             "lin_freq": False,
             "freq_span": freq_span,
             "direction": direction,
             "fit_model": "quadratic",
         }
 
-        # Merge defaults with user params
-        params_def = {**flux_defaults}
         params = {**params_def, **params, "flux": True}
 
-        # Create inner QubitSpec (go=False) to inherit its config
         self.expt = QubitSpec(cfg_dict, qi, go=False, params=params, style=style, check_params=False)
         params = {**self.expt.cfg.expt, **params}
         self.cfg.expt = params
-        self._flux_converter = converter
 
-        # Build gain_pts and freq_pts from config
-        cfg_e = self.cfg.expt
-        if cfg_e["lin_freq"] and converter is not None:
-            freq_start = converter.gain_to_freq(cfg_e["gain_start"])
-            freq_stop = converter.gain_to_freq(cfg_e["gain_stop"])
-            self.freq_pts = np.linspace(float(freq_start), float(freq_stop), int(cfg_e["expts_gain"]))
-            self.gain_pts = converter.freq_to_gain(self.freq_pts)
-        else:
-            self.gain_pts = np.linspace(
-                cfg_e["gain_start"], cfg_e["gain_stop"], int(cfg_e["expts_gain"]),
-            )
-            if converter is not None:
-                self.freq_pts = converter.gain_to_freq(self.gain_pts)
-            else:
-                self.freq_pts = None
+        self._build_gain_freq_pts()
+
+        # Wire up attributes expected by QubitSpecFluxSweep.acquire
+        self.sweep_pts = self.gain_pts
+        self._sweep_var = "flux_gain"
+        self._sweep_label = "Flux Gain"
+        self._log_sweep = False
 
         if go:
             self.run(progress=progress, display=display, analyze=True,
                      min_r2=min_r2, max_err=max_err)
-
-    def acquire(self, progress=True, display=False):
-        from pathlib import Path
-
-        data = {"time": []}
-        qubit_freq_list = []
-        kappa_list = []
-        fit_params_list = []
-        r2_list = []
-        timestamp_list = []
-        elapsed_list = []
-        t_acq_start = time.time()
-        csv_path = Path(self.fname).with_suffix(".csv")
-
-        # Initialize center frequency from param or None (first scan uses config default)
-        center_freq = self.cfg.expt.start_center_freq
-
-        max_retries = 3
-        first_data = None  # template for NaN-filling on failure
-
-        for i, g in enumerate(tqdm(self.gain_pts, disable=not progress)):
-            self.expt.cfg.expt["flux_gain"] = float(g)
-
-            # Use previous fit frequency to center the next scan
-            if center_freq is not None:
-                self.expt.cfg.expt["start"] = center_freq - self.expt.cfg.expt["span"] / 2
-
-            # Run inner QubitSpec with retry on QICK errors
-            data_new = None
-            for attempt in range(max_retries):
-                try:
-                    data_new = self.expt.acquire(progress=False)
-                    self.expt.analyze(data=data_new, verbose=False)
-                    if first_data is None:
-                        first_data = data_new
-                    break
-                except RuntimeError as e:
-                    if attempt < max_retries - 1:
-                        print(f"  Retry {attempt+1}/{max_retries} for gain={g:.4f}: {e}")
-                        time.sleep(1)
-                    else:
-                        print(f"  SKIP gain={g:.4f} after {max_retries} retries: {e}")
-                        # Create NaN-filled data matching first successful scan
-                        if first_data is not None:
-                            data_new = {}
-                            for k, v in first_data.items():
-                                if isinstance(v, np.ndarray):
-                                    data_new[k] = np.full_like(v, np.nan)
-                                else:
-                                    data_new[k] = v
-                            data_new["best_fit"] = [np.nan, np.nan, np.nan, np.nan]
-                        else:
-                            raise  # no template yet, can't continue
-
-            if display:
-                self.expt.display(data=data_new)
-
-            # Accumulate raw 2D data
-            for key in ("avgi", "avgq", "amps", "phases", "xpts"):
-                if key in data_new:
-                    if i == 0:
-                        data[key] = []
-                    data[key].append(data_new[key])
-            now = time.time()
-            data["time"].append(now)
-            timestamp_list.append(datetime.fromtimestamp(now).isoformat())
-            elapsed_list.append(now - t_acq_start)
-
-            # Extract fit results
-            best_fit = data_new.get("best_fit", [np.nan, np.nan, np.nan, np.nan])
-            qubit_freq_list.append(best_fit[2])
-            kappa_list.append(best_fit[3])
-            fit_params_list.append(list(best_fit))
-            r2_list.append(data_new.get("r2", np.nan))
-
-            # Update center frequency from fit for next scan
-            if self.expt.status:
-                center_freq = best_fit[2]
-
-            # Store analysis summaries in data for interim save
-            data["gain_pts"] = self.gain_pts
-            if self.freq_pts is not None:
-                data["freq_pts"] = self.freq_pts
-            data["qubit_freq_list"] = np.array(qubit_freq_list)
-            data["kappa_list"] = np.array(kappa_list)
-            data["fit_params_list"] = np.array(fit_params_list)
-            data["r2_list"] = np.array(r2_list)
-
-            if self.save_interim:
-                self.save_data(data=data)
-
-            # Save CSV incrementally
-            gains_so_far = self.gain_pts[:i + 1]
-            num_cols = [gains_so_far]
-            header_parts = ["timestamp", "gain"]
-            if self.freq_pts is not None:
-                num_cols.append(self.freq_pts[:i + 1])
-                header_parts.append("freq")
-            num_cols.extend([
-                data["qubit_freq_list"], data["kappa_list"],
-                np.array(elapsed_list),
-            ])
-            header_parts.extend(["qubit_freq", "kappa", "elapsed_s"])
-            num_cols = np.column_stack(num_cols)
-            header = ",".join(header_parts)
-            with open(csv_path, "w") as f_csv:
-                f_csv.write(header + "\n")
-                for row_idx in range(num_cols.shape[0]):
-                    ts = timestamp_list[row_idx]
-                    nums = ",".join(f"{v}" for v in num_cols[row_idx])
-                    f_csv.write(f"{ts},{nums}\n")
-
-        # Convert lists to arrays
-        for k, a in data.items():
-            if not isinstance(a, np.ndarray):
-                data[k] = np.array(a)
-
-        self.data = data
-        return data
 
     def analyze(self, data=None, fit_model='quadratic', Ec=None, **kwargs):
         if data is None:
@@ -716,7 +567,7 @@ class QubitSpecFastFlux(QickExperiment2DSimple):
             )
 
 
-class QubitSpecFluxSweep(QickExperiment2DSimple):
+class QubitSpecFluxSweep(QickFluxSweep):
     """
     QubitSpecFluxSweep: Sweep qubit spectroscopy across an arbitrary parameter.
 
@@ -931,6 +782,11 @@ class QubitSpecFluxSweep(QickExperiment2DSimple):
         for k, a in data.items():
             if not isinstance(a, np.ndarray):
                 data[k] = np.array(a)
+
+        # Alias so downstream code using gain_pts (e.g. QubitSpecFastFlux.display)
+        # still works when acquire was run through this method.
+        if "sweep_pts" in data and "gain_pts" not in data:
+            data["gain_pts"] = data["sweep_pts"]
 
         self.data = data
         return data

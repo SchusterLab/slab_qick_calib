@@ -9,6 +9,7 @@ from ...helpers import config
 from ...analysis import fitting as fitter
 from ...exp_handling.datamanagement import AttrDict
 from ..general.qick_experiment import QickExperiment, QickExperiment2DSimple
+from ..general.qick_flux_experiment import QickFluxSweep
 from ..general.qick_program import QickProgram
 
 FIT_FUNC = fitter.expfunc
@@ -582,7 +583,7 @@ class T1_2D(QickExperiment2DSimple):
         )
 
 
-class T1FastFlux(QickExperiment2DSimple):
+class T1FastFlux(QickFluxSweep):
     """
     T1FastFlux: Sweep T1 across flux gain values.
 
@@ -623,85 +624,49 @@ class T1FastFlux(QickExperiment2DSimple):
 
         super().__init__(cfg_dict=cfg_dict, prefix=prefix, qi=qi)
 
-        # Load flux model from config (prefers transmon, falls back to quadratic)
-        cfg_flux = getattr(getattr(getattr(getattr(self.cfg, "hw", None), "soc", None), "dacs", None), "flux", None)
-        cfg_qubit = getattr(getattr(self.cfg, "device", None), "qubit", None)
-
-        sweet_spot = 0.0
-        if cfg_qubit is not None and hasattr(cfg_qubit, "sweet_spot_ac"):
-            sweet_spot = cfg_qubit.sweet_spot_ac[qi]
-
-        # Determine sweep direction and gain range
+        sweet_spot, gain_stop = self._init_flux_sweep(qi, params)
         direction = params.get("direction", "pos")
-        sign = 1 if direction == "pos" else -1
-
-        converter = params.get("flux_converter", None)
-        if converter is None:
-            converter = fitter.flux_converter_from_config(cfg_flux, cfg_qubit, qi, direction)
         freq_span = params.get("freq_span", None)
-
-        # Convert freq_span to gain_stop using the flux model
-        if freq_span is not None and converter is not None and "gain_stop" not in params:
-            f_sweet = converter.gain_to_freq(sweet_spot)
-            f_target = f_sweet - freq_span  # frequency decreases away from sweet spot
-            gain_stop = float(converter.freq_to_gain(f_target))
-        elif "gain_stop" not in params:
-            gain_stop = sweet_spot + sign * 0.4
-        else:
-            gain_stop = params["gain_stop"]
 
         # start_t1: assumed T1 for the first gain point, sets initial span
         start_t1 = params.pop("start_t1", None)
 
-        # Define default parameters for the 2D sweep
         params_def = {
             "gain_start": sweet_spot,
             "gain_stop": gain_stop,
             "start": 0.05,
-            "expts":25,
+            "expts": 25,
             "expts_gain": 50,
             "freq_span": freq_span,
             "direction": direction,
             "lin_freq": True,
-            "t1_max": float("inf"),  # Upper bound on T1 when setting next span
+            "t1_max": float("inf"),
         }
 
         if start_t1 is not None:
             params_def["span"] = 4.1 * start_t1
         params = {**params_def, **params, "flux": True}
-        # Create inner T1 experiment (go=False) to inherit its config
-        self.expt = T1Experiment(cfg_dict, qi, go=False, params=params, check_params=False)
+
+        self.expt = self._inner_expt_class(cfg_dict, qi, go=False, params=params, check_params=False)
         params = {**self.expt.cfg.expt, **params}
         self.cfg.expt = {**params_def, **params}
         self.expt.cfg.expt = {**self.expt.cfg.expt, **params}
 
-        # Store references
         self._qi = qi
         self._cfg_dict = cfg_dict
-        self._flux_converter = converter
 
-        # Build gain_pts and freq_pts from config
-        cfg_e = self.cfg.expt
-
-        if cfg_e["lin_freq"] and converter is not None:
-            # Linearly spaced in frequency, invert flux model to get gains
-            freq_start = converter.gain_to_freq(cfg_e["gain_start"])
-            freq_stop = converter.gain_to_freq(cfg_e["gain_stop"])
-            self.freq_pts = np.linspace(float(freq_start), float(freq_stop), cfg_e["expts_gain"])
-            self.gain_pts = converter.freq_to_gain(self.freq_pts)
-        else:
-            # Linearly spaced in gain
-            self.gain_pts = np.linspace(cfg_e["gain_start"], cfg_e["gain_stop"], cfg_e["expts_gain"])
-            if converter is not None:
-                self.freq_pts = converter.gain_to_freq(self.gain_pts)
-            else:
-                self.freq_pts = None
+        self._build_gain_freq_pts()
 
         if go:
             self.acquire(progress=progress, display=display)
             self.display()
 
+    _inner_expt_class = T1Experiment
+
     def acquire(self, progress=True, display=True):
+        return self._t1_gain_acquire(progress=progress, display=display)
+
+    def _t1_gain_acquire(self, progress=True, display=True):
         from pathlib import Path
 
         data = {"time": []}
@@ -717,18 +682,14 @@ class T1FastFlux(QickExperiment2DSimple):
         t_acq_start = time.time()
         csv_path = Path(self.fname).with_suffix(".csv")
 
-        n_total = len(self.gain_pts)
         for i, g in enumerate(tqdm(self.gain_pts, disable=not progress)):
-            # Update inner experiment config for this gain point
             self.expt.cfg.expt["flux_gain"] = float(g)
 
-            # Run inner T1 scan and analyze
             data_new = self.expt.acquire(progress=False)
             self.expt.analyze(data=data_new, verbose=False, rescale=True)
             if display:
                 self.expt.display(data=data_new)
 
-            # Accumulate raw 2D data
             for key in ("avgi", "avgq", "amps", "phases", "xpts", "scale_data"):
                 if key in data_new:
                     if i == 0:
@@ -739,7 +700,6 @@ class T1FastFlux(QickExperiment2DSimple):
             timestamp_list.append(datetime.fromtimestamp(now).isoformat())
             elapsed_list.append(now - t_acq_start)
 
-            # Extract fit results
             best_fit = data_new.get("best_fit", [np.nan, np.nan, np.nan])
             t1_val = best_fit[2]
             t1_list.append(t1_val)
@@ -756,13 +716,10 @@ class T1FastFlux(QickExperiment2DSimple):
                 s_offset_list.append(np.nan)
                 s_amp_list.append(np.nan)
 
-            # Adjust span for next scan based on extracted T1
             if np.isfinite(t1_val) and t1_val > 0:
-                self.expt.cfg.expt["span"] = 3.7 * min(
-                    t1_val, self.cfg.expt.t1_max
-                )
+                new_span = 3.7 * min(t1_val, self.cfg.expt.t1_max)
+                self.expt.cfg.expt["span"] = max(0.1, new_span)
 
-            # Store analysis summaries in data for interim save
             data["gain_pts"] = self.gain_pts
             if self.freq_pts is not None:
                 data["freq_pts"] = self.freq_pts
@@ -777,7 +734,6 @@ class T1FastFlux(QickExperiment2DSimple):
             if self.save_interim:
                 self.save_data(data=data)
 
-            # Save CSV incrementally (with timestamp and elapsed time)
             gains_so_far = self.gain_pts[: i + 1]
             if self.freq_pts is not None:
                 num_cols = np.column_stack((gains_so_far, self.freq_pts[: i + 1],
@@ -798,7 +754,6 @@ class T1FastFlux(QickExperiment2DSimple):
                     nums = ",".join(f"{v}" for v in num_cols[row_idx])
                     f_csv.write(f"{ts},{nums}\n")
 
-        # Convert lists to arrays
         for k, a in data.items():
             data[k] = np.array(a)
         self.data = data

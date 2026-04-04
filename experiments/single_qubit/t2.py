@@ -23,6 +23,7 @@ from tqdm import tqdm
 
 from ...analysis import fitting as fitter
 from ..general.qick_experiment import QickExperiment, QickExperiment2DSimple
+from ..general.qick_flux_experiment import QickFluxSweep
 from ..general.qick_program import QickProgram
 
 from ...exp_handling.datamanagement import AttrDict
@@ -746,7 +747,7 @@ class T2Experiment(QickExperiment):
         )
 
 
-class T2FastFlux(QickExperiment2DSimple):
+class T2FastFlux(QickFluxSweep):
     """
     T2FastFlux: Sweep T2 across flux gain values.
 
@@ -788,37 +789,13 @@ class T2FastFlux(QickExperiment2DSimple):
 
         super().__init__(cfg_dict=cfg_dict, prefix=prefix, qi=qi)
 
-        # Load flux model from config (prefers transmon, falls back to quadratic)
-        cfg_flux = getattr(getattr(getattr(getattr(self.cfg, "hw", None), "soc", None), "dacs", None), "flux", None)
-        cfg_qubit = getattr(getattr(self.cfg, "device", None), "qubit", None)
-
-        sweet_spot = 0.0
-        if cfg_qubit is not None and hasattr(cfg_qubit, "sweet_spot_ac"):
-            sweet_spot = cfg_qubit.sweet_spot_ac[qi]
-
-        # Determine sweep direction and gain range
+        sweet_spot, gain_stop = self._init_flux_sweep(qi, params)
         direction = params.get("direction", "pos")
-        sign = 1 if direction == "pos" else -1
-
-        converter = params.get("flux_converter", None)
-        if converter is None:
-            converter = fitter.flux_converter_from_config(cfg_flux, cfg_qubit, qi, direction)
         freq_span = params.get("freq_span", None)
-
-        # Convert freq_span to gain_stop using the flux model
-        if freq_span is not None and converter is not None and "gain_stop" not in params:
-            f_sweet = converter.gain_to_freq(sweet_spot)
-            f_target = f_sweet - freq_span  # frequency decreases away from sweet spot
-            gain_stop = float(converter.freq_to_gain(f_target))
-        elif "gain_stop" not in params:
-            gain_stop = sweet_spot + sign * 0.4
-        else:
-            gain_stop = params["gain_stop"]
 
         # start_t2: assumed T2 for the first gain point, sets initial span
         start_t2 = params.pop("start_t2", None)
 
-        # Define default parameters for the 2D sweep
         params_def = {
             "gain_start": sweet_spot,
             "gain_stop": gain_stop,
@@ -828,38 +805,21 @@ class T2FastFlux(QickExperiment2DSimple):
             "freq_span": freq_span,
             "direction": direction,
             "lin_freq": True,
-            "t2_max": float("inf"),  # Upper bound on T2 when setting next span
+            "t2_max": float("inf"),
         }
 
         if start_t2 is not None:
             params_def["span"] = 4.1 * start_t2
         params = {**params_def, **params}
-        # Create inner T2 experiment (go=False) to inherit its config
+
         self.expt = T2Experiment(cfg_dict, qi, go=False, params=params, check_params=False)
         params = {**self.expt.cfg.expt, **params, "flux": True}
         self.cfg.expt = {**params_def, **params}
 
-        # Store references
         self._qi = qi
         self._cfg_dict = cfg_dict
-        self._flux_converter = converter
 
-        # Build gain_pts and freq_pts from config
-        cfg_e = self.cfg.expt
-
-        if cfg_e["lin_freq"] and converter is not None:
-            # Linearly spaced in frequency, invert flux model to get gains
-            freq_start = converter.gain_to_freq(cfg_e["gain_start"])
-            freq_stop = converter.gain_to_freq(cfg_e["gain_stop"])
-            self.freq_pts = np.linspace(float(freq_start), float(freq_stop), cfg_e["expts_gain"])
-            self.gain_pts = converter.freq_to_gain(self.freq_pts)
-        else:
-            # Linearly spaced in gain
-            self.gain_pts = np.linspace(cfg_e["gain_start"], cfg_e["gain_stop"], cfg_e["expts_gain"])
-            if converter is not None:
-                self.freq_pts = converter.gain_to_freq(self.gain_pts)
-            else:
-                self.freq_pts = None
+        self._build_gain_freq_pts()
 
         if go:
             self.acquire(progress=progress, display=display)
@@ -939,7 +899,6 @@ class T2FastFlux(QickExperiment2DSimple):
         ax.plot(gain_pts, t2_list, ".-")
         ax.set_xlabel("Flux Gain")
         ax.set_ylabel("$T_2$ ($\mu$s)")
-        ax.set_title(f"$T_2$ vs Flux Gain Q{self._qi}")
         self.save_fig(fig, suffix="_t2_vs_gain")
 
         if "freq_pts" in data:
@@ -949,7 +908,6 @@ class T2FastFlux(QickExperiment2DSimple):
             ax.plot(freq_pts, t2_list, ".-")
             ax.set_xlabel("Frequency (MHz)")
             ax.set_ylabel("$T_2$ ($\mu$s)")
-            ax.set_title(f"$T_2$ vs Frequency Q{self._qi}")
             self.save_fig(fig, suffix="_t2_vs_freq")
 
             fig, axes = plt.subplots(2, 2, figsize=(10, 7), sharex=True)
