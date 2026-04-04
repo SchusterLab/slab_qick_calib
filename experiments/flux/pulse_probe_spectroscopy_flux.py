@@ -291,282 +291,6 @@ class QubitSpecFlux(QickExperiment2DSimple):
         )
 
 
-class QubitSpecFastFlux(QubitSpecFluxSweep):
-    """
-    QubitSpecFastFlux: Sweep qubit spectroscopy across fast flux gain values.
-
-    Runs a QubitSpec at each flux gain point to measure qubit frequency vs flux gain.
-    Fits a quadratic to the resulting freq(gain) curve. Saves a single HDF5 file
-    with interim saves after each gain point, plus an incremental CSV.
-
-    Sweep parameters (passed via params dict):
-        gain_start: Starting flux gain value (default: sweet_spot_ac)
-        gain_stop: Ending flux gain value (default: 0.4)
-        expts_gain: Number of gain points in the sweep
-        update: Whether to update config with f_ge and kappa after each point
-        lin_freq: If True and a flux model is available, space points linearly in
-            frequency instead of linearly in gain.
-        flux_converter: Optional FluxConverter instance. If not provided, loads from config
-            (prefers transmon model, falls back to quadratic).
-        freq_span: Frequency span in MHz. When provided with a flux model, converts
-            to a gain range. Overrides gain_stop.
-        direction: 'pos' or 'neg' — sweep direction from sweet spot (default: 'pos').
-            Used for picking the correct quadratic root and setting gain_stop from freq_span.
-        fit_model: 'quadratic' (default) or 'transmon'. When 'transmon', additionally
-            fits the transmon SQUID model f(g) = (f_max+E_C)*(cos^2(phi)+d^2*sin^2(phi))^0.25 - E_C
-            with E_C fixed from config. The quadratic fit is always performed.
-    """
-
-    def __init__(
-        self,
-        cfg_dict,
-        qi=0,
-        go=True,
-        params={},
-        prefix="",
-        progress=True,
-        style="fine",
-        display=True,
-        min_r2=None,
-        max_err=None,
-    ):
-        prefix = prefix or f"qspec_fastflux_qubit{qi}"
-        # Call QickFluxSweep.__init__ directly to skip QubitSpecFluxSweep's param
-        # setup; we build our own params and wire up the FluxSweep attributes below.
-        QickFluxSweep.__init__(self, cfg_dict=cfg_dict, prefix=prefix, progress=progress, qi=qi)
-        self._cfg_dict = cfg_dict
-        self._qi = qi
-        self._style = style
-
-        sweet_spot, gain_stop = self._init_flux_sweep(qi, params)
-        direction = params.get("direction", "pos")
-        freq_span = params.get("freq_span", None)
-        converter = self._flux_converter
-
-        params_def = {
-            "gain_start": sweet_spot if converter is not None else -0.4,
-            "gain_stop": gain_stop,
-            "expts_gain": 50,
-            "update": True,
-            "start_center_freq": None,
-            "lin_freq": False,
-            "freq_span": freq_span,
-            "direction": direction,
-            "fit_model": "quadratic",
-        }
-
-        params = {**params_def, **params, "flux": True}
-
-        self.expt = QubitSpec(cfg_dict, qi, go=False, params=params, style=style, check_params=False)
-        params = {**self.expt.cfg.expt, **params}
-        self.cfg.expt = params
-
-        self._build_gain_freq_pts()
-
-        # Wire up attributes expected by QubitSpecFluxSweep.acquire
-        self.sweep_pts = self.gain_pts
-        self._sweep_var = "flux_gain"
-        self._sweep_label = "Flux Gain"
-        self._log_sweep = False
-
-        if go:
-            self.run(progress=progress, display=display, analyze=True,
-                     min_r2=min_r2, max_err=max_err)
-
-    def analyze(self, data=None, fit_model='quadratic', Ec=None, **kwargs):
-        if data is None:
-            data = self.data
-
-        gain_pts = data["gain_pts"]
-        qubit_freq_list = data["qubit_freq_list"]
-
-        # Fit quadratic: freq = a*g^2 + b*g + c (always performed)
-        mask = ~np.isnan(qubit_freq_list)
-        if np.sum(mask) >= 3:
-            coeffs = np.polyfit(gain_pts[mask], qubit_freq_list[mask], 2)
-            data["freq_coeffs"] = tuple(coeffs)
-            data["freq_fit"] = np.polyval(coeffs, gain_pts)
-            a, b, c = coeffs
-            data["gain_sweet_spot"] = -b / (2 * a)
-            data["f_ge_max"] = c - b**2 / (4 * a)
-        else:
-            data["freq_coeffs"] = None
-            data["freq_fit"] = None
-            data["gain_sweet_spot"] = np.nan
-            data["f_ge_max"] = np.nan
-
-        # Optional transmon SQUID model fit
-
-        data["transmon_params"] = np.array([])
-        data["transmon_fit"] = np.array([])
-        if fit_model == "transmon" and np.sum(mask) >= 5:
-            qi = self.cfg.expt["qubit"][0]
-            cfg_qubit = self.cfg.device.qubit
-            if Ec is None:
-                E_C = 200.0
-                try:
-                    model_path = self.config_file[0:-4] + "_model.yml"
-                    model_cfg = config.load(model_path)
-                    if hasattr(model_cfg, "Ec") and model_cfg.Ec[qi] is not None:
-                        E_C = model_cfg.Ec[qi] * 1000  # GHz -> MHz
-                except (FileNotFoundError, OSError):
-                    pass
-            else:
-                E_C = float(Ec)
-            pOpt, pCov, _ = fitter.fit_transmon_flux(
-                gain_pts[mask], qubit_freq_list[mask], E_C,
-            )
-            if np.isfinite(pCov).all():
-                data["transmon_params"] = np.array(pOpt)
-                data["transmon_fit"] = fitter.transmon_flux(gain_pts, *pOpt)
-                # Use transmon sweet spot and f_max if fit succeeded
-                data["gain_sweet_spot"] = pOpt[3]  # g_offset
-                data["f_ge_max"] = pOpt[0]  # f_max
-
-        return data
-
-    def display(self, data=None, **kwargs):
-        import matplotlib.pyplot as plt
-
-        if data is None:
-            data = self.data
-
-        gain_pts = data["gain_pts"]
-        qubit_freq_list = data["qubit_freq_list"]
-        qi = self.cfg.expt["qubit"][0]
-
-        # --- Freq vs gain plot ---
-        fig, ax = plt.subplots()
-        ax.plot(gain_pts, qubit_freq_list, "o", label="data")
-        if data.get("freq_fit") is not None:
-            ax.plot(gain_pts, data["freq_fit"], "-", label="quadratic fit")
-        if len(data.get("transmon_fit", [])) > 0:
-            gain_dense = np.linspace(gain_pts.min(), gain_pts.max(), 200)
-            ax.plot(gain_dense, fitter.transmon_flux(gain_dense, *data["transmon_params"]),
-                    "--", label="transmon fit")
-        if data.get("freq_fit") is not None or len(data.get("transmon_fit", [])) > 0:
-            ax.legend()
-        ax.set_xlabel("Flux Gain")
-        ax.set_ylabel("Qubit Frequency (MHz)")
-        ax.set_title(f"Qubit Spectroscopy vs Flux Gain Q{qi}")
-        self.save_fig(fig, suffix="_qspec_vs_gain")
-
-        # --- Waterfall plot of all 1D spectra (skip if too many traces) ---
-        amps_all = data.get("amps")
-        xpts_all = data.get("xpts")
-        if amps_all is not None and xpts_all is not None and len(gain_pts) <= 300:
-            fig, ax = plt.subplots(figsize=(10, 8))
-            # Compute vertical offset from median signal range
-            ranges = []
-            for sig in amps_all:
-                s = np.asarray(sig)
-                if len(s) > 2:
-                    ranges.append(np.ptp(s[1:-1]))
-            offset_scale = np.median(ranges) * 0.8 if ranges else 1
-
-            for i, (xpts, signal) in enumerate(zip(xpts_all, amps_all)):
-                xpts = np.asarray(xpts)
-                signal = np.asarray(signal)
-                ax.plot(xpts[1:-1], signal[1:-1] + i * offset_scale,
-                        label=f"gain={gain_pts[i]:.3f}")
-
-            ax.set_xlabel("Qubit Frequency (MHz)")
-            ax.set_ylabel("Signal (offset)")
-            ax.set_title(f"Qubit Spec vs Flux Gain Q{qi} (waterfall)")
-            if len(gain_pts) <= 20:
-                ax.legend(bbox_to_anchor=(1.05, 1), loc="upper left", fontsize=7)
-            self.save_fig(fig, suffix="_waterfall")
-
-            # --- Color plot of amps ---
-            # Each gain point may sweep a different frequency range, so
-            # interpolate all spectra onto a common frequency grid.
-            from scipy.interpolate import interp1d
-
-            avgi_all = data.get("avgi")
-            freq_trimmed = [np.asarray(x) for x in xpts_all]
-            avgi_trimmed = [np.asarray(a) for a in avgi_all]
-            f_min = min(f.min() for f in freq_trimmed)
-            f_max = max(f.max() for f in freq_trimmed)
-            n_common = len(freq_trimmed[0])
-            common_freq = np.linspace(f_min, f_max, n_common)
-
-            amps_interp = np.full((len(gain_pts), n_common), np.nan)
-            for i, (f, a) in enumerate(zip(freq_trimmed, avgi_trimmed)):
-                interp_fn = interp1d(f, a, kind="linear",
-                                     bounds_error=False, fill_value=np.nan)
-                mask = (common_freq >= f.min()) & (common_freq <= f.max())
-                amps_interp[i, mask] = interp_fn(common_freq[mask])
-
-            n_gain = len(gain_pts)
-            fig_w = max(8, n_gain / 40)
-            fig, ax = plt.subplots(figsize=(fig_w, 6))
-            pcm = ax.pcolormesh(gain_pts, common_freq, amps_interp.T,
-                                cmap="viridis", shading="nearest",
-                                rasterized=True)
-            plt.colorbar(pcm, ax=ax, label="I (ADC Units)")
-            ax.set_xlabel("Flux Gain")
-            ax.set_ylabel("Qubit Frequency (MHz)")
-            self.save_fig(fig, suffix="_colorplot")
-
-            # --- Color plot of Q channel ---
-            avgq_all = data.get("avgq")
-            if avgq_all is not None:
-                avgq_trimmed = [np.asarray(a) for a in avgq_all]
-                avgq_interp = np.full((len(gain_pts), n_common), np.nan)
-                for i, (f, a) in enumerate(zip(freq_trimmed, avgq_trimmed)):
-                    interp_fn = interp1d(f, a, kind="linear",
-                                         bounds_error=False, fill_value=np.nan)
-                    mask = (common_freq >= f.min()) & (common_freq <= f.max())
-                    avgq_interp[i, mask] = interp_fn(common_freq[mask])
-
-                fig, ax = plt.subplots(figsize=(fig_w, 6))
-                pcm = ax.pcolormesh(gain_pts, common_freq, avgq_interp.T,
-                                    cmap="viridis", shading="nearest",
-                                    rasterized=True)
-                plt.colorbar(pcm, ax=ax, label="Q (ADC Units)")
-                ax.set_xlabel("Flux Gain")
-                ax.set_ylabel("Qubit Frequency (MHz)")
-                self.save_fig(fig, suffix="_colorplot_q")
-
-    def update(self, verbose=True):
-        qi = self.cfg.expt["qubit"][0]
-        data = self.data
-        if data.get("freq_coeffs") is not None:
-            config.update_qubit(
-                self.config_file, "f_ge_max", data["f_ge_max"], qi, verbose=verbose,
-            )
-            config.update_qubit(
-                self.config_file, "sweet_spot_ac", data["gain_sweet_spot"], qi, verbose=verbose,
-            )
-            a, b, c = data["freq_coeffs"]
-            config.update_config(
-                self.config_file, "hw.soc.dacs.flux", "quad_a", a, qi, verbose=verbose,
-            )
-            config.update_config(
-                self.config_file, "hw.soc.dacs.flux", "quad_b", b, qi, verbose=verbose,
-            )
-            config.update_config(
-                self.config_file, "hw.soc.dacs.flux", "quad_c", c, qi, verbose=verbose,
-            )
-        if len(data.get("transmon_params", [])) > 0:
-            f_max, E_C, g_period, g_offset, d = data["transmon_params"]
-            config.update_config(
-                self.config_file, "hw.soc.dacs.flux", "transmon_f_max", f_max, qi, verbose=verbose,
-            )
-            config.update_config(
-                self.config_file, "hw.soc.dacs.flux", "transmon_E_C", E_C, qi, verbose=verbose,
-            )
-            config.update_config(
-                self.config_file, "hw.soc.dacs.flux", "transmon_g_period", g_period, qi, verbose=verbose,
-            )
-            config.update_config(
-                self.config_file, "hw.soc.dacs.flux", "transmon_g_offset", g_offset, qi, verbose=verbose,
-            )
-            config.update_config(
-                self.config_file, "hw.soc.dacs.flux", "transmon_d", d, qi, verbose=verbose,
-            )
-
-
 class QubitSpecFluxSweep(QickFluxSweep):
     """
     QubitSpecFluxSweep: Sweep qubit spectroscopy across an arbitrary parameter.
@@ -1085,3 +809,279 @@ class QubitSpecFluxSweep(QickFluxSweep):
                 if self._log_sweep:
                     ax.set_xscale("log")
                 self.save_fig(fig, suffix="_colorplot_q")
+class QubitSpecFastFlux(QubitSpecFluxSweep):
+    """
+    QubitSpecFastFlux: Sweep qubit spectroscopy across fast flux gain values.
+
+    Runs a QubitSpec at each flux gain point to measure qubit frequency vs flux gain.
+    Fits a quadratic to the resulting freq(gain) curve. Saves a single HDF5 file
+    with interim saves after each gain point, plus an incremental CSV.
+
+    Sweep parameters (passed via params dict):
+        gain_start: Starting flux gain value (default: sweet_spot_ac)
+        gain_stop: Ending flux gain value (default: 0.4)
+        expts_gain: Number of gain points in the sweep
+        update: Whether to update config with f_ge and kappa after each point
+        lin_freq: If True and a flux model is available, space points linearly in
+            frequency instead of linearly in gain.
+        flux_converter: Optional FluxConverter instance. If not provided, loads from config
+            (prefers transmon model, falls back to quadratic).
+        freq_span: Frequency span in MHz. When provided with a flux model, converts
+            to a gain range. Overrides gain_stop.
+        direction: 'pos' or 'neg' — sweep direction from sweet spot (default: 'pos').
+            Used for picking the correct quadratic root and setting gain_stop from freq_span.
+        fit_model: 'quadratic' (default) or 'transmon'. When 'transmon', additionally
+            fits the transmon SQUID model f(g) = (f_max+E_C)*(cos^2(phi)+d^2*sin^2(phi))^0.25 - E_C
+            with E_C fixed from config. The quadratic fit is always performed.
+    """
+
+    def __init__(
+        self,
+        cfg_dict,
+        qi=0,
+        go=True,
+        params={},
+        prefix="",
+        progress=True,
+        style="fine",
+        display=True,
+        min_r2=None,
+        max_err=None,
+    ):
+        prefix = prefix or f"qspec_fastflux_qubit{qi}"
+        # Call QickFluxSweep.__init__ directly to skip QubitSpecFluxSweep's param
+        # setup; we build our own params and wire up the FluxSweep attributes below.
+        QickFluxSweep.__init__(self, cfg_dict=cfg_dict, prefix=prefix, progress=progress, qi=qi)
+        self._cfg_dict = cfg_dict
+        self._qi = qi
+        self._style = style
+
+        sweet_spot, gain_stop = self._init_flux_sweep(qi, params)
+        direction = params.get("direction", "pos")
+        freq_span = params.get("freq_span", None)
+        converter = self._flux_converter
+
+        params_def = {
+            "gain_start": sweet_spot if converter is not None else -0.4,
+            "gain_stop": gain_stop,
+            "expts_gain": 50,
+            "update": True,
+            "start_center_freq": None,
+            "lin_freq": False,
+            "freq_span": freq_span,
+            "direction": direction,
+            "fit_model": "quadratic",
+        }
+
+        params = {**params_def, **params, "flux": True}
+
+        self.expt = QubitSpec(cfg_dict, qi, go=False, params=params, style=style, check_params=False)
+        params = {**self.expt.cfg.expt, **params}
+        self.cfg.expt = params
+
+        self._build_gain_freq_pts()
+
+        # Wire up attributes expected by QubitSpecFluxSweep.acquire
+        self.sweep_pts = self.gain_pts
+        self._sweep_var = "flux_gain"
+        self._sweep_label = "Flux Gain"
+        self._log_sweep = False
+
+        if go:
+            self.run(progress=progress, display=display, analyze=True,
+                     min_r2=min_r2, max_err=max_err)
+
+    def analyze(self, data=None, fit_model='quadratic', Ec=None, **kwargs):
+        if data is None:
+            data = self.data
+
+        gain_pts = data["gain_pts"]
+        qubit_freq_list = data["qubit_freq_list"]
+
+        # Fit quadratic: freq = a*g^2 + b*g + c (always performed)
+        mask = ~np.isnan(qubit_freq_list)
+        if np.sum(mask) >= 3:
+            coeffs = np.polyfit(gain_pts[mask], qubit_freq_list[mask], 2)
+            data["freq_coeffs"] = tuple(coeffs)
+            data["freq_fit"] = np.polyval(coeffs, gain_pts)
+            a, b, c = coeffs
+            data["gain_sweet_spot"] = -b / (2 * a)
+            data["f_ge_max"] = c - b**2 / (4 * a)
+        else:
+            data["freq_coeffs"] = None
+            data["freq_fit"] = None
+            data["gain_sweet_spot"] = np.nan
+            data["f_ge_max"] = np.nan
+
+        # Optional transmon SQUID model fit
+
+        data["transmon_params"] = np.array([])
+        data["transmon_fit"] = np.array([])
+        if fit_model == "transmon" and np.sum(mask) >= 5:
+            qi = self.cfg.expt["qubit"][0]
+            cfg_qubit = self.cfg.device.qubit
+            if Ec is None:
+                E_C = 200.0
+                try:
+                    model_path = self.config_file[0:-4] + "_model.yml"
+                    model_cfg = config.load(model_path)
+                    if hasattr(model_cfg, "Ec") and model_cfg.Ec[qi] is not None:
+                        E_C = model_cfg.Ec[qi] * 1000  # GHz -> MHz
+                except (FileNotFoundError, OSError):
+                    pass
+            else:
+                E_C = float(Ec)
+            pOpt, pCov, _ = fitter.fit_transmon_flux(
+                gain_pts[mask], qubit_freq_list[mask], E_C,
+            )
+            if np.isfinite(pCov).all():
+                data["transmon_params"] = np.array(pOpt)
+                data["transmon_fit"] = fitter.transmon_flux(gain_pts, *pOpt)
+                # Use transmon sweet spot and f_max if fit succeeded
+                data["gain_sweet_spot"] = pOpt[3]  # g_offset
+                data["f_ge_max"] = pOpt[0]  # f_max
+
+        return data
+
+    def display(self, data=None, **kwargs):
+        import matplotlib.pyplot as plt
+
+        if data is None:
+            data = self.data
+
+        gain_pts = data["gain_pts"]
+        qubit_freq_list = data["qubit_freq_list"]
+        qi = self.cfg.expt["qubit"][0]
+
+        # --- Freq vs gain plot ---
+        fig, ax = plt.subplots()
+        ax.plot(gain_pts, qubit_freq_list, "o", label="data")
+        if data.get("freq_fit") is not None:
+            ax.plot(gain_pts, data["freq_fit"], "-", label="quadratic fit")
+        if len(data.get("transmon_fit", [])) > 0:
+            gain_dense = np.linspace(gain_pts.min(), gain_pts.max(), 200)
+            ax.plot(gain_dense, fitter.transmon_flux(gain_dense, *data["transmon_params"]),
+                    "--", label="transmon fit")
+        if data.get("freq_fit") is not None or len(data.get("transmon_fit", [])) > 0:
+            ax.legend()
+        ax.set_xlabel("Flux Gain")
+        ax.set_ylabel("Qubit Frequency (MHz)")
+        ax.set_title(f"Qubit Spectroscopy vs Flux Gain Q{qi}")
+        self.save_fig(fig, suffix="_qspec_vs_gain")
+
+        # --- Waterfall plot of all 1D spectra (skip if too many traces) ---
+        amps_all = data.get("amps")
+        xpts_all = data.get("xpts")
+        if amps_all is not None and xpts_all is not None and len(gain_pts) <= 300:
+            fig, ax = plt.subplots(figsize=(10, 8))
+            # Compute vertical offset from median signal range
+            ranges = []
+            for sig in amps_all:
+                s = np.asarray(sig)
+                if len(s) > 2:
+                    ranges.append(np.ptp(s[1:-1]))
+            offset_scale = np.median(ranges) * 0.8 if ranges else 1
+
+            for i, (xpts, signal) in enumerate(zip(xpts_all, amps_all)):
+                xpts = np.asarray(xpts)
+                signal = np.asarray(signal)
+                ax.plot(xpts[1:-1], signal[1:-1] + i * offset_scale,
+                        label=f"gain={gain_pts[i]:.3f}")
+
+            ax.set_xlabel("Qubit Frequency (MHz)")
+            ax.set_ylabel("Signal (offset)")
+            ax.set_title(f"Qubit Spec vs Flux Gain Q{qi} (waterfall)")
+            if len(gain_pts) <= 20:
+                ax.legend(bbox_to_anchor=(1.05, 1), loc="upper left", fontsize=7)
+            self.save_fig(fig, suffix="_waterfall")
+
+            # --- Color plot of amps ---
+            # Each gain point may sweep a different frequency range, so
+            # interpolate all spectra onto a common frequency grid.
+            from scipy.interpolate import interp1d
+
+            avgi_all = data.get("avgi")
+            freq_trimmed = [np.asarray(x) for x in xpts_all]
+            avgi_trimmed = [np.asarray(a) for a in avgi_all]
+            f_min = min(f.min() for f in freq_trimmed)
+            f_max = max(f.max() for f in freq_trimmed)
+            n_common = len(freq_trimmed[0])
+            common_freq = np.linspace(f_min, f_max, n_common)
+
+            amps_interp = np.full((len(gain_pts), n_common), np.nan)
+            for i, (f, a) in enumerate(zip(freq_trimmed, avgi_trimmed)):
+                interp_fn = interp1d(f, a, kind="linear",
+                                     bounds_error=False, fill_value=np.nan)
+                mask = (common_freq >= f.min()) & (common_freq <= f.max())
+                amps_interp[i, mask] = interp_fn(common_freq[mask])
+
+            n_gain = len(gain_pts)
+            fig_w = max(8, n_gain / 40)
+            fig, ax = plt.subplots(figsize=(fig_w, 6))
+            pcm = ax.pcolormesh(gain_pts, common_freq, amps_interp.T,
+                                cmap="viridis", shading="nearest",
+                                rasterized=True)
+            plt.colorbar(pcm, ax=ax, label="I (ADC Units)")
+            ax.set_xlabel("Flux Gain")
+            ax.set_ylabel("Qubit Frequency (MHz)")
+            self.save_fig(fig, suffix="_colorplot")
+
+            # --- Color plot of Q channel ---
+            avgq_all = data.get("avgq")
+            if avgq_all is not None:
+                avgq_trimmed = [np.asarray(a) for a in avgq_all]
+                avgq_interp = np.full((len(gain_pts), n_common), np.nan)
+                for i, (f, a) in enumerate(zip(freq_trimmed, avgq_trimmed)):
+                    interp_fn = interp1d(f, a, kind="linear",
+                                         bounds_error=False, fill_value=np.nan)
+                    mask = (common_freq >= f.min()) & (common_freq <= f.max())
+                    avgq_interp[i, mask] = interp_fn(common_freq[mask])
+
+                fig, ax = plt.subplots(figsize=(fig_w, 6))
+                pcm = ax.pcolormesh(gain_pts, common_freq, avgq_interp.T,
+                                    cmap="viridis", shading="nearest",
+                                    rasterized=True)
+                plt.colorbar(pcm, ax=ax, label="Q (ADC Units)")
+                ax.set_xlabel("Flux Gain")
+                ax.set_ylabel("Qubit Frequency (MHz)")
+                self.save_fig(fig, suffix="_colorplot_q")
+
+    def update(self, verbose=True):
+        qi = self.cfg.expt["qubit"][0]
+        data = self.data
+        if data.get("freq_coeffs") is not None:
+            config.update_qubit(
+                self.config_file, "f_ge_max", data["f_ge_max"], qi, verbose=verbose,
+            )
+            config.update_qubit(
+                self.config_file, "sweet_spot_ac", data["gain_sweet_spot"], qi, verbose=verbose,
+            )
+            a, b, c = data["freq_coeffs"]
+            config.update_config(
+                self.config_file, "hw.soc.dacs.flux", "quad_a", a, qi, verbose=verbose,
+            )
+            config.update_config(
+                self.config_file, "hw.soc.dacs.flux", "quad_b", b, qi, verbose=verbose,
+            )
+            config.update_config(
+                self.config_file, "hw.soc.dacs.flux", "quad_c", c, qi, verbose=verbose,
+            )
+        if len(data.get("transmon_params", [])) > 0:
+            f_max, E_C, g_period, g_offset, d = data["transmon_params"]
+            config.update_config(
+                self.config_file, "hw.soc.dacs.flux", "transmon_f_max", f_max, qi, verbose=verbose,
+            )
+            config.update_config(
+                self.config_file, "hw.soc.dacs.flux", "transmon_E_C", E_C, qi, verbose=verbose,
+            )
+            config.update_config(
+                self.config_file, "hw.soc.dacs.flux", "transmon_g_period", g_period, qi, verbose=verbose,
+            )
+            config.update_config(
+                self.config_file, "hw.soc.dacs.flux", "transmon_g_offset", g_offset, qi, verbose=verbose,
+            )
+            config.update_config(
+                self.config_file, "hw.soc.dacs.flux", "transmon_d", d, qi, verbose=verbose,
+            )
+
+
