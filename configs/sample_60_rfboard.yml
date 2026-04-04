@@ -57,11 +57,11 @@ hw:
   soc:
     adcs:
       readout:
-        attn: [20, 0, 0, 0]
+        attn: [30, 0, 0, 0]
         ch: [10, 10, 10, 10]
         filter_bw: [100, 100, 200, 100]
         filter_fc: [3956.6412, 7124.9177, 7690.6064, 8250.3706]
-        filter_type: [bandpass, bandpass, bypass, bypass]
+        filter_type: [bypass, bandpass, bypass, bypass]
         type: [dyn, dyn, dyn, dyn]
     dacs:
       qubit:
