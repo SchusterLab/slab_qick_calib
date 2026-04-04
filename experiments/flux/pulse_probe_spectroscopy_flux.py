@@ -733,82 +733,87 @@ class QubitSpecFluxSweep(QickFluxSweep):
             ax.set_xscale("log")
         self.save_fig(fig, suffix="_qspec_vs_sweep")
 
-        # --- Waterfall plot of all 1D spectra ---
+        # --- 2D spectral data (waterfall + color plots) ---
         amps_all = data.get("amps")
         xpts_all = data.get("xpts")
-        if amps_all is not None and xpts_all is not None and len(sweep_pts) <= 300:
-            fig, ax = plt.subplots(figsize=(10, 8))
-            ranges = []
-            for sig in amps_all:
-                s = np.asarray(sig)
-                if len(s) > 2:
-                    ranges.append(np.ptp(s[1:-1]))
-            offset_scale = np.median(ranges) * 0.8 if ranges else 1
-
-            for i, (xpts, signal) in enumerate(zip(xpts_all, amps_all)):
-                xpts = np.asarray(xpts)
-                signal = np.asarray(signal)
-                ax.plot(xpts[1:-1], signal[1:-1] + i * offset_scale,
-                        label=f"{self._sweep_var}={sweep_pts[i]:.3f}")
-
-            ax.set_xlabel("Qubit Frequency (MHz)")
-            ax.set_ylabel("Signal (offset)")
-            if len(sweep_pts) <= 20:
-                ax.legend(bbox_to_anchor=(1.05, 1), loc="upper left", fontsize=7)
-            self.save_fig(fig, suffix="_waterfall")
-
-            # --- Color plot of I channel ---
+        if amps_all is not None and xpts_all is not None:
             from scipy.interpolate import interp1d
 
+            # Waterfall: skip if too many traces (visually unusable)
+            if len(sweep_pts) <= 300:
+                fig, ax = plt.subplots(figsize=(10, 8))
+                ranges = []
+                for sig in amps_all:
+                    s = np.asarray(sig)
+                    if len(s) > 2:
+                        ranges.append(np.ptp(s[1:-1]))
+                offset_scale = np.median(ranges) * 0.8 if ranges else 1
+
+                for i, (xpts, signal) in enumerate(zip(xpts_all, amps_all)):
+                    xpts = np.asarray(xpts)
+                    signal = np.asarray(signal)
+                    ax.plot(xpts[1:-1], signal[1:-1] + i * offset_scale,
+                            label=f"{self._sweep_var}={sweep_pts[i]:.3f}")
+
+                ax.set_xlabel("Qubit Frequency (MHz)")
+                ax.set_ylabel("Signal (offset)")
+                if len(sweep_pts) <= 20:
+                    ax.legend(bbox_to_anchor=(1.05, 1), loc="upper left", fontsize=7)
+                self.save_fig(fig, suffix="_waterfall")
+
+            # --- Color plot of I channel ---
+            # Each sweep point may cover a different frequency range, so
+            # interpolate all spectra onto a common frequency grid.
             avgi_all = data.get("avgi")
             freq_trimmed = [np.asarray(x) for x in xpts_all]
-            avgi_trimmed = [np.asarray(a) for a in avgi_all]
-            f_min = min(f.min() for f in freq_trimmed)
-            f_max = max(f.max() for f in freq_trimmed)
-            n_common = len(freq_trimmed[0])
-            common_freq = np.linspace(f_min, f_max, n_common)
+            if avgi_all is not None and len(freq_trimmed) > 0:
+                avgi_trimmed = [np.asarray(a) for a in avgi_all]
+                f_min = min(f.min() for f in freq_trimmed)
+                f_max = max(f.max() for f in freq_trimmed)
+                n_common = len(freq_trimmed[0])
+                common_freq = np.linspace(f_min, f_max, n_common)
 
-            amps_interp = np.full((len(sweep_pts), n_common), np.nan)
-            for i, (f, a) in enumerate(zip(freq_trimmed, avgi_trimmed)):
-                interp_fn = interp1d(f, a, kind="linear",
-                                     bounds_error=False, fill_value=np.nan)
-                mask = (common_freq >= f.min()) & (common_freq <= f.max())
-                amps_interp[i, mask] = interp_fn(common_freq[mask])
-
-            n_sweep = len(sweep_pts)
-            fig_w = max(8, n_sweep / 40)
-            fig, ax = plt.subplots(figsize=(fig_w, 6))
-            pcm = ax.pcolormesh(sweep_pts, common_freq, amps_interp.T,
-                                cmap="viridis", shading="nearest",
-                                rasterized=True)
-            plt.colorbar(pcm, ax=ax, label="I (ADC Units)")
-            ax.set_xlabel(sweep_label)
-            ax.set_ylabel("Qubit Frequency (MHz)")
-            if self._log_sweep:
-                ax.set_xscale("log")
-            self.save_fig(fig, suffix="_colorplot")
-
-            # --- Color plot of Q channel ---
-            avgq_all = data.get("avgq")
-            if avgq_all is not None:
-                avgq_trimmed = [np.asarray(a) for a in avgq_all]
-                avgq_interp = np.full((len(sweep_pts), n_common), np.nan)
-                for i, (f, a) in enumerate(zip(freq_trimmed, avgq_trimmed)):
+                amps_interp = np.full((len(sweep_pts), n_common), np.nan)
+                for i, (f, a) in enumerate(zip(freq_trimmed, avgi_trimmed)):
                     interp_fn = interp1d(f, a, kind="linear",
                                          bounds_error=False, fill_value=np.nan)
                     mask = (common_freq >= f.min()) & (common_freq <= f.max())
-                    avgq_interp[i, mask] = interp_fn(common_freq[mask])
+                    amps_interp[i, mask] = interp_fn(common_freq[mask])
 
+                n_sweep = len(sweep_pts)
+                fig_w = max(8, n_sweep / 40)
                 fig, ax = plt.subplots(figsize=(fig_w, 6))
-                pcm = ax.pcolormesh(sweep_pts, common_freq, avgq_interp.T,
+                pcm = ax.pcolormesh(sweep_pts, common_freq, amps_interp.T,
                                     cmap="viridis", shading="nearest",
                                     rasterized=True)
-                plt.colorbar(pcm, ax=ax, label="Q (ADC Units)")
+                plt.colorbar(pcm, ax=ax, label="I (ADC Units)")
                 ax.set_xlabel(sweep_label)
                 ax.set_ylabel("Qubit Frequency (MHz)")
                 if self._log_sweep:
                     ax.set_xscale("log")
-                self.save_fig(fig, suffix="_colorplot_q")
+                self.save_fig(fig, suffix="_colorplot")
+
+                # --- Color plot of Q channel ---
+                avgq_all = data.get("avgq")
+                if avgq_all is not None:
+                    avgq_trimmed = [np.asarray(a) for a in avgq_all]
+                    avgq_interp = np.full((len(sweep_pts), n_common), np.nan)
+                    for i, (f, a) in enumerate(zip(freq_trimmed, avgq_trimmed)):
+                        interp_fn = interp1d(f, a, kind="linear",
+                                             bounds_error=False, fill_value=np.nan)
+                        mask = (common_freq >= f.min()) & (common_freq <= f.max())
+                        avgq_interp[i, mask] = interp_fn(common_freq[mask])
+
+                    fig, ax = plt.subplots(figsize=(fig_w, 6))
+                    pcm = ax.pcolormesh(sweep_pts, common_freq, avgq_interp.T,
+                                        cmap="viridis", shading="nearest",
+                                        rasterized=True)
+                    plt.colorbar(pcm, ax=ax, label="Q (ADC Units)")
+                    ax.set_xlabel(sweep_label)
+                    ax.set_ylabel("Qubit Frequency (MHz)")
+                    if self._log_sweep:
+                        ax.set_xscale("log")
+                    self.save_fig(fig, suffix="_colorplot_q")
 class QubitSpecFastFlux(QubitSpecFluxSweep):
     """
     QubitSpecFastFlux: Sweep qubit spectroscopy across fast flux gain values.
@@ -969,82 +974,84 @@ class QubitSpecFastFlux(QubitSpecFluxSweep):
         ax.set_title(f"Qubit Spectroscopy vs Flux Gain Q{qi}")
         self.save_fig(fig, suffix="_qspec_vs_gain")
 
-        # --- Waterfall plot of all 1D spectra (skip if too many traces) ---
+        # --- 2D spectral data (waterfall + color plots) ---
         amps_all = data.get("amps")
         xpts_all = data.get("xpts")
-        if amps_all is not None and xpts_all is not None and len(gain_pts) <= 300:
-            fig, ax = plt.subplots(figsize=(10, 8))
-            # Compute vertical offset from median signal range
-            ranges = []
-            for sig in amps_all:
-                s = np.asarray(sig)
-                if len(s) > 2:
-                    ranges.append(np.ptp(s[1:-1]))
-            offset_scale = np.median(ranges) * 0.8 if ranges else 1
-
-            for i, (xpts, signal) in enumerate(zip(xpts_all, amps_all)):
-                xpts = np.asarray(xpts)
-                signal = np.asarray(signal)
-                ax.plot(xpts[1:-1], signal[1:-1] + i * offset_scale,
-                        label=f"gain={gain_pts[i]:.3f}")
-
-            ax.set_xlabel("Qubit Frequency (MHz)")
-            ax.set_ylabel("Signal (offset)")
-            ax.set_title(f"Qubit Spec vs Flux Gain Q{qi} (waterfall)")
-            if len(gain_pts) <= 20:
-                ax.legend(bbox_to_anchor=(1.05, 1), loc="upper left", fontsize=7)
-            self.save_fig(fig, suffix="_waterfall")
-
-            # --- Color plot of amps ---
-            # Each gain point may sweep a different frequency range, so
-            # interpolate all spectra onto a common frequency grid.
+        if amps_all is not None and xpts_all is not None:
             from scipy.interpolate import interp1d
 
+            # Waterfall: skip if too many traces (visually unusable)
+            if len(gain_pts) <= 300:
+                fig, ax = plt.subplots(figsize=(10, 8))
+                ranges = []
+                for sig in amps_all:
+                    s = np.asarray(sig)
+                    if len(s) > 2:
+                        ranges.append(np.ptp(s[1:-1]))
+                offset_scale = np.median(ranges) * 0.8 if ranges else 1
+
+                for i, (xpts, signal) in enumerate(zip(xpts_all, amps_all)):
+                    xpts = np.asarray(xpts)
+                    signal = np.asarray(signal)
+                    ax.plot(xpts[1:-1], signal[1:-1] + i * offset_scale,
+                            label=f"gain={gain_pts[i]:.3f}")
+
+                ax.set_xlabel("Qubit Frequency (MHz)")
+                ax.set_ylabel("Signal (offset)")
+                ax.set_title(f"Qubit Spec vs Flux Gain Q{qi} (waterfall)")
+                if len(gain_pts) <= 20:
+                    ax.legend(bbox_to_anchor=(1.05, 1), loc="upper left", fontsize=7)
+                self.save_fig(fig, suffix="_waterfall")
+
+            # --- Color plot of I channel ---
+            # Each gain point may sweep a different frequency range, so
+            # interpolate all spectra onto a common frequency grid.
             avgi_all = data.get("avgi")
             freq_trimmed = [np.asarray(x) for x in xpts_all]
-            avgi_trimmed = [np.asarray(a) for a in avgi_all]
-            f_min = min(f.min() for f in freq_trimmed)
-            f_max = max(f.max() for f in freq_trimmed)
-            n_common = len(freq_trimmed[0])
-            common_freq = np.linspace(f_min, f_max, n_common)
+            if avgi_all is not None and len(freq_trimmed) > 0:
+                avgi_trimmed = [np.asarray(a) for a in avgi_all]
+                f_min = min(f.min() for f in freq_trimmed)
+                f_max = max(f.max() for f in freq_trimmed)
+                n_common = len(freq_trimmed[0])
+                common_freq = np.linspace(f_min, f_max, n_common)
 
-            amps_interp = np.full((len(gain_pts), n_common), np.nan)
-            for i, (f, a) in enumerate(zip(freq_trimmed, avgi_trimmed)):
-                interp_fn = interp1d(f, a, kind="linear",
-                                     bounds_error=False, fill_value=np.nan)
-                mask = (common_freq >= f.min()) & (common_freq <= f.max())
-                amps_interp[i, mask] = interp_fn(common_freq[mask])
-
-            n_gain = len(gain_pts)
-            fig_w = max(8, n_gain / 40)
-            fig, ax = plt.subplots(figsize=(fig_w, 6))
-            pcm = ax.pcolormesh(gain_pts, common_freq, amps_interp.T,
-                                cmap="viridis", shading="nearest",
-                                rasterized=True)
-            plt.colorbar(pcm, ax=ax, label="I (ADC Units)")
-            ax.set_xlabel("Flux Gain")
-            ax.set_ylabel("Qubit Frequency (MHz)")
-            self.save_fig(fig, suffix="_colorplot")
-
-            # --- Color plot of Q channel ---
-            avgq_all = data.get("avgq")
-            if avgq_all is not None:
-                avgq_trimmed = [np.asarray(a) for a in avgq_all]
-                avgq_interp = np.full((len(gain_pts), n_common), np.nan)
-                for i, (f, a) in enumerate(zip(freq_trimmed, avgq_trimmed)):
+                amps_interp = np.full((len(gain_pts), n_common), np.nan)
+                for i, (f, a) in enumerate(zip(freq_trimmed, avgi_trimmed)):
                     interp_fn = interp1d(f, a, kind="linear",
                                          bounds_error=False, fill_value=np.nan)
                     mask = (common_freq >= f.min()) & (common_freq <= f.max())
-                    avgq_interp[i, mask] = interp_fn(common_freq[mask])
+                    amps_interp[i, mask] = interp_fn(common_freq[mask])
 
+                n_gain = len(gain_pts)
+                fig_w = max(8, n_gain / 40)
                 fig, ax = plt.subplots(figsize=(fig_w, 6))
-                pcm = ax.pcolormesh(gain_pts, common_freq, avgq_interp.T,
+                pcm = ax.pcolormesh(gain_pts, common_freq, amps_interp.T,
                                     cmap="viridis", shading="nearest",
                                     rasterized=True)
-                plt.colorbar(pcm, ax=ax, label="Q (ADC Units)")
+                plt.colorbar(pcm, ax=ax, label="I (ADC Units)")
                 ax.set_xlabel("Flux Gain")
                 ax.set_ylabel("Qubit Frequency (MHz)")
-                self.save_fig(fig, suffix="_colorplot_q")
+                self.save_fig(fig, suffix="_colorplot")
+
+                # --- Color plot of Q channel ---
+                avgq_all = data.get("avgq")
+                if avgq_all is not None:
+                    avgq_trimmed = [np.asarray(a) for a in avgq_all]
+                    avgq_interp = np.full((len(gain_pts), n_common), np.nan)
+                    for i, (f, a) in enumerate(zip(freq_trimmed, avgq_trimmed)):
+                        interp_fn = interp1d(f, a, kind="linear",
+                                             bounds_error=False, fill_value=np.nan)
+                        mask = (common_freq >= f.min()) & (common_freq <= f.max())
+                        avgq_interp[i, mask] = interp_fn(common_freq[mask])
+
+                    fig, ax = plt.subplots(figsize=(fig_w, 6))
+                    pcm = ax.pcolormesh(gain_pts, common_freq, avgq_interp.T,
+                                        cmap="viridis", shading="nearest",
+                                        rasterized=True)
+                    plt.colorbar(pcm, ax=ax, label="Q (ADC Units)")
+                    ax.set_xlabel("Flux Gain")
+                    ax.set_ylabel("Qubit Frequency (MHz)")
+                    self.save_fig(fig, suffix="_colorplot_q")
 
     def update(self, verbose=True):
         qi = self.cfg.expt["qubit"][0]
