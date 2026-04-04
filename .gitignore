@@ -1,7 +1,9 @@
 *.csv
 *.h5
 *__pycache__
-configs\*
+configs/
+notebooks_analysis/
+samples/
 *.png
 # Python package build artifacts
 *.py[cod]

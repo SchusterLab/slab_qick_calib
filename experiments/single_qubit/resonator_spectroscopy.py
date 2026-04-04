@@ -130,8 +130,8 @@ class ResSpecProgram(QickProgram):
 
         # Create pi pulse if needed for excited state measurement
         # Use f_ge_max when flux is enabled (qubit freq shifts at sweet spot)
-        f_ge = cfg.device.qubit.f_ge_max if cfg.expt.flux else cfg.device.qubit.f_ge
         if cfg.expt.pulse_e:
+            f_ge = cfg.device.qubit.f_ge_max if cfg.expt.flux else cfg.device.qubit.f_ge
             super().make_cfg_pulse(q, f_ge, "pi_ge")
 
         if cfg.expt.pulse_f:
@@ -754,7 +754,7 @@ class ResSpecPower(QickExperiment2DSimple):
 
         # Run the experiment if requested
         if go:
-            self.run(analyze=False, display=False, progress=False, save=True)
+            self.run(analyze=False, display=False, progress=progress, save=True)
             self.analyze(fit=True, lowgain=None, highgain=None)
             self.display(fit=True, **(disp_kwargs or {}))
         

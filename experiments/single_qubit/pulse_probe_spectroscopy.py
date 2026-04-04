@@ -74,24 +74,50 @@ class QubitSpecProgram(QickProgram):
         # Define the probe pulse with variable frequency
         if cfg.expt.flux:
             self.declare_gen(cfg.expt.flux_chan, nqz=1, mixer_freq=0)
-            pulse = {
-            "chan": cfg.expt.flux_chan,
-            "freq": 0,  # Pulse frequency
-            "phase": 0,  # Pulse phase
-            "gain": cfg.expt.flux_gain,  # Pulse amplitude
-            "length": cfg.expt.length+cfg.expt.flux_lead_time+cfg.expt.flux_trail_time,  # Pulse duration same as qubit pulse
-            "type": 'const'            
-            }
-            super().make_pulse(pulse, "flux_pulse")
+            total_flux_time = (cfg.expt.length
+                               + cfg.expt.flux_lead_time
+                               + cfg.expt.flux_trail_time)
+
+            if total_flux_time > 100:
+                self.flux_periodic = True
+                self.add_pulse(
+                    ch=cfg.expt.flux_chan,
+                    name="flux_pulse",
+                    style="const",
+                    freq=0, phase=0,
+                    gain=cfg.expt.flux_gain,
+                    length=min(cfg.expt.flux_lead_time, 100),
+                    mode="periodic",
+                )
+                self.add_pulse(
+                    ch=cfg.expt.flux_chan,
+                    name="flux_stop",
+                    style="const",
+                    freq=0, phase=0,
+                    gain=0,
+                    length=0.01,
+                )
+            else:
+                self.flux_periodic = False
+                pulse = {
+                    "chan": cfg.expt.flux_chan,
+                    "freq": 0,
+                    "phase": 0,
+                    "gain": cfg.expt.flux_gain,
+                    "length": total_flux_time,
+                    "type": 'const',
+                }
+                super().make_pulse(pulse, "flux_pulse")
 
             if cfg.expt.flux_negative_reset:
+                neg_length = min(cfg.expt.flux_lead_time, 100) if total_flux_time > 100 else total_flux_time
                 pulse_neg = {
-                "chan": cfg.expt.flux_chan,
-                "freq": 0,
-                "phase": 0,
-                "gain": -cfg.expt.flux_gain,
-                "length": cfg.expt.length+cfg.expt.flux_lead_time+cfg.expt.flux_trail_time,
-                "type": 'const'
+                    "chan": cfg.expt.flux_chan,
+                    "freq": 0,
+                    "phase": 0,
+                    "gain": -cfg.expt.flux_gain,
+                    "length": neg_length,
+                    "type": 'const',
                 }
                 super().make_pulse(pulse_neg, "flux_pulse_neg")
 
@@ -145,10 +171,13 @@ class QubitSpecProgram(QickProgram):
         if cfg.expt.flux:
             self.pulse(ch=cfg.expt.flux_chan, name="flux_pulse", t=0)
             self.delay(t=cfg.expt.flux_lead_time, tag="wait flux")
-            # Apply the probe pulse with variable frequency
             self.pulse(ch=self.qubit_ch, name="qubit_pulse", t=0)
-            self.delay_auto(t=cfg.expt.flux_readout_wait, tag="wait flux_2")
-            # Apply the flux pulse at the same time
+            if self.flux_periodic:
+                self.delay_auto(t=cfg.expt.flux_trail_time, tag="wait flux trail")
+                self.pulse(ch=cfg.expt.flux_chan, name="flux_stop", t=0)
+                self.delay_auto(t=cfg.expt.flux_readout_wait, tag="wait flux_2")
+            else:
+                self.delay_auto(t=cfg.expt.flux_readout_wait, tag="wait flux_2")
         else:
             # Apply the probe pulse with variable frequency
             self.pulse(ch=self.qubit_ch, name="qubit_pulse", t=0)
@@ -331,7 +360,7 @@ class QubitSpec(QickExperiment):
             "flux_lead_time": 0.035, # Time to apply flux pulse before qubit pulse (μs)
             "flux_trail_time": 0.025, # Time to keep flux pulse on after qubit pulse (μs)
             "flux_readout_wait": 0.1, # Time to wait after flux pulse before readout (μs)
-            "flux_negative_reset": False, # Play equal-and-opposite flux pulse after readout
+            "flux_negative_reset": True, # Play equal-and-opposite flux pulse after readout
             }
             params_def = {**params_def, **flux_params}
 
@@ -349,7 +378,19 @@ class QubitSpec(QickExperiment):
         if params["checkEF"]:
             params_def["start"] = self.cfg.device.qubit.f_ef[qi] - params["span"] / 2
         else:
-            params_def["start"] = self.cfg.device.qubit.f_ge[qi] - params["span"] / 2
+            center_freq = self.cfg.device.qubit.f_ge[qi]
+            if params.get("flux", False):
+                sweet_spot = self.cfg.device.qubit.sweet_spot_ac[qi]
+                flux_gain = params.get("flux_gain", sweet_spot)
+                direction = "neg" if flux_gain < sweet_spot else "pos"
+                converter = fitter.flux_converter_from_config(
+                    self.cfg.hw.soc.dacs.flux, self.cfg.device.qubit, qi, direction
+                )
+                if converter is not None:
+                    freq_from_converter = float(converter.gain_to_freq(flux_gain))
+                    if not np.isnan(freq_from_converter):
+                        center_freq = freq_from_converter
+            params_def["start"] = center_freq - params["span"] / 2
         params = {**params_def, **params}
 
         # Adjust pulse length based on transition type
