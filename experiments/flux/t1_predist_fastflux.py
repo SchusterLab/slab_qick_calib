@@ -241,3 +241,4 @@ class T1PredistFastFluxRepeated(T1PredistFastFlux):
         ax.set_ylabel("Elapsed Time (hours)")
         plt.colorbar(mesh, ax=ax, label="$T_1$ ($\\mu$s)")
         self.save_fig(fig, suffix="_heatmap")
+        self.save_config()

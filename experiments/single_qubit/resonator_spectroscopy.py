@@ -684,7 +684,7 @@ class ResSpecPower(QickExperiment2DSimple):
     - 'expts_gain' (int): Number of gain points in the sweep.
     - 'start_gain' (int): Starting gain value.
     - 'step_gain' (int): Step size for the gain sweep.
-    - 'f_off' (float): Frequency offset from resonant frequency in MHz (usually negative)
+    - 'freq_offset' (float): Frequency offset from resonant frequency in MHz (negative shifts window down)
     - 'min_reps' (int): Minimum number of repetitions.
     - 'log' (bool): Whether to use logarithmic scaling for the gain sweep; in this case, ignore start_gain/step_gain, using max_gain and rng
     """
@@ -730,7 +730,7 @@ class ResSpecPower(QickExperiment2DSimple):
             "start_gain": 0.3,       # Minimum gain value for linear sweep
             "step_gain": 0.05,         # Gain step for linear sweep
             "expts_gain": 20,          # Number of gain points
-            "f_off": 4,                # Frequency offset from resonator frequency
+            "freq_offset": -4,         # Frequency offset from resonator frequency
             "min_reps": 100,           # Minimum repetitions for any gain value
             "pulse_e": False,        # Whether to apply pi pulse on |g>-|e> transition
             "log": True,               # Use logarithmic gain spacing
@@ -743,7 +743,7 @@ class ResSpecPower(QickExperiment2DSimple):
         params["start"] = (
             self.cfg.device.readout.frequency[qi]
             - params["span"] / 2
-            - params["f_off"]
+            + params["freq_offset"]
         )
 
         # Create a ResSpec experiment but don't run it

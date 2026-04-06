@@ -98,9 +98,10 @@ class QubitSpecFlux(QickExperiment2DSimple):
             "bias_chan": 0,
             "dc_settle": 0.0,
             "dc_verify_print": False,
-            "recenter_res": False,        # run ResSpec at each bias to recenter readout
+            "recenter_res": False,        # run ResSpec at each bias to recenter readout (fit-based)
             "recenter_res_span": 5,       # MHz span for the ResSpec sweep
             "recenter_res_expts": 100,    # number of points for ResSpec
+            "tune_resonator": False,      # run ResSpec at each bias to recenter readout (argmin-based)
         }
 
         # Merge defaults
@@ -207,6 +208,24 @@ class QubitSpecFlux(QickExperiment2DSimple):
                     self.expt.cfg.device.readout.frequency[q] = f0_row
                     self.cfg.device.readout.frequency[q]      = f0_row
                     f0_used_each_row.append(f0_row)
+            # Tune resonator using argmin of a quick ResSpec sweep
+            elif self.cfg.expt.tune_resonator:
+                kappa = float(self.cfg.device.readout.kappa[q])
+                res_params = {
+                    "center": float(self.expt.cfg.device.readout.frequency[q]),
+                    "span": kappa,
+                    "expts": 100,
+                    "qubit": [q],
+                    "qubit_chan": self.cfg.expt["qubit_chan"],
+                }
+                res = ResSpec(self.cfg_dict, qi=q, go=False, params=res_params, check_params=False)
+                res.acquire(progress=False)
+                xpts = np.asarray(res.data["xpts"])
+                amps = np.asarray(res.data["amps"])
+                f0_row = float(xpts[1:-1][np.argmin(amps[1:-1])])
+                self.expt.cfg.device.readout.frequency[q] = f0_row
+                self.cfg.device.readout.frequency[q] = f0_row
+                f0_used_each_row.append(f0_row)
             # If we have a bias→f0 table, interpolate and update readout frequency
             elif have_table:
                 f0_row = float(np.interp(dc_val, self.bias_table_V, self.f0_table_MHz))
@@ -276,6 +295,11 @@ class QubitSpecFlux(QickExperiment2DSimple):
         return data
 
     def display(self, data=None, fit=True, plot_amps=True, ax=None, **kwargs):
+        import matplotlib.pyplot as plt
+
+        if data is None:
+            data = self.data
+
         title = f"Spectroscopy vs DC Bias Q{self.cfg.expt.qubit[0]}"
         if self.cfg.expt.checkEF:
             title = "EF " + title
@@ -289,6 +313,18 @@ class QubitSpecFlux(QickExperiment2DSimple):
             ylabel=XLABEL,
             **kwargs,
         )
+
+        # Resonator frequency vs DC bias (tune_resonator / recenter_res mode)
+        f0_used = data.get("f0_used_MHz") if data is not None else getattr(self, "data", {}).get("f0_used_MHz")
+        if f0_used is not None and len(f0_used) > 0:
+            dc_pts = data.get("xpts", data.get("dc_pts"))
+            if dc_pts is not None:
+                n = min(len(f0_used), len(dc_pts))
+                fig, ax_r = plt.subplots()
+                ax_r.plot(dc_pts[:n], f0_used[:n], "o-")
+                ax_r.set_xlabel(DCYLABEL)
+                ax_r.set_ylabel("Resonator Frequency (MHz)")
+                self.save_fig(fig, suffix="_res_freq_vs_dc")
 
 
 class QubitSpecFluxSweep(QickFluxSweep):
@@ -405,6 +441,10 @@ class QubitSpecFluxSweep(QickFluxSweep):
         """Called before each sweep iteration. Override in subclasses for custom per-step logic."""
         pass
 
+    def _live_update(self, data, step, total):
+        """Called after each sweep iteration. Override in subclasses for live plotting."""
+        pass
+
     def acquire(self, progress=True, display=False):
         from pathlib import Path
 
@@ -492,6 +532,8 @@ class QubitSpecFluxSweep(QickFluxSweep):
 
             if self.save_interim:
                 self.save_data(data=data)
+
+            self._live_update(data, i + 1, len(self.sweep_pts))
 
             # Save CSV incrementally
             sweep_so_far = self.sweep_pts[:i + 1]
@@ -816,6 +858,8 @@ class QubitSpecFluxSweep(QickFluxSweep):
                     if avgq_all is not None:
                         _color_plot(_interp_grid(avgq_all), "Q (ADC Units)", "_colorplot_q")
 
+        self.save_config()
+
 class QubitSpecFastFlux(QubitSpecFluxSweep):
     """
     QubitSpecFastFlux: Sweep qubit spectroscopy across fast flux gain values.
@@ -840,6 +884,13 @@ class QubitSpecFastFlux(QubitSpecFluxSweep):
         fit_model: 'quadratic' (default) or 'transmon'. When 'transmon', additionally
             fits the transmon SQUID model f(g) = (f_max+E_C)*(cos^2(phi)+d^2*sin^2(phi))^0.25 - E_C
             with E_C fixed from config. The quadratic fit is always performed.
+        spec_gain_pts: Optional array of qubit drive gain values co-swept with the flux
+            gain (one entry per flux gain step). At step i, both flux_gain and the drive
+            gain are set simultaneously. Useful when the optimal drive power varies across
+            the dispersion. If None (default), drive gain is constant.
+        spec_length_pts: Optional array of pulse length values (µs) co-swept with the
+            flux gain (one entry per flux gain step). If None (default), pulse length
+            is constant.
     """
 
     def __init__(
@@ -854,11 +905,13 @@ class QubitSpecFastFlux(QubitSpecFluxSweep):
         display=True,
         min_r2=None,
         max_err=None,
+        live_plot=True,
     ):
         prefix = prefix or f"qspec_fastflux_qubit{qi}"
         # Call QickFluxSweep.__init__ directly to skip QubitSpecFluxSweep's param
         # setup; we build our own params and wire up the FluxSweep attributes below.
         QickFluxSweep.__init__(self, cfg_dict=cfg_dict, prefix=prefix, progress=progress, qi=qi)
+        self._live_plotter = None
         self._cfg_dict = cfg_dict
         self._qi = qi
         self._style = style
@@ -878,7 +931,8 @@ class QubitSpecFastFlux(QubitSpecFluxSweep):
             "freq_span": freq_span,
             "direction": direction,
             "fit_model": "quadratic",
-            "tune_resonator": False,
+            "spec_gain_pts": None,
+            "spec_length_pts": None,
         }
 
         params = {**params_def, **params, "flux": True}
@@ -895,44 +949,40 @@ class QubitSpecFastFlux(QubitSpecFluxSweep):
         self._sweep_label = "Flux Gain"
         self._log_sweep = False
 
+        # Validate and store spec_gain_pts / spec_length_pts
+        def _validate_sweep_pts(key):
+            pts = self.cfg.expt.get(key, None)
+            if pts is not None:
+                pts = np.asarray(pts, dtype=float)
+                if pts.shape != self.gain_pts.shape:
+                    raise ValueError(
+                        f"{key} length ({len(pts)}) must match "
+                        f"number of flux gain steps ({len(self.gain_pts)})"
+                    )
+            return pts
+
+        self._spec_gain_pts = _validate_sweep_pts("spec_gain_pts")
+        self._spec_length_pts = _validate_sweep_pts("spec_length_pts")
+
+        if live_plot:
+            from ..general.qick_experiment import QubitSpecFastFluxLivePlotter
+            self._live_plotter = QubitSpecFastFluxLivePlotter()
+
         if go:
             self.run(progress=progress, display=display, analyze=True,
                      min_r2=min_r2, max_err=max_err)
 
-    def _pre_sweep_step(self, _i, val):
-        if not self.cfg.expt.get("tune_resonator", False):
-            return
-        q = self.cfg.expt.qubit[0]
-        kappa = float(self.cfg.device.readout.kappa[q])
-        res_params = {
-            "center": float(self.expt.cfg.device.readout.frequency[q]),
-            "span": kappa,
-            "expts": 100,
-            "flux": True,
-            "flux_gain": float(val),
-        }
-        res = ResSpec(self._cfg_dict, qi=q, go=False, params=res_params, check_params=False)
-        res.acquire(progress=False)
-        xpts = np.asarray(res.data["xpts"])
-        amps = np.asarray(res.data["amps"])
-        new_freq = float(xpts[1:-1][np.argmin(amps[1:-1])])
-        self.expt.cfg.device.readout.frequency[q] = new_freq
-        config.update_readout(self.config_file, "frequency", new_freq, q, verbose=False)
-        self._resonator_freqs.append(new_freq)
+    def _live_update(self, data, step, total):
+        if self._live_plotter is not None:
+            self._live_plotter.update(data, step, total)
+            if step >= total:
+                self._live_plotter.close()
 
-    def acquire(self, progress=True, display=False):
-        if not self.cfg.expt.get("tune_resonator", False):
-            return QubitSpecFluxSweep.acquire(self, progress=progress, display=display)
-        q = self.cfg.expt.qubit[0]
-        initial_freq = float(self.cfg.device.readout.frequency[q])
-        self._resonator_freqs = []
-        try:
-            data = QubitSpecFluxSweep.acquire(self, progress=progress, display=display)
-            data["resonator_freqs"] = list(self._resonator_freqs)
-            return data
-        finally:
-            self.expt.cfg.device.readout.frequency[q] = initial_freq
-            config.update_readout(self.config_file, "frequency", initial_freq, q, verbose=False)
+    def _pre_sweep_step(self, i, _val):
+        if self._spec_gain_pts is not None:
+            self.expt.cfg.expt["gain"] = float(self._spec_gain_pts[i])
+        if self._spec_length_pts is not None:
+            self.expt.cfg.expt["length"] = float(self._spec_length_pts[i])
 
     def analyze(self, data=None, fit_model='quadratic', Ec=None, **kwargs):
         if data is None:
@@ -986,14 +1036,11 @@ class QubitSpecFastFlux(QubitSpecFluxSweep):
 
         return data
 
-    def display(self, data=None, plot_amps=None, **kwargs):
+    def display(self, data=None, plot_amps=False, **kwargs):
         import matplotlib.pyplot as plt
 
         if data is None:
             data = self.data
-
-        if plot_amps is None:
-            plot_amps = bool(self.cfg.expt.get("tune_resonator", False))
 
         gain_pts = data["gain_pts"]
         qubit_freq_list = data["qubit_freq_list"]
@@ -1014,17 +1061,6 @@ class QubitSpecFastFlux(QubitSpecFluxSweep):
         ax.set_ylabel("Qubit Frequency (MHz)")
         ax.set_title(f"Qubit Spectroscopy vs Flux Gain Q{qi}")
         self.save_fig(fig, suffix="_qspec_vs_gain")
-
-        # --- Resonator frequency vs gain (tune_resonator mode) ---
-        res_freqs = data.get("resonator_freqs")
-        if res_freqs and len(res_freqs) > 0:
-            res_freqs = np.asarray(res_freqs)
-            n = min(len(res_freqs), len(gain_pts))
-            fig, ax = plt.subplots()
-            ax.plot(gain_pts[:n], res_freqs[:n], "o-")
-            ax.set_xlabel("Flux Gain")
-            ax.set_ylabel("Resonator Frequency (MHz)")
-            self.save_fig(fig, suffix="_res_freq_vs_gain")
 
         # --- 2D spectral data (waterfall + color plots) ---
         amps_all = data.get("amps")
@@ -1098,6 +1134,8 @@ class QubitSpecFastFlux(QubitSpecFluxSweep):
                         _color_plot(_interp_grid(avgi_all), "I (ADC Units)", "_colorplot")
                     if avgq_all is not None:
                         _color_plot(_interp_grid(avgq_all), "Q (ADC Units)", "_colorplot_q")
+
+        self.save_config()
 
     def update(self, verbose=True):
         qi = self.cfg.expt["qubit"][0]

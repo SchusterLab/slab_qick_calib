@@ -357,7 +357,7 @@ class QubitSpec(QickExperiment):
         if params.get("flux", False):
             flux_params = {"flux_chan": self.cfg.hw.soc.dacs.flux.ch[qi], # DAC channel for flux pulse
             "flux_gain": self.cfg.device.qubit.sweet_spot_ac[qi], # Gain for flux pulse
-            "flux_lead_time": 0.035, # Time to apply flux pulse before qubit pulse (μs)
+            "flux_lead_time": 0.045, # Time to apply flux pulse before qubit pulse (μs)
             "flux_trail_time": 0.025, # Time to keep flux pulse on after qubit pulse (μs)
             "flux_readout_wait": 0.1, # Time to wait after flux pulse before readout (μs)
             "flux_negative_reset": True, # Play equal-and-opposite flux pulse after readout

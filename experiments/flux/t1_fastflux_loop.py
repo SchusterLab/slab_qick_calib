@@ -319,6 +319,8 @@ class T1FastFluxLoop(QickExperimentLoop):
             ax.set_title("T1 Fast Flux Loop")
             self.save_fig(fig, suffix="_t1_vs_freq")
 
+        self.save_config()
+
 
 class T1FastFluxLoopRepeated(T1FastFluxLoop):
     """
@@ -716,3 +718,5 @@ class T1FastFluxLoopRepeated(T1FastFluxLoop):
                     ax.set_title(f"{label} Calibration Drift — Q{self._qi}")
                     plt.colorbar(mesh, ax=ax, label=f"{label} (a.u.)")
                     self.save_fig(fig, suffix=suffix)
+
+        self.save_config()

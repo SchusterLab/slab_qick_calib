@@ -1598,6 +1598,130 @@ class LivePlotter:
             self.fig = None
 
 
+class QubitSpecFastFluxLivePlotter:
+    """Live plotting helper for QubitSpecFastFlux.
+
+    Shows a 2-panel figure that updates in-place during acquisition:
+      - Left: qubit frequency vs flux gain (scatter + running quadratic fit)
+      - Right: 2D color map of avgi growing one row at a time
+
+    Updates are throttled via ``update_interval`` (default 5 s). Always renders
+    the first and last frame. Disabled automatically outside Jupyter.
+    """
+
+    def __init__(self, update_interval=5.0):
+        self.update_interval = update_interval
+        self.fig = None
+        self.ax_freq = None
+        self.ax_color = None
+        self._display_handle = None
+        self._progress_handle = None
+        self._last_update_time = 0.0
+        self._active = _HAS_IPYTHON and LivePlotter._check_jupyter()
+        if not self._active:
+            print("[LivePlot] Not in a Jupyter environment, live plotting disabled.")
+
+    def _render_to_image(self):
+        import io
+        from IPython.display import Image
+        buf = io.BytesIO()
+        self.fig.savefig(buf, format="png", bbox_inches="tight", dpi=80)
+        buf.seek(0)
+        return Image(data=buf.getvalue())
+
+    def update(self, data, step, total):
+        """Update the live plot after each gain-point iteration.
+
+        Parameters
+        ----------
+        data : dict
+            Accumulated data dict from QubitSpecFluxSweep.acquire() so far.
+        step : int
+            Number of gain points completed (1-based).
+        total : int
+            Total number of gain points in the sweep.
+        """
+        if not self._active:
+            return
+
+        now = time.time()
+        is_last = step >= total
+        if self.fig is not None and not is_last:
+            if (now - self._last_update_time) < self.update_interval:
+                return
+
+        try:
+            gain_pts = np.asarray(data.get("sweep_pts", []))[:step]
+            freq_list = np.asarray(data.get("qubit_freq_list", []))[:step]
+            avgi_rows = data.get("avgi", [])
+
+            if len(gain_pts) == 0:
+                return
+
+            if self.fig is None:
+                self._create_figure()
+
+            # --- Left: freq vs gain ---
+            self.ax_freq.cla()
+            valid = np.isfinite(freq_list)
+            self.ax_freq.plot(gain_pts[valid], freq_list[valid], "o", ms=4)
+            if valid.sum() >= 3:
+                coeffs = np.polyfit(gain_pts[valid], freq_list[valid], 2)
+                g_dense = np.linspace(gain_pts.min(), gain_pts.max(), 200)
+                self.ax_freq.plot(g_dense, np.polyval(coeffs, g_dense), "-", lw=1.5)
+            self.ax_freq.set_xlabel("Flux Gain")
+            self.ax_freq.set_ylabel("Qubit Frequency (MHz)")
+
+            # --- Right: color map (avgi) ---
+            self.ax_color.cla()
+            if len(avgi_rows) > 0:
+                xpts_ref = np.asarray(data["xpts"][0])
+                matrix = np.array([np.asarray(r) for r in avgi_rows])
+                # Pad/trim rows to reference length if center_freq tracking shifted them
+                n = len(xpts_ref)
+                if matrix.shape[1] != n:
+                    padded = np.full((matrix.shape[0], n), np.nan)
+                    m = min(matrix.shape[1], n)
+                    padded[:, :m] = matrix[:, :m]
+                    matrix = padded
+                self.ax_color.pcolormesh(
+                    xpts_ref, gain_pts, matrix,
+                    cmap="viridis", shading="auto", rasterized=True,
+                )
+                self.ax_color.set_xlabel("Frequency (MHz)")
+                self.ax_color.set_ylabel("Flux Gain")
+
+            self.fig.tight_layout()
+
+            img = self._render_to_image()
+            if self._display_handle is None:
+                self._display_handle = ipy_display(img, display_id=True)
+            else:
+                self._display_handle.update(img)
+
+            from IPython.display import HTML
+            progress_html = HTML(f"<pre>Step {step}/{total} ({100*step/total:.0f}%)</pre>")
+            if self._progress_handle is None:
+                self._progress_handle = ipy_display(progress_html, display_id=True)
+            else:
+                self._progress_handle.update(progress_html)
+
+            self._last_update_time = time.time()
+        except Exception as e:
+            print(f"[LivePlot] Update failed: {e}")
+
+    def _create_figure(self):
+        self.fig, (self.ax_freq, self.ax_color) = plt.subplots(
+            1, 2, figsize=(12, 4), dpi=80
+        )
+        plt.close(self.fig)  # prevent inline rendering
+
+    def close(self):
+        if self.fig is not None:
+            plt.close(self.fig)
+            self.fig = None
+
+
 class QickExperiment2DSimple(QickExperiment2DBase):
     """
     Simplified version of QickExperiment2D for nested experiments.

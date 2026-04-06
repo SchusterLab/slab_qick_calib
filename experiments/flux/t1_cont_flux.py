@@ -401,6 +401,8 @@ class T1ContFluxExperiment(QickExperimentLoop):
             ax.legend()
             self.save_fig(fig, suffix="_calib_vs_gain")
 
+        self.save_config()
+
 
 class T1ContFluxRepeated(T1ContFluxExperiment):
     """
@@ -666,3 +668,5 @@ class T1ContFluxRepeated(T1ContFluxExperiment):
                     ax.set_ylabel("Elapsed Time (hours)")
                     plt.colorbar(mesh, ax=ax, label=f"{label} (a.u.)")
                     self.save_fig(fig, suffix=suffix)
+
+        self.save_config()
