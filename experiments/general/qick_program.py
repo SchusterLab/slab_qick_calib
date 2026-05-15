@@ -438,6 +438,7 @@ class QickProgram(AveragerProgramV2):
             # Read qubit state and conditionally apply π pulse
             # If I < threshold (qubit in |1⟩), apply π pulse to return to |0⟩
             # If I >= threshold (qubit in |0⟩), skip the π pulse
+            
             self.read_and_jump(
                 ro_ch=self.adc_ch,
                 component="I",  # Use I quadrature for state discrimination
@@ -887,3 +888,393 @@ class QickProgram2Q(AveragerProgramV2):
                         pins=[0],
                         t=self.trig_offset[q],
                     )
+
+class QickSMPDProgram(QickProgram):
+    """
+    Base class for SMPD quantum experiments using the QICK framework.
+    Targeted for a qubit coupled to two resonators (buffer and waste).
+    Uses the 'qi' parameter from experiments to select which resonator to read out from.
+    """
+
+    def _initialize(self, cfg, readout="standard"):
+        """
+        Initialize hardware channels and configure pulses for the experiment.
+        Sets up ADC and DAC channels for the qubit and BOTH resonators.
+        The `qi` parameter in the config specifies the active readout resonator.
+        """
+        cfg = AttrDict(self.cfg)
+
+        # In SMPD, the experiment's 'qubit' list actually provides the resonator index.
+        self.qubits = cfg.expt.qubit
+        ri = self.qubits[0]  # Resonator index chosen for readout
+        qi = ri  # Qubit index now tracks the resonator index
+
+        # We set up both resonators
+        self.all_adc_chs = cfg.hw.soc.adcs.readout.ch
+        self.all_res_chs = cfg.hw.soc.dacs.readout.ch
+        self.all_res_ch_types = cfg.hw.soc.dacs.readout.type
+        self.all_res_nqzs = cfg.hw.soc.dacs.readout.nyquist
+        self.all_adc_types = cfg.hw.soc.adcs.readout.type
+
+        # Set active channels for compatibility with existing experiments
+        self.adc_ch = self.all_adc_chs[ri]
+        self.res_ch = self.all_res_chs[ri]
+        self.res_ch_type = self.all_res_ch_types[ri]
+        self.res_nqz = self.all_res_nqzs[ri]
+        self.type = self.all_res_ch_types[ri]
+        self.adc_type = self.all_adc_types[ri]
+
+        # Trigger offsets
+        self.all_trig_offsets = cfg.device.readout.trig_offset
+        self.trig_offset = self.all_trig_offsets[ri]
+
+        # Configure qubit channel (two elements in config)
+        if "qubit" in cfg.hw.soc.dacs:
+            if isinstance(cfg.hw.soc.dacs.qubit.ch, (list, tuple)):
+                self.qubit_ch = cfg.hw.soc.dacs.qubit.ch[qi]
+                self.qubit_ch_type = cfg.hw.soc.dacs.qubit.type[qi]
+                self.qubit_nqz = cfg.hw.soc.dacs.qubit.nyquist[qi]
+            else:
+                self.qubit_ch = cfg.hw.soc.dacs.qubit.ch
+                self.qubit_ch_type = cfg.hw.soc.dacs.qubit.type
+                self.qubit_nqz = cfg.hw.soc.dacs.qubit.nyquist
+
+        # Configure standard readout parameters
+        if readout == "standard":
+            self.all_readout_lengths = cfg.device.readout.readout_length
+            self.all_frequencies = cfg.device.readout.frequency
+            self.all_gains = cfg.device.readout.gain
+            self.all_phases = cfg.device.readout.phase
+
+            self.readout_length = self.all_readout_lengths[ri]
+            self.frequency = self.all_frequencies[ri]
+            self.gain = self.all_gains[ri]
+            self.phase = self.all_phases[ri]
+
+        # Configure local oscillator (LO) if available
+        if (
+            "lo" in cfg.hw.soc
+            and "ch" in cfg.hw.soc.lo
+            and (isinstance(cfg.hw.soc.lo.ch, (list, tuple)) and cfg.hw.soc.lo.ch[ri] != "None" or not isinstance(cfg.hw.soc.lo.ch, (list, tuple)) and cfg.hw.soc.lo.ch != "None")
+        ):
+            self.lo_ch = cfg.hw.soc.lo.ch[ri] if isinstance(cfg.hw.soc.lo.ch, (list, tuple)) else cfg.hw.soc.lo.ch
+            self.lo_nqz = cfg.hw.soc.lo.nyquist[ri] if isinstance(cfg.hw.soc.lo.nyquist, (list, tuple)) else cfg.hw.soc.lo.nyquist
+            self.mixer_freq = cfg.hw.soc.lo.mixer_freq[ri] if isinstance(cfg.hw.soc.lo.mixer_freq, (list, tuple)) else cfg.hw.soc.lo.mixer_freq
+            self.lo_gain = cfg.hw.soc.lo.gain[ri] if isinstance(cfg.hw.soc.lo.gain, (list, tuple)) else cfg.hw.soc.lo.gain
+
+            self.declare_gen(
+                ch=self.lo_ch, nqz=self.lo_nqz, mixer_freq=self.mixer_freq - 500
+            )
+
+            self.add_pulse(
+                self.lo_ch,
+                name="mix_pulse",
+                style="const",
+                length=self.readout_length,
+                freq=self.mixer_freq,
+                phase=0,
+                gain=self.lo_gain,
+            )
+        else:
+            self.lo_ch = None
+
+        if "aves" in cfg.expt:
+            self.add_loop("ave_loop", cfg.expt.aves)
+
+        declared_gens = []
+        declared_adcs = []
+
+        # Set up generators and readouts for BOTH resonators
+        for i in range(len(self.all_res_chs)):
+            r_ch = self.all_res_chs[i]
+            a_ch = self.all_adc_chs[i]
+            r_nqz = self.all_res_nqzs[i]
+            r_type = self.all_res_ch_types[i]
+            a_type = self.all_adc_types[i]
+
+            if readout == "standard":
+                r_freq = self.all_frequencies[i]
+                r_gain = self.all_gains[i]
+                r_phase = self.all_phases[i]
+                r_len = self.all_readout_lengths[i]
+            else:
+                r_freq = self.frequency
+                r_gain = self.gain
+                r_phase = self.phase
+                r_len = self.readout_length
+
+            # Setup gen
+            if r_type == "full":
+                if r_ch not in declared_gens:
+                    self.declare_gen(ch=r_ch, nqz=r_nqz)
+                    declared_gens.append(r_ch)
+                pulse_args = {
+                    "ch": r_ch,
+                    "name": f"readout_pulse_{i}",
+                    "style": "const",
+                    "ro_ch": a_ch,
+                    "freq": r_freq,
+                    "phase": r_phase,
+                    "gain": r_gain,
+                }
+                if readout == "long":
+                    pulse_args["length"] = 1
+                    pulse_args["mode"] = "periodic"
+                else:
+                    pulse_args["length"] = r_len
+                self.add_pulse(**pulse_args)
+                
+                if i == ri:
+                    pulse_args["name"] = "readout_pulse"
+                    self.add_pulse(**pulse_args)
+                    
+            elif r_type == "mux":
+                if r_ch not in declared_gens:
+                    self.declare_gen(
+                        ch=r_ch,
+                        nqz=r_nqz,
+                        ro_ch=a_ch,
+                        mux_freqs=[r_freq],
+                        mux_gains=[r_gain],
+                        mux_phases=[r_phase],
+                    )
+                    declared_gens.append(r_ch)
+                self.add_pulse(
+                    ch=r_ch,
+                    name=f"readout_pulse_{i}",
+                    style="const",
+                    length=r_len,
+                    mask=[0],
+                )
+                if i == ri:
+                    self.add_pulse(
+                        ch=r_ch,
+                        name="readout_pulse",
+                        style="const",
+                        length=r_len,
+                        mask=[0],
+                    )
+            elif r_type == "int":
+                if r_ch not in declared_gens:
+                    self.declare_gen(
+                        ch=r_ch,
+                        nqz=r_nqz,
+                        ro_ch=a_ch,
+                        mixer_freq=r_freq - 400,
+                    )
+                    declared_gens.append(r_ch)
+                self.add_pulse(
+                    r_ch,
+                    ro_ch=a_ch,
+                    name=f"readout_pulse_{i}",
+                    style="const",
+                    length=r_len,
+                    freq=r_freq,
+                    phase=r_phase,
+                    gain=r_gain,
+                )
+                if i == ri:
+                    self.add_pulse(
+                        r_ch,
+                        ro_ch=a_ch,
+                        name="readout_pulse",
+                        style="const",
+                        length=r_len,
+                        freq=r_freq,
+                        phase=r_phase,
+                        gain=r_gain,
+                    )
+
+            # Setup readout
+            if a_type == "dyn":
+                if a_ch not in declared_adcs:
+                    self.declare_readout(a_ch, length=r_len)
+                    declared_adcs.append(a_ch)
+                self.add_readoutconfig(
+                    ch=a_ch, name=f"readout_{i}", freq=r_freq, gen_ch=r_ch
+                )
+                if i == ri:
+                    self.add_readoutconfig(
+                        ch=a_ch, name="readout", freq=r_freq, gen_ch=r_ch
+                    )
+            elif a_type == "std":
+                if a_ch not in declared_adcs:
+                    self.declare_readout(
+                        ch=a_ch,
+                        length=r_len,
+                        freq=r_freq,
+                        phase=r_phase,
+                        gen_ch=r_ch,
+                    )
+                    declared_adcs.append(a_ch)
+
+        if "qubit" in cfg.hw.soc.dacs:
+            if self.qubit_ch not in declared_gens:
+                self.declare_gen(ch=self.qubit_ch, nqz=self.qubit_nqz)
+                declared_gens.append(self.qubit_ch)
+
+    def _body(self, cfg):
+        cfg = AttrDict(self.cfg)
+        if self.adc_type == "dyn":
+            for a_ch, i in zip(self.all_adc_chs, range(len(self.all_adc_chs))):
+                if self.all_adc_types[i] == "dyn":
+                    self.send_readoutconfig(ch=a_ch, name=f"readout_{i}", t=0)
+        self.pulse(ch=self.res_ch, name="readout_pulse", t=0)
+        # Trigger all readouts to satisfy `get_raw()` matching declared channels length
+        self.trigger(ros=self.all_adc_chs, pins=[0], t=self.trig_offset, ddr4=True)
+
+    def measure(self, cfg):
+        cfg = AttrDict(self.cfg)
+        self.pulse(ch=self.res_ch, name="readout_pulse", t=0)
+        if self.lo_ch is not None:
+            self.pulse(ch=self.lo_ch, name="mix_pulse", t=0.01)
+        self.trigger(
+            ros=self.all_adc_chs,
+            pins=[0],
+            t=self.trig_offset,
+        )
+        if cfg.expt.active_reset:
+            self.reset(3)
+
+    def reset(self, i):
+        """
+        Perform active qubit reset.
+
+        This method implements a measurement-based reset protocol that:
+        1. Measures the qubit state
+        2. Applies a π pulse only if the qubit is in |1⟩ state
+        3. Repeats the process i times to improve reset fidelity
+
+        Args:
+            i: Number of reset iterations to perform
+        """
+        cfg = AttrDict(self.cfg)
+
+        # Perform reset sequence i times
+        for n in range(i):
+            # Wait for readout to complete
+            self.wait_auto(cfg.expt.read_wait)
+            # Add extra delay for stability
+            self.delay_auto(cfg.expt.read_wait + cfg.expt.extra_delay)
+
+            # Read qubit state and conditionally apply π pulse
+            # If I < threshold (qubit in |1⟩), apply π pulse to return to |0⟩
+            # If I >= threshold (qubit in |0⟩), skip the π pulse
+            
+            self.read_and_jump(
+                ro_ch=self.adc_ch,
+                component="I",  # Use I quadrature for state discrimination
+                threshold=cfg.expt.threshold,  # Threshold for state discrimination
+                test="<",  # Skip to end of no pulse if I < threshold
+                label=f"NOPULSE{n}",  # Jump to this label if I >= threshold
+            )
+            #print(cfg.expt.threshold)
+
+            # Apply π pulse to flip qubit from |1⟩ to |0⟩
+            self.pulse(ch=self.qubit_ch, name="pi_ge", t=0)
+            # Small delay for pulse completion
+            self.delay_auto(0.01)
+            # Label for conditional jump target
+            self.label(f"NOPULSE{n}")
+
+            # For all but the last iteration, perform another measurement
+            if n < i - 1:
+                
+                # Apply readout pulse
+                self.pulse(ch=self.res_ch, name="readout_pulse", t=0)
+                # Trigger readout
+                self.trigger(ros=[self.adc_ch], pins=[0], t=self.trig_offset)
+                # Apply LO pulse if available
+                if self.lo_ch is not None:
+                    self.pulse(ch=self.lo_ch, name="mix_pulse", t=0.0)
+                # Small delay before next iteration
+                # self.delay_auto(0.01)
+            # else:
+            #     self.delay_auto(0.01)  # Final small delay after last iteration
+
+    def cond_reset(self, i):
+        n = 0
+        cfg = AttrDict(self.cfg)
+        self.wait_auto(cfg.expt.read_wait)
+        self.delay_auto(cfg.expt.read_wait + cfg.expt.extra_delay)
+
+        self.read_and_jump(
+            ro_ch=self.adc_ch,
+            component="I",
+            threshold=cfg.expt.threshold,
+            test="<",
+            label=f"NOPULSE0",
+        )
+
+        self.pulse(ch=self.qubit_ch, name="pi_ge", t=0)
+        self.delay_auto(0.01)
+
+        self.trigger(ros=self.all_adc_chs, pins=[0], t=self.trig_offset)
+        self.pulse(ch=self.res_ch, name="readout_pulse", t=0)
+        if self.lo_ch is not None:
+            self.pulse(ch=self.lo_ch, name="mix_pulse", t=0.0)
+        self.delay_auto(0.01)
+
+        self.wait_auto(cfg.expt.read_wait)
+        self.delay_auto(cfg.expt.read_wait + cfg.expt.extra_delay)
+
+        self.read_and_jump(
+            ro_ch=self.adc_ch,
+            component="I",
+            threshold=cfg.expt.threshold,
+            test="<",
+            label=f"NOPULSE1",
+        )
+        self.label(f"NOPULSE1")
+        self.label(f"NOPULSE0")
+
+    def collect_shots(self, offset=0, single=True):
+        if not single:
+            i_shots = []
+            q_shots = []
+            
+        iq_raw = self.get_raw()
+        
+        # Get active channel index from ro_chs keys
+        idx = list(self.ro_chs.keys()).index(self.adc_ch)
+        rocfg = self.ro_chs[self.adc_ch]
+        nsamp = rocfg["length"]
+        
+        i_shots_vec = iq_raw[idx][:, :, :, 0] / nsamp - offset
+        q_shots_vec = iq_raw[idx][:, :, :, 1] / nsamp - offset
+        
+        if single:
+            i_shots = i_shots_vec.flatten()
+            q_shots = q_shots_vec.flatten()
+        else:
+            for j in range(i_shots_vec.shape[1]):
+                i_shots.append(i_shots_vec[:, j, :])
+                q_shots.append(q_shots_vec[:, j, :])
+                
+        return i_shots, q_shots
+
+    def make_pi_pulse(self, q, freq, name):
+        """
+        Create a π pulse for the qubit.
+        Uses `q` (resonator index) to index into the qubit parameters.
+        """
+        cfg = AttrDict(self.cfg)
+        pulse_cfg = cfg.device.qubit.pulses[name]
+        pulse = {}
+        for key, value in pulse_cfg.items():
+            # For robustness handle lists/tuples passed from YAML fallback mapping
+            if isinstance(value, (list, tuple)):
+                pulse[key] = value[q]
+            else:
+                pulse[key] = value
+                
+        if isinstance(freq, (list, tuple)):
+            pulse["freq"] = freq[q]
+        else:
+            pulse["freq"] = freq
+            
+        if "phase" not in pulse:
+            pulse["phase"] = 0
+            
+        self.make_pulse(pulse, name)
+        return pulse

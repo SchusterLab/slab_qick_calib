@@ -241,6 +241,42 @@ def double_gaussian(x: ArrayLike, mag1: float, center1: float, width: float,
     
     return normalization * (gaussian1 + gaussian2)
 
+def double_gaussian_xnorm(x: ArrayLike, mag1: float, center1: float, width1: float, 
+                   mag2: float, center2: float, width2: float) -> np.ndarray:
+    """
+    Sum of two Gaussian functions with shared width parameter.
+    
+    This function is useful for modeling situations where two quantum states
+    have the same measurement noise (width) but different populations and
+    center positions, such as when there's leakage between states.
+    
+    Parameters
+    ----------
+    x : array_like
+        Input x values
+    mag1 : float
+        Magnitude of first Gaussian (state population)
+    center1 : float
+        Center of first Gaussian
+    width : float
+        Shared width (standard deviation) for both Gaussians
+    mag2 : float
+        Magnitude of second Gaussian (state population)
+    center2 : float
+        Center of second Gaussian
+        
+    Returns
+    -------
+    np.ndarray
+        Sum of two Gaussians at input x points
+    """
+    x = np.asarray(x)
+    
+    gaussian1 = mag1 * np.exp(-0.5 * ((x - center1) ** 2) / (width1**2))
+    gaussian2 = mag2 * np.exp(-0.5 * ((x - center2) ** 2) / (width2**2))
+    
+    return gaussian1 + gaussian2
+
 
 def t1_decay_distribution(voltage: ArrayLike, v_ground: float, v_excited: float, 
                          sigma: float, t_ratio: float) -> np.ndarray:
@@ -583,7 +619,7 @@ def calculate_discrimination_metrics(ground_data: ArrayLike, excited_data: Array
 
 def analyze_single_shot_histograms(data: IQData, plot: bool = True, span: Optional[float] = None, 
                                  ax: Optional[List[plt.Axes]] = None, verbose: bool = False, 
-                                 qubit: int = 0) -> Tuple[Dict[str, Any], Optional[plt.Figure]]:
+                                 qubit: int = 0, seq_mode: str = "pi") -> Tuple[Dict[str, Any], Optional[plt.Figure]]:
     """
     Analyze and visualize IQ data histograms for quantum state discrimination.
     
@@ -607,7 +643,9 @@ def analyze_single_shot_histograms(data: IQData, plot: bool = True, span: Option
         Whether to print detailed information, default is False
     qubit : int, optional
         Qubit index for plot title, default is 0
-        
+    seq_mode : str, optional
+        Sequence mode for plot title, default is "pi"
+
     Returns
     -------
     tuple
@@ -804,7 +842,12 @@ def analyze_single_shot_histograms(data: IQData, plot: bool = True, span: Option
         # Plot histogram with fits
         ax[1].set_ylabel("Probability")
         ax[1].set_xlabel("I (ADC levels)")
-        ax[1].set_title(f"Histogram (Fidelity g-e: {100*fids[0]:.3}%)")
+        if seq_mode == '4wm':
+            print(data.keys()   )
+            ax[1].set_title(f'P_e : {data["Pe"]:.3f}')
+            #ax[1].set_title(f"Histogram (Fidelity g-e: {100*fids[0]:.3}%)")
+        else:
+            ax[1].set_title(f"Histogram (Fidelity g-e: {100*fids[0]:.3}%)")
         
         # Plot threshold line
         ax[1].axvline(thresholds[0], color="0.2", linestyle="--")
@@ -817,20 +860,26 @@ def analyze_single_shot_histograms(data: IQData, plot: bool = True, span: Option
             ax[1].plot(data["vhe"], data["histe"], '.-', color=COLORS['excited'], markersize=0.5, linewidth=0.3)
             
             # Plot fitted curves
-            if 'paramsg' in data and 'vg' in data and 've' in data and 'sigma' in data and 'tm' in data:
-                ax[1].plot(data["vhg"], gaussian(data["vhg"], 1, *data['paramsg']), 'k', linewidth=1)
-                ax[1].plot(data["vhe"], excited_state_model(data["vhe"], data['vg'], data['ve'], data['sigma'], data['tm']), 'k', linewidth=1)
+            
+            if seq_mode == '4wm':
                 
-                # Add text annotation with fit parameters
-                sigma = data['sigma']
-                tm = data['tm']
-                txt = f"Threshold: {thresholds[0]:.2f}"
-                txt += f" \n Width: {sigma:.2f}"
-                txt += f" \n $T_m/T_1$: {tm:.2f}"
-                ax[1].text(0.025, 0.965, txt, 
-                       transform=ax[1].transAxes, fontsize=10, 
-                       verticalalignment='top', horizontalalignment='left', 
-                       bbox=dict(facecolor='none', edgecolor='black', alpha=0.5))
+                ax[1].plot(data["vhg"], double_gaussian_xnorm(data["vhg"], data["mag1_g"], data["mu1_g"], data["sig1_g"], data["mag2_g"], data["mu2_g"],data["sig2_g"]), 'k', linewidth=1)
+                ax[1].plot(data["vhe"], double_gaussian_xnorm(data["vhe"], data["mag1_e"], data["mu1_e"], data["sig1_e"], data["mag2_e"], data["mu2_e"],data["sig2_e"]), 'k', linewidth=1)
+            else:
+                if 'paramsg' in data and 'vg' in data and 've' in data and 'sigma' in data and 'tm' in data:
+                    ax[1].plot(data["vhg"], gaussian(data["vhg"], 1, *data['paramsg']), 'k', linewidth=1)
+                    ax[1].plot(data["vhe"], excited_state_model(data["vhe"], data['vg'], data['ve'], data['sigma'], data['tm']), 'k', linewidth=1)
+                    
+                    # Add text annotation with fit parameters
+                    sigma = data['sigma']
+                    tm = data['tm']
+                    txt = f"Threshold: {thresholds[0]:.2f}"
+                    txt += f" \n Width: {sigma:.2f}"
+                    txt += f" \n $T_m/T_1$: {tm:.2f}"
+                    ax[1].text(0.025, 0.965, txt, 
+                        transform=ax[1].transAxes, fontsize=10, 
+                        verticalalignment='top', horizontalalignment='left', 
+                        bbox=dict(facecolor='none', edgecolor='black', alpha=0.5))
         
         # Plot f state if available
         if plot_f:
