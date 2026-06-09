@@ -649,13 +649,13 @@ class ResSpec(QickExperiment):
         """
         qi = self.cfg.expt.qubit[0]
         cfg_file=self.config_file
-        
+        if freq: 
+            config.update_readout(cfg_file, 'frequency', self.data['freq_min'], qi, verbose=verbose)
+                
         # Only update if experiment was successful
         if self.status: 
             # Update resonator frequency if requested
-            if freq: 
-                config.update_readout(cfg_file, 'frequency', self.data['freq_min'], qi, verbose=verbose)
-                
+            
             # Update resonator linewidth if valid
             if self.data['kappa'] > 0:
                 config.update_readout(cfg_file, 'kappa', self.data['kappa'], qi, verbose=verbose)
