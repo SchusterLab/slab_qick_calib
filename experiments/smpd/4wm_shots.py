@@ -190,6 +190,7 @@ class SMPDHistogramProgram(QickSMPDProgram):
         self.add_pulse(
             ch=self.qubit_ch, name="pump_reset", style="const", ro_ch=self.all_adc_chs[1],
             freq=self.f_p, phase=0, gain=self.gain_p, length=self.t_reset #, envelope="gauss_pump"
+            #freq=self.f_p, phase=0, gain=0, length=self.t_reset #, envelope="gauss_pump"
         )
         self.add_pulse(
             ch=self.all_res_chs[1], name="waste_reset", style="const", ro_ch=self.all_adc_chs[1],
@@ -244,8 +245,8 @@ class SMPDHistogramProgram(QickSMPDProgram):
 
         if cfg.expt.active_reset:
             #self.reset2(cfg.expt.reset)
-            super().reset(6) # works
-            #self.reset_4wm(6)
+            #super().reset(6) # works
+            self.reset_4wm(10)
         if cfg.expt.remeas:
             self.repeated_measurement(5)
 

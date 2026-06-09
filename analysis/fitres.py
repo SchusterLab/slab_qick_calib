@@ -407,7 +407,7 @@ def finefit(f, z, fr_0,p0=None):
     Qc_fine =  Qc_hat_mag_fine/np.cos(phi_fine)
 
 
-    return fr_fine, Qr_fine, Qc_hat_mag_fine, a_fine, phi_fine, tau_fine, Qc_fine, fcov[0,0]
+    return fr_fine, Qr_fine, Qc_hat_mag_fine, a_fine, phi_fine, tau_fine, Qc_fine, fcov[0,0], fparams
 
 def sweep_fit_from_file(fname, nsig=3, fwindow=5e-4, chan="S21", h5_rewrite=False, pdf_rewrite=False, additions=[], start_f=None, stop_f=None):
     """

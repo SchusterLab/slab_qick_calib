@@ -89,6 +89,9 @@ class QubitSpecProgram(QickProgram):
         if cfg.expt.checkEF:
             super().make_cfg_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
 
+        if cfg.expt.checkFG:
+            super().make_cfg_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ef, "pi_ef")
+
     def _body(self, cfg):
         """
         Define the main body of the experiment sequence.
@@ -107,6 +110,11 @@ class QubitSpecProgram(QickProgram):
             self.pulse(ch=self.qubit_ch, name="pi_ge", t=0)
             self.delay_auto(t=0.01, tag="wait 1")
 
+        if cfg.expt.checkFG:
+            self.pulse(ch=self.qubit_ch, name="pi_ef", t=0)
+            self.delay_auto(t=0.01, tag="wait ef")
+
+
         # Apply the probe pulse with variable frequency
         self.pulse(ch=self.qubit_ch, name="qubit_pulse", t=0)
 
@@ -115,7 +123,7 @@ class QubitSpecProgram(QickProgram):
             self.delay_auto(t=0.01, tag="wait")
 
         # If checking EF transition, apply second pi pulse to return to |g> for readout
-        if cfg.expt.checkEF:
+        if cfg.expt.checkEF and not cfg.expt.checkFG:
             self.pulse(ch=self.qubit_ch, name="pi_ge", t=0)
             self.delay_auto(t=0.01, tag="wait 2")
 
@@ -263,6 +271,7 @@ class QubitSpec(QickExperiment):
             "readout_length": self.cfg.device.readout.readout_length[qi],
             "pulse_type": "const",
             "checkEF": False,
+            "checkFG": False,
             "qubit": [qi],
             "qubit_chan": self.cfg.hw.soc.adcs.readout.ch[qi],
             "sep_readout": True,

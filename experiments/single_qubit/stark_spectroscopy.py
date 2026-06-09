@@ -58,6 +58,7 @@ class QubitStarkSpecProgram(QickProgram):
 
         # Initialize with standard readout
         super()._initialize(cfg, readout="standard")
+        self.declare_gen(ch = cfg.expt.stark_chan)
 
         # Define the qubit pulse with variable frequency
         pulse = {
@@ -71,7 +72,7 @@ class QubitStarkSpecProgram(QickProgram):
 
         # Define the Stark pulse applied to the resonator
         stark_pulse = {
-            "chan": self.res_ch,
+            "chan": cfg.expt.stark_chan,
             "freq": cfg.expt.stark_freq,
             "gain": cfg.expt.stark_gain,
             "type": cfg.expt.pulse_type,
@@ -97,7 +98,7 @@ class QubitStarkSpecProgram(QickProgram):
         if self.adc_type == "dyn":
             self.send_readoutconfig(ch=self.adc_ch, name="readout", t=0)
         
-        self.pulse(ch=self.res_ch, name="stark_pulse", t=0)
+        self.pulse(ch=cfg.expt.stark_chan, name="stark_pulse", t=0)
         self.delay(t=cfg.expt.stark_length-cfg.expt.length)
         # Apply qubit pulses 
         self.pulse(ch=self.qubit_ch, name="qubit_pulse", t=0)
@@ -217,6 +218,7 @@ class StarkSpec(QickExperiment2DSweep):
             "rounds": self.rounds,
             "final_delay": 20,
             "length": 5,
+            "stark_chan": self.cfg.hw.soc.dacs.readout.ch[qi],
             "stark_length":15,
             "stark_expts": 30,
             "df_stark": 0,
@@ -242,7 +244,7 @@ class StarkSpec(QickExperiment2DSweep):
 
         # Set Stark pulse frequency
         params["stark_freq"] = (
-            self.cfg.device.readout.frequency[qi] + params["df_stark"]
+            self.cfg.device.readout.frequency[params["stark_chan"]] + params["df_stark"]
         )
 
 
@@ -353,7 +355,7 @@ class StarkSpec(QickExperiment2DSweep):
             #     self.cfg.device.qubit.f_ge[self.cfg.expt.qubit[0]]
             #     - self.cfg.device.readout.frequency[self.cfg.expt.qubit[0]]
             # )
-            chi = self.cfg.device.readout.chi[self.cfg.expt.qubit[0]]
+            chi = self.cfg.device.readout.chi[self.cfg.expt.stark_chan]
             n = popt[0]  / chi
             self.data["n"] = n
             print(f"n photons/unit gain: {n}") # This is n photons/gain

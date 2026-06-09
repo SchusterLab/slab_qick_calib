@@ -458,7 +458,7 @@ class RabiExperiment(QickExperiment):
         self,
         data=None,
         fit=True,
-        plot_all=False,
+        plot_all=True,
         ax=None,
         show_hist=False,
         rescale=False,

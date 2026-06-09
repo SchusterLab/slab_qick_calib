@@ -120,8 +120,10 @@ class QubitSpecShotProgram(QickProgram):
             self.delay_auto(t=0.01, tag="wait 1")
 
         # Apply the probe pulse with variable frequency
-        self.pulse(ch=self.qubit_ch, name="qubit_pulse", t=0)
-        self.pulse(ch=cfg.hw.soc.dacs.readout.ch[0], name="buffer_pulse", t=cfg.expt.delay_b)
+        if cfg.expt.do_pump:
+            self.pulse(ch=self.qubit_ch, name="qubit_pulse", t=0)
+        if cfg.expt.do_buffer:
+            self.pulse(ch=cfg.hw.soc.dacs.readout.ch[0], name="buffer_pulse", t=cfg.expt.delay_b)
 
         # Add delay if separate readout is enabled
         if cfg.expt.sep_readout:
@@ -285,6 +287,9 @@ class QubitSpecShot(QickExperiment):
             "qubit_chan": self.cfg.hw.soc.adcs.readout.ch[qi],
             "sep_readout": True,
             "active_reset": False,
+            "save_shots": False,
+            "do_buffer": True,
+            "do_pump": True
         }
         params_def = {**params_def2, **params_def}
 
@@ -359,7 +364,7 @@ class QubitSpecShot(QickExperiment):
         )
 
         # Acquire data using the QubitSpecProgram
-        super().acquire(QubitSpecShotProgram, progress=progress)
+        super().acquire(QubitSpecShotProgram, progress=progress,shots=True)
 
         return self.data
 
@@ -377,6 +382,7 @@ class QubitSpecShot(QickExperiment):
         """
         if data is None:
             data = self.data
+        
 
         if fit:
             # Fit the data to a Lorentzian model
@@ -386,6 +392,15 @@ class QubitSpecShot(QickExperiment):
 
             # Store the fitted qubit frequency
             data["new_freq"] = data["best_fit"][2]
+        
+        if 'shots' in data:
+            qi = self.cfg.expt.qubit[0]
+            threshold = self.cfg.device.readout.threshold[qi]
+            i_shots = data['shots'][0, 0, :, :, 0]  # (n_rounds, n_sweep_pts)
+            data['p_e'] = np.mean(i_shots > threshold, axis=0)
+            if not self.cfg.expt.save_shots:
+                data.pop("shots")  # Remove raw shots from data to save space
+
 
         # # Perform initial histogram analysis
         # params, _ = helpers.analyze_single_shot_histograms(data=data, plot=False, span=span, verbose=verbose)
@@ -623,6 +638,16 @@ class QubitSpecShotPower(QickExperiment2DSimple):
             # Fit each frequency slice to a Lorentzian model
             super().analyze(fitterfunc=FITTER_FUNC, fitfunc=FIT_FUNC)
 
+        if 'shots' in data:
+            qi = self.cfg.expt.qubit[0]
+            threshold = self.cfg.device.readout.threshold[qi]
+            data['p_e'] = np.zeros((data['shots'].shape[0], data['shots'].shape[4]))  # Initialize p_e array
+            for i in range(len(data['gain_p_pts'])):
+                i_shots = data['shots'][i, 0, 0, :, :, 0]  # (n_rounds, n_sweep_pts)
+                data['p_e'][i] = np.mean(i_shots > threshold, axis=0)
+
+            data.pop("shots")  # Remove raw shots from data to save space
+
         return self.data
 
     def display(self, data=None, fit=True, plot_amps=True, ax=None, **kwargs):
@@ -820,6 +845,17 @@ class QubitSpecShotBuffer(QickExperiment2DSimple):
         if fit:
             # Fit each frequency slice to a Lorentzian model
             super().analyze(fitterfunc=FITTER_FUNC, fitfunc=FIT_FUNC)
+        
+        if 'shots' in data:
+            qi = self.cfg.expt.qubit[0]
+            threshold = self.cfg.device.readout.threshold[qi]
+            data['p_e'] = np.zeros((data['shots'].shape[0], data['shots'].shape[4]))  # Initialize p_e array
+            for i in range(len(data['frequency_b_pts'])):
+                i_shots = data['shots'][i, 0, 0, :, :, 0]  # (n_rounds, n_sweep_pts)
+                data['p_e'][i] = np.mean(i_shots > threshold, axis=0)
+
+            data.pop("shots")  # Remove raw shots from data to save space
+
 
         return self.data
 

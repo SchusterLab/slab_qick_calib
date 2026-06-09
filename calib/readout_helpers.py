@@ -843,8 +843,8 @@ def analyze_single_shot_histograms(data: IQData, plot: bool = True, span: Option
         ax[1].set_ylabel("Probability")
         ax[1].set_xlabel("I (ADC levels)")
         if seq_mode == '4wm':
-            print(data.keys()   )
-            ax[1].set_title(f'P_e : {data["Pe"]:.3f}')
+            pe_str = f'{data["Pe"]:.3f}' if "Pe" in data else "N/A"
+            ax[1].set_title(f'P_e : {pe_str}')
             #ax[1].set_title(f"Histogram (Fidelity g-e: {100*fids[0]:.3}%)")
         else:
             ax[1].set_title(f"Histogram (Fidelity g-e: {100*fids[0]:.3}%)")

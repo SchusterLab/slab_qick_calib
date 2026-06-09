@@ -264,7 +264,7 @@ class T1Experiment(QickExperiment):
         )
 
         # Run the T1Program to acquire data
-        super().acquire(T1Program, progress=progress)
+        super().acquire(T1Program, progress=progress,shots=True)
 
         return self.data
 
@@ -291,13 +291,23 @@ class T1Experiment(QickExperiment):
         # Extract T1 time from fit parameters
         data["new_t1"] = data["best_fit"][2]  # T1 from combined I/Q fit
         data["new_t1_i"] = data["fit_avgi"][2]  # T1 from I quadrature fit
+
+        if 'shots' in data:
+            # Calculate excited state probability from shots
+            qi = self.cfg.expt.qubit[0]
+            threshold = self.cfg.device.readout.threshold[qi]
+            i_shots = data['shots'][0, 0, :, :, 0]  # (n_rounds, n_sweep_pts)
+            data['p_e'] = np.mean(i_shots > threshold, axis=0)
+
+            data.pop("shots")  # Remove raw shots from data to save space
+
         return data
 
     def display(
         self,
         data=None,
         fit=True,
-        plot_all=False,
+        plot_all=True,
         ax=None,
         show_hist=False,
         rescale=False,

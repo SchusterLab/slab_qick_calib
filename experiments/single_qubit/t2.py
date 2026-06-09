@@ -527,7 +527,7 @@ class T2Experiment(QickExperiment):
         fit=True,
         fit_twofreq=False,
         debug=False,
-        plot_all=False,
+        plot_all=True,
         ax=None,
         savefig=True,
         refit=False,
