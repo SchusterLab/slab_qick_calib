@@ -5,7 +5,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from ..helpers import config
+from ..helpers import config, rfboard
 import slab_qick_calib.experiments as meas
 from . import qubit_tuning
 
@@ -14,9 +14,27 @@ plt.rcParams["legend.handlelength"] = 0.5
 
 # Default parameters
 MAX_T1 = 500  # Maximum T1 time in microseconds
+DEFAULT_MIN_T1 = 1.0  # Default minimum T1 time in microseconds
+DEFAULT_MIN_T2 = 1.0  # Default minimum T2 time in microseconds
 MAX_ERR = 1  # Maximum acceptable error in fits
 MIN_R2 = 0.35  # Minimum acceptable R² value for fits
 TOL = 0.3  # Tolerance for parameter convergence
+
+
+def get_min_t1(cfg, qi):
+    """Get per-qubit minimum T1 from config, falling back to DEFAULT_MIN_T1."""
+    try:
+        return cfg.device.qubit.min_T1[qi]
+    except (AttributeError, KeyError, IndexError):
+        return DEFAULT_MIN_T1
+
+
+def get_min_t2(cfg, qi):
+    """Get per-qubit minimum T2 from config, falling back to DEFAULT_MIN_T2."""
+    try:
+        return cfg.device.qubit.min_T2[qi]
+    except (AttributeError, KeyError, IndexError):
+        return DEFAULT_MIN_T2
 
 
 def measure_params(
@@ -56,6 +74,9 @@ def measure_params(
         Dictionary containing measured qubit parameters
     """
     cfg_path = cfg_dict["cfg_file"]
+    auto_cfg = config.load(cfg_path)
+    min_t1 = get_min_t1(auto_cfg, qi)
+    min_t2 = get_min_t2(auto_cfg, qi)
     err_dict = {}
 
     if not fast:
@@ -116,7 +137,7 @@ def measure_params(
             "T2r",
             t2r.data["best_fit"][3],
             qi,
-            rng_vals=[1, max_t1],
+            rng_vals=[min_t2, max_t1],
             sig=2,
             verbose=False,
         )
@@ -133,7 +154,7 @@ def measure_params(
         cfg_dict, qi=qi, display=display, progress=False, params={"span": 300}
     )
     if update:
-        t1.update(rng_vals=[1, max_t1], verbose=False)
+        t1.update(rng_vals=[min_t1, max_t1], verbose=False)
 
     if not t1.status:
         t1.data["new_t1_i"] = np.nan
@@ -158,7 +179,7 @@ def measure_params(
                 "T2e",
                 t2e.data["best_fit"][3],
                 qi,
-                rng_vals=[1, max_t1],
+                rng_vals=[min_t2, max_t1],
                 sig=2,
                 verbose=False,
             )
@@ -255,6 +276,9 @@ def measure_cohere(qi, cfg_dict, update=True, display=False, max_t1=MAX_T1):
         Dictionary containing measured qubit parameters
     """
     cfg_path = cfg_dict["cfg_file"]
+    auto_cfg = config.load(cfg_path)
+    min_t1 = get_min_t1(auto_cfg, qi)
+    min_t2 = get_min_t2(auto_cfg, qi)
 
     # Step 1: T2 Ramsey
     t2r = meas.T2Experiment(
@@ -268,7 +292,7 @@ def measure_cohere(qi, cfg_dict, update=True, display=False, max_t1=MAX_T1):
             "T2r",
             t2r.data["best_fit"][3],
             qi,
-            rng_vals=[1, max_t1],
+            rng_vals=[min_t2, max_t1],
             sig=2,
             verbose=False,
         )
@@ -282,14 +306,17 @@ def measure_cohere(qi, cfg_dict, update=True, display=False, max_t1=MAX_T1):
     )
     # t1 = meas.T1Experiment(cfg_dict, qi=qi, display=display, progress=False, params={'span':300})
     if update:
-        t1.update(rng_vals=[1, max_t1], verbose=False)
+        t1.update(rng_vals=[min_t1, max_t1], verbose=False)
 
     if not t1.status:
         t1.data["new_t1_i"] = np.nan
         t1.display(debug=True)
         print("T1 failed")
 
-    qubit_dict = set_up_dict(t1, t2r)
+    if t1 is None or t2r is None:        
+        qubit_dict = {}
+    else:
+        qubit_dict = set_up_dict(t1, t2r)
 
     return qubit_dict
 
@@ -335,6 +362,7 @@ def measure_setup(qi, cfg_dict):
 
 def measure_fast(qi, cfg_dict, i, tdir, t1_val, t2_val, display=False,t2_type='T2r'):
     fname = str(Path(tdir) / f"t1_qubit{qi}_{i:05d}")
+    
     t1 = meas.T1Experiment(
         cfg_dict,
         qi=qi,
@@ -345,11 +373,15 @@ def measure_fast(qi, cfg_dict, i, tdir, t1_val, t2_val, display=False,t2_type='T
         params={"span": 3.7 * t1_val},
     )
 
+
+
     fname = str(Path(tdir) / f"{t2_type}_qubit{qi}_{i:05d}")
+    ramsey_freq = 1.5 / t2_val
     if t2_type=='T2r':
-        params = {"span": 3.2 * t2_val, 'experiment_type': 'ramsey'}
+        params = {"span": 3.2 * t2_val, 'experiment_type': 'ramsey', 'ramsey_freq': ramsey_freq}
     else:
-        params = {"span": 3.2 * t2_val, 'experiment_type': 'echo'}
+        params = {"span": 3.2 * t2_val, 'experiment_type': 'echo', 'ramsey_freq': ramsey_freq}
+    
     t2 = meas.T2Experiment(
         cfg_dict,
         qi=qi,
@@ -359,7 +391,7 @@ def measure_fast(qi, cfg_dict, i, tdir, t1_val, t2_val, display=False,t2_type='T
         style="fast",
         params=params,
     )
-
+   
     qubit_dict = set_up_dict(t1, t2)
     return qubit_dict
 
@@ -383,7 +415,7 @@ def measure_fast2(qi, cfg_dict, i, t2e=None, t1=None, t1_val=30, t2_val=30):
     return t1, t2e
 
 
-def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True, bf_client=None):
+def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True, bf_client=None, soc=None, t1_max=None, t2_max=None, csv_subdir=None):
     """
     Track qubit parameters over time.
 
@@ -400,6 +432,16 @@ def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True,
         Total tracking time in hours
     display : bool, optional
         Whether to display plots during measurements
+    soc : object, optional
+        QICK SoC object. If provided, calls rfboard.activate_qubit_rf()
+        before each qubit's measurements to switch RF filters/attenuators.
+    t1_max : float, optional
+        Maximum allowed T1 value (µs). Measured values exceeding this are clamped.
+    t2_max : float, optional
+        Maximum allowed T2 value (µs). Measured values exceeding this are clamped.
+    csv_subdir : str, optional
+        Subdirectory within Tracking/csv/ to save CSVs into (e.g. for grouping
+        a temperature sweep). If None, saves directly in Tracking/csv/.
 
     Returns
     -------
@@ -409,7 +451,7 @@ def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True,
         path where the data is saved
     """
     # Create directory for tracking data
-    base_path = Path(cfg_dict["expt_path"]).parent / "Tracking"
+    base_path = Path(cfg_dict["expt_path"]) / "Tracking"
     tracking_id = f'{datetime.now().strftime("%Y_%m_%d_%H_%M")}_{total_time:.1f}hrs'
     tracking_path = base_path / tracking_id
     tracking_path.mkdir(parents=True, exist_ok=True)
@@ -438,35 +480,59 @@ def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True,
             except Exception as e:
                 print(f"Warning: failed to read pulsetube status: {e}")
 
+        # Track which qubits succeeded this iteration (for CSV update)
+        iter_success = [True] * len(qubit_list)
+
         for j, qi in enumerate(qubit_list):
             # Measure current time
             tm = time.time()
             elapsed = (tm - start_time) / 3600
             print(f"Starting run {i}, for qubit {qi}. Time elapsed {elapsed:.2f} hrs")
 
+            # Switch RF board to this qubit's settings
+            if soc is not None:
+                auto_cfg = config.load(cfg_dict["cfg_file"])
+                auto_cfg = rfboard.activate_qubit_rf(qi, soc, auto_cfg, cfg_file=cfg_dict["cfg_file"])
+
             # Measure qubit parameters
             if fast:
                 if i == 0:
-                    t2 = 'T2e'
-                    auto_cfg = config.load(cfg_dict["cfg_file"])
+                    t2 = 'T2r'
+                    if soc is None:
+                        auto_cfg = config.load(cfg_dict["cfg_file"])
                     t1_val = auto_cfg["device"]["qubit"]["T1"][qi]
                     t2_val = auto_cfg["device"]["qubit"][t2][qi]
                 else:
                     t1_val = tracking_data[j]["t1"][-1]
                     t2_val = tracking_data[j]["t2"][-1]
-                    
-                
 
-                # cfg_dict['cfg_file']=None
-                d = measure_fast(qi, cfg_dict, i, tracking_path, t1_val, t2_val, display=display, t2_type=t2)
-                t1_val = d["t1"]
-                t2_val = d["t2"]
-                # d = measure_cohere(qi, cfg_dict, display=display)
-                # d = measure_params(qi, cfg_dict, display=display, fast=True,  check_fid=False)
+                try:
+                    d = measure_fast(qi, cfg_dict, i, tracking_path, t1_val, t2_val, display=display, t2_type=t2)
+                    if not d:
+                        raise RuntimeError("Measurement returned empty result")
+                    t1_val = d["t1"]
+                    t2_val = d["t2"]
+                except Exception as e:
+                    print(f"Measurement failed for qubit {qi} on run {i}: {e}")
+                    print("Using previous t1/t2 values for next iteration")
+                    iter_success[j] = False
+                    continue
             else:
-                d = measure_params(
-                    qi, cfg_dict, display=display, fast=False, check_fid=False
-                )
+                try:
+                    d = measure_params(
+                        qi, cfg_dict, display=display, fast=False, check_fid=False
+                    )
+                except Exception as e:
+                    print(f"Measurement failed for qubit {qi} on run {i}: {e}")
+                    iter_success[j] = False
+                    continue
+
+            # Clamp t1/t2 to max values if specified
+            if t1_max is not None and d["t1"] > t1_max:
+                d["t1"] = t1_max
+            if t2_max is not None and d["t2"] > t2_max:
+                d["t2"] = t2_max
+
             d["time"] = tm
             d["elapsed"] = elapsed
             if bf_client is not None:
@@ -486,10 +552,15 @@ def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True,
 
         i += 1
 
-        # Save tracking data to CSV files
+        # Save tracking data to CSV files (only for qubits that succeeded)
         for j, qi in enumerate(qubit_list):
+            if not iter_success[j]:
+                continue
+
             csv_dir = base_path / "csv"
-            csv_dir.mkdir(exist_ok=True)
+            if csv_subdir is not None:
+                csv_dir = csv_dir / csv_subdir
+            csv_dir.mkdir(parents=True, exist_ok=True)
             csv_path = str(csv_dir / f"{tracking_id}_qubit_{qi}_tracking.csv")
 
             # Convert tracking data dict to numpy arrays for saving
@@ -500,10 +571,9 @@ def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True,
             # Create header and data rows
             header = ",".join(data_arrays.keys())
             rows = np.vstack(list(data_arrays.values())).T
-            # Future change to only add a new row 
+            # Future change to only add a new row
             # Save to CSV
             np.savetxt(csv_path, rows, delimiter=",", header=header, comments="", fmt="%.5f")
-
 
     tt_stats = calc_stats(tracking_data)
 
@@ -571,7 +641,17 @@ def load_tracking(csv_dir, tracking_id=None, qubit_list=None):
     tracking_base = csv_dir.parent  # csv_dir is Tracking/csv, so parent is Tracking
     (tracking_base / "images").mkdir(exist_ok=True)
 
-    print(f"Loaded tracking_id='{tracking_id}', qubits={qubit_list}")
+    # Report when CSVs were last updated
+    most_recent = max(fpath.stat().st_mtime for _, fpath in files)
+    last_modified = datetime.fromtimestamp(most_recent)
+    elapsed = datetime.now() - last_modified
+    hours, remainder = divmod(int(elapsed.total_seconds()), 3600)
+    minutes = remainder // 60
+    print(
+        f"Loaded tracking_id='{tracking_id}', qubits={qubit_list}\n"
+        f"  CSV last updated: {last_modified.strftime('%Y-%m-%d %H:%M:%S')} "
+        f"({hours}h {minutes}m ago)"
+    )
     return tracking_data, str(csv_dir), tt_stats, tracking_id
 
 
@@ -614,6 +694,8 @@ def recenter(qi, cfg_dict, t2r, update=True, display=False, max_t1=MAX_T1):
         qubit_tuning.find_spec(qi, cfg_dict, start="fine")
         t2r = meas.T2Experiment(cfg_dict, qi=qi, display=display, progress=False)
         if t2r.status and update:
+            auto_cfg = config.load(cfg_dict["cfg_file"])
+            min_t2 = get_min_t2(auto_cfg, qi)
             config.update_qubit(
                 cfg_dict["cfg_file"], "f_ge", t2r.data["new_freq"], qi, verbose=False
             )
@@ -622,7 +704,7 @@ def recenter(qi, cfg_dict, t2r, update=True, display=False, max_t1=MAX_T1):
                 "T2r",
                 t2r.data["best_fit"][3],
                 qi,
-                rng_vals=[1, max_t1],
+                rng_vals=[min_t2, max_t1],
                 sig=2,
                 verbose=False,
             )

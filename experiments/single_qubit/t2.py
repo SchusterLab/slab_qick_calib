@@ -16,11 +16,14 @@ Additional features include:
 """
 
 import numpy as np
+import time
 from qick import *
 from qick.asm_v2 import QickSweep1D
+from tqdm import tqdm
 
 from ...analysis import fitting as fitter
-from ..general.qick_experiment import QickExperiment
+from ..general.qick_experiment import QickExperiment, QickExperiment2DSimple
+from ..general.qick_flux_experiment import QickFluxSweep
 from ..general.qick_program import QickProgram
 
 from ...exp_handling.datamanagement import AttrDict
@@ -102,6 +105,39 @@ class T2Program(QickProgram):
                 "type": "flat_top",  # Constant amplitude pulse
             }
             super().make_pulse(pulse, "stark_pulse")
+        elif cfg.expt.flux:
+            self.declare_gen(cfg.expt.flux_chan, nqz=1, mixer_freq=0)
+            if cfg.expt.num_pi > 0:
+                # Echo: separate flux pulses for half-segments and full segments
+                flux_half = {
+                    "chan": cfg.expt.flux_chan,
+                    "freq": 0,
+                    "phase": 0,
+                    "gain": cfg.expt.flux_gain,
+                    "length": cfg.expt.wait_time / cfg.expt.num_pi / 2,
+                    "type": "const",
+                }
+                super().make_pulse(flux_half, "flux_half")
+                flux_full = {
+                    "chan": cfg.expt.flux_chan,
+                    "freq": 0,
+                    "phase": 0,
+                    "gain": cfg.expt.flux_gain,
+                    "length": cfg.expt.wait_time / cfg.expt.num_pi,
+                    "type": "const",
+                }
+                super().make_pulse(flux_full, "flux_full")
+            else:
+                # Ramsey: single flux pulse for full wait time
+                flux_pulse = {
+                    "chan": cfg.expt.flux_chan,
+                    "freq": 0,
+                    "phase": 0,
+                    "gain": cfg.expt.flux_gain,
+                    "length": cfg.expt.wait_time,
+                    "type": "const",
+                }
+                super().make_pulse(flux_pulse, "flux_pulse")
 
         # Create π pulse for Echo or EF check
         if cfg.expt.experiment_type == "cpmg":
@@ -158,6 +194,26 @@ class T2Program(QickProgram):
                 ch=self.qubit_ch, name="stark_pulse", t=0
             )  # Apply AC Stark pulse
             self.delay_auto(t=0.025, tag="waiting")  # Additional wait time
+        elif cfg.expt.flux:
+            # Flux pulse applied only during wait segments (not during pi pulses)
+            if cfg.expt.num_pi > 0:
+                # Echo with flux: flux on during each wait segment
+                self.pulse(ch=cfg.expt.flux_chan, name="flux_half", t=0)
+                self.delay_auto(t=0.01, tag="wait")
+
+                for i in range(cfg.expt.num_pi):
+                    self.pulse(ch=self.qubit_ch, name="pi_ge", t=0)
+                    self.delay_auto(t=0.01, tag=f"wait_pi{i}")
+                    if i < cfg.expt.num_pi - 1:
+                        self.pulse(ch=cfg.expt.flux_chan, name="flux_full", t=0)
+                        self.delay_auto(t=0.01, tag=f"wait{i}")
+
+                self.pulse(ch=cfg.expt.flux_chan, name="flux_half", t=0)
+                self.delay_auto(t=0.01, tag=f"wait{cfg.expt.num_pi}")
+            else:
+                # Ramsey with flux
+                self.pulse(ch=cfg.expt.flux_chan, name="flux_pulse", t=0)
+                self.delay_auto(t=0.05, tag="wait")
         else:
             # Standard Ramsey or Echo sequence
             # For Echo, divide wait time by (num_pi + 1) to get segments between pulses
@@ -188,6 +244,76 @@ class T2Program(QickProgram):
             self.delay_auto(t=0.01, tag="wait ef 2")  # Small buffer delay
 
         # Measure the qubit state
+        super().measure(cfg)
+
+
+class T2ProgramASM(QickProgram):
+    """
+    CPMG program using hardware ASM loops for large num_pi (e.g. 1000).
+
+    Instead of unrolling pi pulses with a Python for-loop (which generates one
+    tProc instruction per pulse and overflows instruction memory), this uses
+    open_loop/close_loop to repeat the pi-pulse + delay block in hardware.
+
+    Only supports the standard CPMG path (no flux, acStark, or EF).
+    """
+
+    def __init__(self, soccfg, final_delay, cfg, final_wait=0):
+        super().__init__(soccfg, final_delay=final_delay, cfg=cfg, final_wait=0)
+
+    def _initialize(self, cfg):
+        cfg = AttrDict(self.cfg)
+
+        self.add_loop("wait_loop", cfg.expt.expts)
+        super()._initialize(cfg, readout="standard")
+
+        # pi/2 prep pulse (phase=0)
+        pulse = {
+            "sigma": cfg.expt.sigma,
+            "sigma_inc": cfg.expt.sigma_inc,
+            "freq": cfg.expt.freq,
+            "gain": cfg.expt.gain / 2,
+            "phase": 0,
+            "type": cfg.expt.type,
+        }
+        super().make_pulse(pulse, "pi2_prep")
+
+        # pi/2 read pulse (phase advances with Ramsey freq)
+        pulse["phase"] = cfg.expt.wait_time * 360 * cfg.expt.ramsey_freq
+        super().make_pulse(pulse, "pi2_read")
+
+        # CPMG pi pulse (phase=90 relative to pi/2 pulses)
+        cfg.device.qubit.pulses.pi_ge.phase = 90 * np.ones(
+            len(cfg.device.qubit.f_ge)
+        )
+        super().make_cfg_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
+
+    def _body(self, cfg):
+        cfg = AttrDict(self.cfg)
+        if self.adc_type == "dyn":
+            self.send_readoutconfig(ch=self.adc_ch, name="readout", t=0)
+
+        tau = cfg.expt.wait_time / cfg.expt.num_pi / 2
+
+        # pi/2 preparation
+        self.pulse(ch=self.qubit_ch, name="pi2_prep", t=0.0)
+        self.delay_auto(t=tau, tag="wait_first_half")
+
+        if cfg.expt.num_pi > 1:
+            # N-1 pi pulses in hardware loop
+            self.open_loop(cfg.expt.num_pi - 1, "cpmg_loop")
+            self.pulse(ch=self.qubit_ch, name="pi_ge", t=0)
+            self.delay_auto(t=2 * tau + 0.01, tag="wait_cpmg")
+            self.close_loop()
+
+        # Last pi pulse + final half-wait
+        self.pulse(ch=self.qubit_ch, name="pi_ge", t=0)
+        self.delay_auto(t=tau + 0.01, tag="wait_last_half")
+
+        # pi/2 readout
+        self.pulse(ch=self.qubit_ch, name="pi2_read", t=0)
+        self.delay_auto(t=0.01, tag="wait_rd")
+
         super().measure(cfg)
 
 
@@ -300,7 +426,14 @@ class T2Experiment(QickExperiment):
             "acStark": False,  # No AC Stark shift by default
             "checkEF": False,  # No EF transition check by default
             "qubit_chan": self.cfg.hw.soc.adcs.readout.ch[qi],  # Readout channel
+            "flux": False,  # Whether to apply flux pulse during wait time
         }
+        if params.get("flux", False):
+            flux_params = {
+                "flux_chan": self.cfg.hw.soc.dacs.flux.ch[qi],
+                "flux_gain": 0.1,
+            }
+            params_def = {**params_def, **flux_params}
 
         # Adjust parameters based on measurement style
         if style == "fine":
@@ -319,7 +452,9 @@ class T2Experiment(QickExperiment):
             params["ramsey_freq"] = 1.5 / self.cfg.device.qubit[par][qi]
 
         # Set number of π pulses based on experiment type
-        if params["experiment_type"] == "echo":
+        if params["experiment_type"] == "cpmg":
+            params_def["num_pi"] = 1  # CPMG requires at least 1 π pulse
+        elif params["experiment_type"] == "echo":
             params_def["num_pi"] = 1  # Standard echo has 1 π pulse
         else:
             params_def["num_pi"] = 0  # Ramsey has 0 π pulses
@@ -373,14 +508,21 @@ class T2Experiment(QickExperiment):
         # Define parameter metadata for plotting
         self.param = {"label": "wait", "param": "t", "param_type": "time"}
 
+        # Ensure sweep step size is above DAC minimum resolution
+        self.check_dac_timing(num_segments=self.cfg.expt.num_pi + 1)
+
         # Create a 1D sweep for the wait time from start to start+span
         self.cfg.expt.wait_time = QickSweep1D(
             "wait_loop", self.cfg.expt.start, self.cfg.expt.start + self.cfg.expt.span
         )
 
-        # Run the T2Program to acquire data
+        # Use ASM hardware loop for CPMG with many pi pulses
+        if self.cfg.expt.experiment_type == "cpmg" and self.cfg.expt.num_pi > 10:
+            prog_cls = T2ProgramASM
+        else:
+            prog_cls = T2Program
 
-        super().acquire(T2Program, progress=progress)
+        super().acquire(prog_cls, progress=progress)
 
         # Adjust x-axis values to account for echo protocol
         # For echo, the effective wait time is longer due to the π pulses
@@ -601,4 +743,192 @@ class T2Experiment(QickExperiment):
             caption_params=caption_params,
             savefig=savefig,
             rescale=rescale,
+            **kwargs,
         )
+
+
+class T2FastFlux(QickFluxSweep):
+    """
+    T2FastFlux: Sweep T2 across flux gain values.
+
+    Runs a T2Experiment at each flux gain point, collecting T2 vs flux gain (and
+    optionally vs frequency). Saves a single HDF5 file with save_interim after
+    each gain point. Performs adaptive span adjustment between scans.
+
+    Automatically reads flux model parameters from config (saved by QubitSpecFastFlux).
+    Supports both transmon SQUID model (transmon_*) and quadratic (quad_a/b/c) parameters,
+    preferring the transmon model when available. The gain sweep starts at sweet_spot_ac
+    by default.
+
+    Sweep parameters (passed via params dict):
+        gain_start: Starting flux gain value (default: sweet_spot_ac)
+        gain_stop: Ending flux gain value (default: sweet_spot_ac + 0.4)
+        direction: 'pos' or 'neg' — sweep direction from sweet spot (default: 'pos').
+            Sets gain_stop relative to sweet spot if gain_stop not explicitly given.
+        freq_span: Frequency span in MHz. When provided with a flux model, converts
+            to a gain range. Overrides gain_stop.
+        expts_gain: Number of gain points in the sweep
+        flux_converter: Optional FluxConverter instance. If not provided, loads from config.
+        lin_freq: If True and flux model available, space points linearly in
+            frequency instead of linearly in gain.
+        experiment_type: 'ramsey' or 'echo' (default: 'ramsey')
+    """
+
+    def __init__(
+        self,
+        cfg_dict,
+        qi=0,
+        go=True,
+        params={},
+        prefix=None,
+        progress=False,
+        display=True,
+    ):
+        if prefix is None:
+            prefix = f"t2_fastflux_qubit{qi}"
+
+        super().__init__(cfg_dict=cfg_dict, prefix=prefix, qi=qi)
+
+        sweet_spot, gain_stop = self._init_flux_sweep(qi, params)
+        direction = params.get("direction", "pos")
+        freq_span = params.get("freq_span", None)
+
+        # start_t2: assumed T2 for the first gain point, sets initial span
+        start_t2 = params.pop("start_t2", None)
+
+        params_def = {
+            "gain_start": sweet_spot,
+            "gain_stop": gain_stop,
+            "start": 0.05,
+            "expts": 25,
+            "expts_gain": 50,
+            "freq_span": freq_span,
+            "direction": direction,
+            "lin_freq": True,
+            "t2_max": float("inf"),
+        }
+
+        if start_t2 is not None:
+            params_def["span"] = 4.1 * start_t2
+        params = {**params_def, **params}
+
+        self.expt = T2Experiment(cfg_dict, qi, go=False, params=params, check_params=False)
+        params = {**self.expt.cfg.expt, **params, "flux": True}
+        self.cfg.expt = {**params_def, **params}
+
+        self._qi = qi
+        self._cfg_dict = cfg_dict
+
+        self._build_gain_freq_pts()
+
+        if go:
+            self.acquire(progress=progress, display=display)
+            self.display()
+
+    def acquire(self, progress=False, display=True):
+        data = {"time": []}
+        t2_list = []
+        offset_list = []
+        amp_list = []
+        q_offset_list = []
+        q_amp_list = []
+
+        for i, g in enumerate(tqdm(self.gain_pts, disable=not progress)):
+            # Update inner experiment config for this gain point
+            self.expt.cfg.expt["flux_gain"] = float(g)
+
+            # Run inner T2 scan and analyze
+            data_new = self.expt.acquire(progress=False)
+            self.expt.analyze(data=data_new)
+            if display:
+                self.expt.display(data=data_new)
+
+            # Accumulate raw 2D data
+            for key in ("avgi", "avgq", "amps", "phases", "xpts"):
+                if key in data_new:
+                    if i == 0:
+                        data[key] = []
+                    data[key].append(data_new[key])
+            data["time"].append(time.time())
+
+            # T2 fit: [yscale, freq, phase_deg, decay, y0] — T2 is at index 3
+            best_fit = data_new.get("best_fit", [np.nan, np.nan, np.nan, np.nan, np.nan])
+            t2_val = best_fit[3]
+            t2_list.append(t2_val)
+            offset_list.append(best_fit[4])
+            amp_list.append(best_fit[0])
+            fit_q = data_new.get("fit_avgq", [np.nan, np.nan, np.nan, np.nan, np.nan])
+            q_offset_list.append(fit_q[4] if len(fit_q) > 4 else np.nan)
+            q_amp_list.append(fit_q[0] if len(fit_q) > 0 else np.nan)
+
+            # Adjust span for next scan based on extracted T2
+            if np.isfinite(t2_val) and t2_val > 0:
+                self.expt.cfg.expt["span"] = 4.1 * min(
+                    t2_val, self.cfg.expt.t2_max
+                )
+
+            # Store analysis summaries in data for interim save
+            data["gain_pts"] = self.gain_pts
+            if self.freq_pts is not None:
+                data["freq_pts"] = self.freq_pts
+            data["t2_list"] = np.array(t2_list)
+            data["offset_list"] = np.array(offset_list)
+            data["amp_list"] = np.array(amp_list)
+            data["q_offset_list"] = np.array(q_offset_list)
+            data["q_amp_list"] = np.array(q_amp_list)
+
+            if self.save_interim:
+                self.save_data(data=data)
+
+        # Convert lists to arrays
+        for k, a in data.items():
+            data[k] = np.array(a)
+        self.data = data
+        return data
+
+    def display(self, data=None, **kwargs):
+        import matplotlib.pyplot as plt
+
+        if data is None:
+            data = self.data
+
+        gain_pts = data["gain_pts"]
+        t2_list = data["t2_list"]
+
+        fig, ax = plt.subplots()
+        ax.plot(gain_pts, t2_list, ".-")
+        ax.set_xlabel("Flux Gain")
+        ax.set_ylabel("$T_2$ ($\mu$s)")
+        self.save_fig(fig, suffix="_t2_vs_gain")
+
+        if "freq_pts" in data:
+            freq_pts = data["freq_pts"]
+
+            fig, ax = plt.subplots()
+            ax.plot(freq_pts, t2_list, ".-")
+            ax.set_xlabel("Frequency (MHz)")
+            ax.set_ylabel("$T_2$ ($\mu$s)")
+            self.save_fig(fig, suffix="_t2_vs_freq")
+
+            fig, axes = plt.subplots(2, 2, figsize=(10, 7), sharex=True)
+            panels = [
+                (axes[0, 0], data["amp_list"], "Amplitude"),
+                (axes[0, 1], data["offset_list"], "Offset"),
+                (axes[1, 0], data["q_amp_list"], "Q Amplitude"),
+                (axes[1, 1], data["q_offset_list"], "Q Offset"),
+            ]
+            for ax, vals, label in panels:
+                vals = np.array(vals, dtype=float)
+                mask = np.isfinite(vals)
+                if mask.sum() > 2:
+                    q1, q3 = np.percentile(vals[mask], [25, 75])
+                    iqr = q3 - q1
+                    inlier = mask & (vals >= q1 - 1.5 * iqr) & (vals <= q3 + 1.5 * iqr)
+                    ax.plot(freq_pts[inlier], vals[inlier], ".-")
+                    ax.plot(freq_pts[~inlier & mask], vals[~inlier & mask], "rx", ms=6)
+                else:
+                    ax.plot(freq_pts, vals, ".-")
+                ax.set_ylabel(label)
+            axes[1, 0].set_xlabel("Frequency (MHz)")
+            axes[1, 1].set_xlabel("Frequency (MHz)")
+            self.save_fig(fig, suffix="_fit_params")

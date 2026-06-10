@@ -1047,6 +1047,8 @@ def fit_single_shot(data: IQData, plot: bool = True, rot: bool = True) -> Tuple[
         'theta_corr': theta_corr,  # Correction angle from Gaussian fits,
         'g_mean': np.mean(data_rotated['Ig']),  # Mean of ground state I data
         'e_mean': np.mean(data_rotated['Ie']),  # Mean of excited state I data
+        'g_peak': vhg[np.argmax(histg)],  # I value at ground state histogram peak
+        'e_peak': vhe[np.argmax(histe)],  # I value at excited state histogram peak
     }
     
     return data_rotated, p, paramsg, paramse2
@@ -1149,7 +1151,7 @@ def plot_reset(experiment_data: List[Any], filename: str) -> None:
     # Save plots
     file_path = Path(filename)
     new_filename = file_path.name.rsplit(".", 1)[0] + "_reset_hist.png"
-    fig.savefig(file_path.parent / "images" / new_filename)
+    fig.savefig(file_path.parent.parent / "images" / new_filename)
     
 
 def fit_hist(bin_centers: np.ndarray, histogram: np.ndarray, 

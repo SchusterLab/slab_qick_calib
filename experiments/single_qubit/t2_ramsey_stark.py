@@ -289,6 +289,7 @@ class RamseyStarkExperiment(QickExperiment):
             show_hist=show_hist,
             fitfunc=fitfunc,
             caption_params=caption_params,
+            **kwargs,
         )
 
         return data
@@ -471,12 +472,13 @@ class RamseyStarkPowerExperiment(QickExperiment2DSimple):
 
         # Display main 2D plot
         title = f"Stark Power Ramsey Q{qubit} Freq: {df:.1f} MHz"
-        
+
         super().display(
-            plot_both=False, 
-            title=title, 
-            xlabel=self.xlabel, 
-            ylabel=self.ylabel
+            plot_both=False,
+            title=title,
+            xlabel=self.xlabel,
+            ylabel=self.ylabel,
+            **kwargs,
         )
 
         if fit:
@@ -700,13 +702,13 @@ class RamseyStarkFreqExperiment(QickExperiment2DSimple):
 
         # Main 2D display
         title = f"Stark Freq Ramsey Q{qubit} Gain: {gain:.3f}"
-        
-        
+
         super().display(
-            plot_both=False, 
-            title=title, 
-            xlabel=self.xlabel, 
-            ylabel=self.ylabel
+            plot_both=False,
+            title=title,
+            xlabel=self.xlabel,
+            ylabel=self.ylabel,
+            **kwargs,
         )
 
         # Analysis plot showing frequency dependence

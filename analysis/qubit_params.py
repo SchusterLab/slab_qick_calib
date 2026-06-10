@@ -66,7 +66,7 @@ def ham(cfg_path):
         config.update_config(model_name, None, 'g_chi', gX, index=i, verbose=False, sig=4)
 
         #nreadout = auto_cfg.device.readout.gain[i]**2*auto_cfg.device.readout.nstark[i]
-        config.update_config(model_name, None, 'nreadout', nreadout, index=i, verbose=False, sig=2)
+        #config.update_config(model_name, None, 'nreadout', nreadout, index=i, verbose=False, sig=2)
 
 def delta(cfg_path):
     """
@@ -122,21 +122,25 @@ def delta(cfg_path):
         nG = ng(Delta, g)
         config.update_config(model_name, None, 'ng', nG, index=i, verbose=False, sig=4)
 
-def cohere(cfg_path): 
+def cohere(cfg_path, t2_type=None):
     """
     Calculate coherence-related parameters for all qubits.
-    
+
     This function:
     1. Calculates quality factors from T1 measurements
     2. Calculates pure dephasing times from T1 and T2 measurements
     3. Calculates T1 times excluding Purcell decay contributions
     4. Updates the model configuration file
-    
+
     Parameters:
     -----------
     cfg_path : str
         Path to the main configuration YAML file
-        
+    t2_type : str or list of str, optional
+        Which T2 to use per qubit: 'T2e', 'T2r', or a list of per-qubit types.
+        If None, picks the shorter of T2e/T2r for each qubit (the one that was
+        actually measured most recently is typically shorter).
+
     Notes:
     ------
     - Q1 = 2π·f_ge·T1: quality factor in MHz·μs units (divided by 1e6 for storage)
@@ -146,42 +150,59 @@ def cohere(cfg_path):
     model_name = cfg_path[0:-4] + '_model.yml'
     model_cfg = config.load(cfg_path[0:-4] + '_model.yml')
     auto_cfg = config.load(cfg_path)
-    
+    n_qubits = len(auto_cfg.device.qubit.f_ge)
+
+    # Resolve per-qubit T2 type
+    if isinstance(t2_type, list):
+        t2_types = t2_type
+    elif isinstance(t2_type, str):
+        t2_types = [t2_type] * n_qubits
+    else:
+        # Auto: pick longer of T2e/T2r for each qubit
+        t2_types = []
+        for i in range(n_qubits):
+            t2e = auto_cfg.device.qubit.T2e[i]
+            t2r = auto_cfg.device.qubit.T2r[i]
+            t2_types.append('T2e' if t2e >= t2r else 'T2r')
+
     # Loop through all qubits in the configuration
-    for i in np.arange(len(auto_cfg.device.qubit.f_ge)):
+    for i in np.arange(n_qubits):
         # Calculate quality factor Q = 2π·f·T1
         q = np.pi*2 * auto_cfg.device.qubit.f_ge[i] * auto_cfg.device.qubit.T1[i]
         config.update_config(model_name, None, 'Q1', q/1e6, index=i, verbose=False, sig=4)
-        
+
         # Calculate pure dephasing time from T1 and T2 measurements
         T1_val = auto_cfg.device.qubit.T1[i]
-        T2e_val = auto_cfg.device.qubit.T2e[i]
-        TPhi = Tphi(T1_val, T2e_val)
+        T2_val = getattr(auto_cfg.device.qubit, t2_types[i])[i]
+        TPhi = Tphi(T1_val, T2_val)
         config.update_config(model_name, None, 'Tphi', TPhi, index=i, verbose=False, sig=4)
-        
+
         # Calculate intrinsic T1 excluding Purcell decay contribution
         T1_val = auto_cfg.device.qubit.T1[i]
         T1_purcell_val = model_cfg.T1_purcell[i]
         T1nopurcell = T1_nopurcell(T1_val, T1_purcell_val)
         config.update_config(model_name, None, 'T1_nopurcell', T1nopurcell, index=i, verbose=False, sig=4)
 
-def stats(cfg_path, tt_stats, qubit_list, t2='t2e'):
+def stats(cfg_path, tt_stats, qubit_list, t2='auto', tracking_dir=None):
+    from .collections import detect_t2_type
+
+    # Resolve per-qubit T2 type
+    if isinstance(t2, list):
+        t2_types = t2
+    elif t2 == 'auto':
+        if tracking_dir is None:
+            raise ValueError("tracking_dir is required when t2='auto'")
+        t2_types = [detect_t2_type(tracking_dir, q).lower() for q in qubit_list]
+    else:
+        t2_types = [t2] * len(qubit_list)
+
     pars = ['t1', 't2', 'q1', 'tphi']
     vals = ['mean', 'max', 'std']
-    for i, q in enumerate(qubit_list): 
-        for p in pars: 
-            for v in vals: 
-                g=tt_stats[i][p][v]
-                if p=='t2':
-                    if t2=='t2e':
-                        pp='t2e'
-                    elif t2=='t2r':
-                        pp='t2r'
-                    else:
-                        raise ValueError("t2 must be 't2e' or 't2r'")
-                else:
-                    pp=p
-
+    for i, q in enumerate(qubit_list):
+        for p in pars:
+            for v in vals:
+                g = tt_stats[i][p][v]
+                pp = t2_types[i] if p == 't2' else p
                 config.update_config(cfg_path[0:-4] + '_model.yml', 'stats', f'{pp}_{v}', g, index=q, verbose=False, sig=4)
 
         

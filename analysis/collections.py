@@ -40,15 +40,27 @@ def _get_tracking_base(path):
     return path if path.name == "Tracking" else path.parent
 
 
-def get_parameter_config():
+def get_parameter_config(t2_type=None):
     """
     Get the parameter configuration dictionary that maps parameter keys to their properties.
-    
+
+    Parameters
+    ----------
+    t2_type : str, optional
+        'T2e' or 'T2r' to set T2-related labels. If None, uses generic labels.
+
     Returns:
     --------
     dict
         Dictionary mapping parameter keys to configuration with 'key', 'r2_scan', and 'label' fields
     """
+    if t2_type == 'T2r':
+        t2_sub = '2,R'
+    elif t2_type == 'T2e':
+        t2_sub = '2,E'
+    else:
+        t2_sub = '2'
+
     return {
         "t1": {
             "key": "t1",
@@ -63,7 +75,7 @@ def get_parameter_config():
         "t2": {
             "key": "t2",
             "r2_scan": "t2_r2",
-            "label": "$T_{2,E}$ ($\mu$s)"
+            "label": f"$T_{{{t2_sub}}}$ ($\\mu$s)"
         },
         "f_ge": {
             "key": "f_ge",
@@ -108,7 +120,7 @@ def get_parameter_config():
         "t2et1": {
             "key": "t2et1",
             "r2_scan": "t2_r2",
-            "label": "$T_{2,E}/2 T_1$"
+            "label": f"$T_{{{t2_sub}}}/2 T_1$"
         },
         "t1_off": {
             "key": "t1_off",
@@ -153,12 +165,12 @@ def get_parameter_config():
         "Gamma2": {
             "key": "Gamma2",
             "r2_scan": "t2_r2",
-            "label": "$\Gamma_{2,E}$ (ms$^{-1}$)"
+            "label": f"$\\Gamma_{{{t2_sub}}}$ (ms$^{{-1}}$)"
         },
         "Gamma2e": {
             "key": "Gamma2e",
             "r2_scan": "t2_r2",
-            "label": "$\Gamma_{2,E}$ (ms$^{-1}$)"
+            "label": f"$\\Gamma_{{{t2_sub}}}$ (ms$^{{-1}}$)"
         }, 
         "Gammaphi": {
             "key": "Gammaphi",
@@ -172,53 +184,98 @@ def get_parameter_config():
         },
     }
 
+def detect_t2_type(tracking_dir, qi=0):
+    """
+    Detect whether tracking used T2 echo or T2 Ramsey from HDF5 filenames.
+
+    Parameters
+    ----------
+    tracking_dir : str or Path
+        Path to the tracking run directory containing HDF5 files.
+    qi : int, optional
+        Qubit index to check (default 0).
+
+    Returns
+    -------
+    str
+        'T2e' or 'T2r'
+    """
+    tracking_dir = Path(tracking_dir)
+    t2e_files = list(tracking_dir.glob(f'T2e_qubit{qi}_*'))
+    t2r_files = list(tracking_dir.glob(f'T2r_qubit{qi}_*'))
+    if t2e_files and not t2r_files:
+        return 'T2e'
+    elif t2r_files and not t2e_files:
+        return 'T2r'
+    elif t2e_files and t2r_files:
+        # Both exist — use whichever has more files (more recent campaign)
+        return 'T2e' if len(t2e_files) >= len(t2r_files) else 'T2r'
+    return 'T2e'  # default fallback
+
+
 def process_data(tt, qubit_list=None):
 
     if qubit_list is None:
-        qubit_list = [i for i in range(len(tt))]
+        qubit_list = list(range(len(tt)))
+
+    # Iterate over actual tt entries; qubit_list may be longer than tt
+    n = min(len(tt), len(qubit_list))
 
     b = {}
 
-    for j, qi in enumerate(qubit_list):
+    for j in range(n):
         for k in list(tt[j].keys()):
-            # try:
             tt[j][k] = np.array(tt[j][k])
-            # except Exception:
-            #     pass
+
+        # Normalize t2e key to t2 if t2 doesn't exist
+        if "t2e" in tt[j] and "t2" not in tt[j]:
+            tt[j]["t2"] = tt[j].pop("t2e")
+
+        # Replace negative t1/t2 values with NaN
+        for tkey in ["t1", "t2", "t2r"]:
+            if tkey in tt[j]:
+                tt[j][tkey] = tt[j][tkey].astype(float)
+                tt[j][tkey][tt[j][tkey] < 0] = np.nan
 
         tt[j]["q"] = tt[j]["t1"] * tt[j]["f_ge"] * 2 * np.pi
-        if "t2r" in tt[j].keys():
+        if "t2r" in tt[j]:
             tt[j]["t2rt1"] = tt[j]["t2r"] / 2 / tt[j]["t1"]
             tsphi = 1 / (1 / tt[j]["t2r"] - 1 / tt[j]["t1"] / 2)
-            tsphi[(tsphi < 0) | (tsphi > 1000)] = np.nan
+            tsphi = np.where((tsphi < 0) | (tsphi > 1000), np.nan, tsphi)
             tt[j]["tsphi"] = tsphi
             tt[j]["q2"] = tt[j]["tsphi"] * tt[j]["f_ge"] * 2 * np.pi
-        if "t2" in tt[j].keys() or "t2e" in tt[j].keys():
+        if "t2" in tt[j]:
             tt[j]["t2et1"] = tt[j]["t2"] / 2 / tt[j]["t1"]
             tphi = 1 / (1 / tt[j]["t2"] - 1 / tt[j]["t1"] / 2)
-            tphi[(tphi < 0) | (tphi > 1000)] = np.nan
+            tphi = np.where((tphi < 0) | (tphi > 1000), np.nan, tphi)
             tt[j]["tphi"] = tphi
             tt[j]["q2"] = tt[j]["tphi"] * tt[j]["f_ge"] * 2 * np.pi
 
     for key in tt[0].keys():
-        for j, qi in enumerate(qubit_list):
+        for j in range(n):
             if j == 0:
-                b[key + "_mn"] = np.zeros(len(qubit_list))
-                b[key + "_std"] = np.zeros(len(qubit_list))
+                b[key + "_mn"] = np.zeros(n)
+                b[key + "_std"] = np.zeros(n)
             b[key + "_mn"][j] = np.nanmean(tt[j][key])
             b[key + "_std"][j] = np.nanstd(tt[j][key])
 
     return tt, b
 
 
-def plot_all(tt, qubit_list=None, fname='def', param_keys=None, use_mean=False, nbins=40, plot_time=False, save_path=None, tracking_id=None):
+def plot_all(tt, qubit_list=None, fname='def', param_keys=None, use_mean=False, nbins=40, plot_time=False, save_path=None, tracking_id=None, t2_type=None):
 
     if qubit_list is None:
         qubit_list = [i for i in range(len(tt))]
     if param_keys is None:
         param_keys = ["t1", "t2r", "t2", "f_ge", "fidelity", "kappa", "frequency", "pi_length", "tphi", "tsphi", "t2_r2"]
 
-    parameter_config = get_parameter_config()
+    # Auto-detect T2 type from tracking directory if not specified
+    if t2_type is None and save_path is not None and tracking_id is not None:
+        tracking_dir = _get_tracking_base(save_path) / tracking_id
+        if tracking_dir.is_dir():
+            t2_type = detect_t2_type(tracking_dir)
+
+    parameter_config = get_parameter_config(t2_type=t2_type)
     
     nrows, ncols, sz = calculate_subplot_layout(len(param_keys))
     mpl.rcParams["lines.markersize"] = 1
@@ -457,10 +514,10 @@ def nice_dates():
     return locator
 
 
-def plot_violin(tt, qubit_list=None, fname='def', param_keys=None, use_mean=False, csv_path="data.csv"):
+def plot_violin(tt, qubit_list=None, fname='def', param_keys=None, use_mean=False, csv_path="data.csv", t2_type=None):
     """
     Create violin plots for tracking data parameters across qubits.
-    
+
     Parameters:
     -----------
     tt : list
@@ -479,8 +536,20 @@ def plot_violin(tt, qubit_list=None, fname='def', param_keys=None, use_mean=Fals
         qubit_list = [i for i in range(len(tt))]
     if param_keys is None:
         param_keys = ["t1", "t2r", "t2", "f_ge", "fidelity", "kappa", "frequency", "pi_length", "tphi", "tsphi", "t2_r2", "t2et1", "t1_off", "t1_amp", "t2r_off", "t2r_amp", "q", "phase"]
-    
-    parameter_config = get_parameter_config()
+
+    # Auto-detect T2 type from tracking directory if not specified
+    if t2_type is None:
+        tracking_base = _get_tracking_base(csv_path)
+        # Try to find tracking_id from csv filename
+        import re
+        csv_name = Path(csv_path).name
+        match = re.match(r"(.+)_qubit_\d+_tracking\.csv", csv_name)
+        if match:
+            tracking_dir = tracking_base / match.group(1)
+            if tracking_dir.is_dir():
+                t2_type = detect_t2_type(tracking_dir)
+
+    parameter_config = get_parameter_config(t2_type=t2_type)
     
     nrows, ncols, sz = calculate_subplot_layout(len(param_keys))
     
@@ -634,7 +703,7 @@ def plot_sets(d, xvals, yvals, cols=4, nrep=10, fit_func=None, params=None):
     return fig, ax
 
 
-def plot_vs_temperature(tt, qubit_list=None, param_keys=None, use_mean=False, save_path=None, tracking_id=None):
+def plot_vs_temperature(tt, qubit_list=None, param_keys=None, use_mean=False, save_path=None, tracking_id=None, t2_type=None):
     """
     Plot tracking data parameters as a function of mixing chamber temperature.
 
@@ -662,7 +731,13 @@ def plot_vs_temperature(tt, qubit_list=None, param_keys=None, use_mean=False, sa
     if param_keys is None:
         param_keys = ["t1", "t2r", "t2", "f_ge", "fidelity", "kappa", "frequency", "pi_length", "tphi", "tsphi"]
 
-    parameter_config = get_parameter_config()
+    # Auto-detect T2 type from tracking directory if not specified
+    if t2_type is None and save_path is not None and tracking_id is not None:
+        tracking_dir = _get_tracking_base(save_path) / tracking_id
+        if tracking_dir.is_dir():
+            t2_type = detect_t2_type(tracking_dir)
+
+    parameter_config = get_parameter_config(t2_type=t2_type)
     figs = []
 
     for j, qi in enumerate(qubit_list):
@@ -755,10 +830,192 @@ def plot_vs_temperature(tt, qubit_list=None, param_keys=None, use_mean=False, sa
 
 
 def add_losses(tt):
-    par_list = ['t1','t2r','t2','t2e', 'tphi', 'tsphi']
+    par_list = ['t1','t2r','t2', 'tphi', 'tsphi']
     for j in range(len(tt)):
         for par in par_list:
             if par in tt[j].keys():
                 tt[j]['Gamma' + par[1:]] = 1000 / tt[j][par]
     return tt
+
+
+def load_temp_sweep(csv_dir, tracking_ids=None, qubit_list=None, params=None):
+    """
+    Load multiple tracking runs and compute per-run averages for temperature sweep analysis.
+
+    Parameters
+    ----------
+    csv_dir : str or Path
+        Path to the Tracking/csv directory.
+    tracking_ids : list of str, optional
+        List of tracking IDs to load. If None, loads all available runs.
+    qubit_list : list of int, optional
+        Qubit indices to include. If None, inferred from files.
+    params : list of str, optional
+        Parameters to extract. Defaults to ['t1', 't2', 'tphi', 'f_ge', 'mxc_temp'].
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per (tracking_id, qubit) with columns for temperature and mean/std
+        of each parameter.
+    """
+    import re
+    from slab_qick_calib.calib.time_tracking import load_tracking
+
+    if params is None:
+        params = ['t1', 't2', 'tphi', 'f_ge', 'mxc_temp']
+
+    csv_dir = Path(csv_dir)
+    csv_files = sorted(csv_dir.glob("*_qubit_*_tracking.csv"))
+    if not csv_files:
+        raise FileNotFoundError(f"No tracking CSV files found in {csv_dir}")
+
+    # Discover available tracking IDs
+    runs = {}
+    for f in csv_files:
+        match = re.match(r"(.+)_qubit_(\d+)_tracking\.csv", f.name)
+        if match:
+            runs.setdefault(match.group(1), []).append(int(match.group(2)))
+
+    if tracking_ids is None:
+        tracking_ids = sorted(runs.keys())
+
+    rows = []
+    for tid in tracking_ids:
+        if tid not in runs:
+            print(f"Warning: tracking_id '{tid}' not found, skipping")
+            continue
+
+        tt, _, tt_stats, _ = load_tracking(csv_dir, tracking_id=tid, qubit_list=qubit_list)
+        tt, tt_ave = process_data(tt, qubit_list=qubit_list)
+        tt = add_losses(tt)
+
+        n_qubits = len(tt)
+        ql = qubit_list if qubit_list is not None else list(range(n_qubits))
+
+        for j in range(n_qubits):
+            qi = ql[j] if j < len(ql) else j
+            row = {'tracking_id': tid, 'qubit': qi}
+
+            # Mean MXC temp across measurements in this run
+            if 'mxc_temp' in tt[j]:
+                row['temp_K'] = np.nanmean(tt[j]['mxc_temp'])
+                row['temp_mK'] = row['temp_K'] * 1000
+            row['n_points'] = np.size(tt[j].get('t1', []))
+
+            for p in params:
+                if p == 'mxc_temp':
+                    continue
+                if p in tt[j]:
+                    row[f'{p}_mean'] = np.nanmean(tt[j][p])
+                    row[f'{p}_std'] = np.nanstd(tt[j][p])
+                    row[f'{p}_sem'] = row[f'{p}_std'] / np.sqrt(np.sum(~np.isnan(tt[j][p])))
+                # Also grab Gamma versions if available
+                gamma_key = 'Gamma' + p[1:] if p.startswith('t') else None
+                if gamma_key and gamma_key in tt[j]:
+                    row[f'{gamma_key}_mean'] = np.nanmean(tt[j][gamma_key])
+                    row[f'{gamma_key}_std'] = np.nanstd(tt[j][gamma_key])
+
+            rows.append(row)
+
+    df = pd.DataFrame(rows)
+    if 'temp_mK' in df.columns:
+        df = df.sort_values(['qubit', 'temp_mK']).reset_index(drop=True)
+    return df
+
+
+def plot_temp_sweep(df, params=None, figsize=(8, 5), outlier_iqr=1.5,
+                    normalized=True):
+    """
+    Plot parameter averages vs MXC temperature from a temp sweep DataFrame.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Output of load_temp_sweep.
+    params : list of str, optional
+        Parameters to plot. Defaults to ['t1', 't2', 'tphi'].
+    figsize : tuple
+        Figure size per parameter.
+    outlier_iqr : float or None
+        IQR multiplier for outlier removal per qubit. None to skip.
+    normalized : bool
+        If True, also produce plots normalized to the lowest-temperature value.
+
+    Returns
+    -------
+    list of (fig, ax)
+    """
+    if params is None:
+        params = ['t1', 't2', 'tphi']
+
+    parameter_config = get_parameter_config()
+    qubits = sorted(df['qubit'].unique())
+
+    # Remove outliers per qubit per parameter
+    if outlier_iqr is not None:
+        mask = np.ones(len(df), dtype=bool)
+        for p in params:
+            mean_col = f'{p}_mean'
+            if mean_col not in df.columns:
+                continue
+            for qi in qubits:
+                idx = df['qubit'] == qi
+                vals = df.loc[idx, mean_col]
+                q1, q3 = vals.quantile(0.25), vals.quantile(0.75)
+                iqr = q3 - q1
+                lo, hi = q1 - outlier_iqr * iqr, q3 + outlier_iqr * iqr
+                mask &= ~(idx & ((df[mean_col] < lo) | (df[mean_col] > hi)))
+        df = df[mask].copy()
+
+    figs = []
+
+    for p in params:
+        mean_col = f'{p}_mean'
+        sem_col = f'{p}_sem'
+        if mean_col not in df.columns:
+            print(f"No data for '{p}', skipping")
+            continue
+
+        label = parameter_config.get(p, {}).get('label', p)
+
+        # Absolute plot
+        fig, ax = plt.subplots(figsize=figsize)
+        for qi in qubits:
+            qdf = df[df['qubit'] == qi].sort_values('temp_mK')
+            ax.errorbar(
+                qdf['temp_mK'], qdf[mean_col],
+                yerr=qdf.get(sem_col, None),
+                fmt='o-', capsize=3, label=f'Q{qi}',
+            )
+        ax.set_xlabel('MXC Temperature (mK)')
+        ax.set_ylabel(label)
+        ax.legend()
+        fig.tight_layout()
+        figs.append((fig, ax))
+
+        # Normalized plot
+        if normalized:
+            fig_n, ax_n = plt.subplots(figsize=figsize)
+            for qi in qubits:
+                qdf = df[df['qubit'] == qi].sort_values('temp_mK')
+                base_val = qdf[mean_col].iloc[0]
+                if base_val == 0 or np.isnan(base_val):
+                    continue
+                norm_vals = qdf[mean_col] / base_val
+                norm_err = (qdf[sem_col] / base_val
+                            if sem_col in qdf.columns else None)
+                ax_n.errorbar(
+                    qdf['temp_mK'], norm_vals,
+                    yerr=norm_err,
+                    fmt='o-', capsize=3, label=f'Q{qi}',
+                )
+            ax_n.set_xlabel('MXC Temperature (mK)')
+            ax_n.set_ylabel(f'{label} (normalized)')
+            ax_n.axhline(1, color='gray', ls='--', lw=0.8)
+            ax_n.legend()
+            fig_n.tight_layout()
+            figs.append((fig_n, ax_n))
+
+    return figs
         

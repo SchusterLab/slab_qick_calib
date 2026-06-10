@@ -185,6 +185,14 @@ def format_value(value, sig=4, rng_vals=None):
     return value
 
 
+def _infer_array_length(section, skip=None):
+    """Infer array length from sibling list fields in the same config section."""
+    for k, v in section.items():
+        if k != skip and isinstance(v, list) and len(v) > 0:
+            return len(v)
+    return 0
+
+
 def update_config(
     file_name, path, field, value, index=None, verbose=True, sig=4, rng_vals=None
 ):
@@ -237,14 +245,22 @@ def update_config(
     # Update the value
     if isinstance(field, tuple):  # For nested fields
         v = recursive_get(section, field)
+        if index is not None and (not isinstance(v, list) or len(v) == 0):
+            # Field doesn't exist yet; create NaN-filled array
+            n = _infer_array_length(section, skip=field[0])
+            v = [float("nan")] * n
         old_value = v[index]
         v[index] = value
         nested_set(section, field, v)
     elif index is not None:  # For array values
+        if field not in section or not isinstance(section[field], list):
+            # Field doesn't exist yet; create NaN-filled array
+            n = _infer_array_length(section, skip=field)
+            section[field] = [float("nan")] * n
         old_value = section[field][index]
         section[field][index] = value
     else:  # For scalar values
-        old_value = section[field]
+        old_value = section.get(field, float("nan"))
         section[field] = value
 
     # Print update information if requested
@@ -354,7 +370,7 @@ def update_lo(file_name, field, value, qi, verbose=True, sig=4, rng_vals=None):
     )
 
 
-def init_config(file_name, num_qubits, type="full", t1=50, aliases="Qick001", ip=""):
+def init_config(file_name, num_qubits, type="full", t1=50, aliases="Qick001", ip="", flux=False):
     """
     Initialize a configuration file for quantum experiments with qubits.
     
@@ -370,6 +386,9 @@ def init_config(file_name, num_qubits, type="full", t1=50, aliases="Qick001", ip
             final_delay (default: 50)
         aliases: Identifier for the System-on-Chip (SoC) (default: "Qick001")
         ip: IP address for the device (default: "")
+        flux: Whether to include flux control hardware and qubit flux parameters
+              (default: False). When True, adds dacs.flux section and qubit fields
+              f_ge_max, sweet_spot_dc, sweet_spot_ac.
 
     Returns:
         str: The YAML configuration string that was saved
@@ -408,6 +427,16 @@ def init_config(file_name, num_qubits, type="full", t1=50, aliases="Qick001", ip
             "spec_gain": init_array(1),  # Gain scaling for spectroscopy
         }
     )
+
+    # Qubit flux parameters (only when flux control is enabled)
+    if flux:
+        device["qubit"].update(
+            {
+                "f_ge_max": init_array(4000),       # Max ge frequency at sweet spot (MHz)
+                "sweet_spot_dc": init_array(0),     # DC bias value at sweet spot (V)
+                "sweet_spot_ac": init_array(0),     # AC flux gain at sweet spot
+            }
+        )
 
     # Qubit pulse parameters for ge and ef transitions
     for pulse_type in ["pi_ge", "pi_ef"]:
@@ -490,28 +519,64 @@ def init_config(file_name, num_qubits, type="full", t1=50, aliases="Qick001", ip
     soc = {
         "adcs": {
             "readout": {
-                "ch": init_array(0),        # ADC channel numbers
-                "attn": init_array(0),      # ADC attenuation (from 0-30dB)
-                "type": init_array("dyn"),  # ADC type
+                "ch": init_array(0),              # ADC channel numbers
+                "attn": init_array(0),            # ADC attenuation (from 0-30dB)
+                "type": init_array("dyn"),        # ADC type
+                "filter_fc": init_array(0),       # Filter center frequency (MHz, 0 = not set)
+                "filter_bw": init_array(1000),    # Filter bandwidth (MHz)
+                "filter_type": init_array("bypass"),  # bandpass|lowpass|highpass|bypass
             }
         },
         "dacs": {
             "qubit": {
-                "ch": init_array(1),         # DAC channel for qubit control
-                "nyquist": init_array(1),    # Nyquist zone (1 or 2)
-                "attn1": init_array(0),      # DAC attenuation (from 0-30dB)
-                "attn2": init_array(0),      # DAC attenuation (from 0-30dB)
-                "type": init_array("full"),  # DAC mode
+                "ch": init_array(1),              # DAC channel for qubit control
+                "nyquist": init_array(1),         # Nyquist zone (1 or 2)
+                "attn1": init_array(0),           # DAC attenuation (from 0-30dB)
+                "attn2": init_array(0),           # DAC attenuation (from 0-30dB)
+                "type": init_array("full"),       # DAC mode
+                "filter_fc": init_array(0),       # Filter center frequency (MHz, 0 = not set)
+                "filter_bw": init_array(1000),    # Filter bandwidth (MHz)
+                "filter_type": init_array("bypass"),  # bandpass|lowpass|highpass|bypass
             },
             "readout": {
-                "ch": init_array(0),         # DAC channel for readout
-                "nyquist": init_array(2),    # Nyquist zone (1 or 2)
-                "attn1": init_array(0),      # DAC attenuation (from 0-30dB)
-                "attn2": init_array(0),      # DAC attenuation (from 0-30dB)
-                "type": init_array(type),    # DAC mode
+                "ch": init_array(0),              # DAC channel for readout
+                "nyquist": init_array(2),         # Nyquist zone (1 or 2)
+                "attn1": init_array(0),           # DAC attenuation (from 0-30dB)
+                "attn2": init_array(0),           # DAC attenuation (from 0-30dB)
+                "type": init_array(type),         # DAC mode
+                "filter_fc": init_array(0),       # Filter center frequency (MHz, 0 = not set)
+                "filter_bw": init_array(1000),    # Filter bandwidth (MHz)
+                "filter_type": init_array("bypass"),  # bandpass|lowpass|highpass|bypass
             },
         },
     }
+
+    # Flux DAC section (only when flux control is enabled)
+    if flux:
+        soc["dacs"]["flux"] = {
+            "ch": init_array(0),              # DAC channel for flux control
+            "dc_ch": init_array(0),           # DC bias channel number
+            "dc_val": init_array(0),          # DC bias value (V)
+            "nyquist": init_array(1),         # Nyquist zone (1 or 2)
+            "type": init_array("int"),        # DAC mode (interpolated for DC-like flux)
+            "quad_a": init_array(0),          # Quadratic coeff a: freq = a*g^2 + b*g + c
+            "quad_b": init_array(0),          # Quadratic coeff b
+            "quad_c": init_array(0),          # Quadratic coeff c
+        }
+
+    # Build rfboard_active from unique physical channels
+    rfboard_active = {}
+    for active_key, ch_list, attn_defaults in [
+        ("adc", soc["adcs"]["readout"]["ch"], {"attn": 0}),
+        ("dac_readout", soc["dacs"]["readout"]["ch"], {"attn1": 0, "attn2": 0}),
+        ("dac_qubit", soc["dacs"]["qubit"]["ch"], {"attn1": 0, "attn2": 0}),
+    ]:
+        rfboard_active[active_key] = {}
+        for ch in set(ch_list):
+            entry = {"filter_fc": 0, "filter_bw": 0, "filter_type": "unknown", "qubit": None}
+            entry.update(attn_defaults)
+            rfboard_active[active_key][str(ch)] = entry
+    soc["rfboard_active"] = rfboard_active
 
     # Assemble the complete configuration
     auto_cfg = {"device": device, "hw": {"soc": soc}, "aliases": {"soc": aliases, "ip": ip}}
@@ -593,17 +658,41 @@ def init_config_res(file_name, num_qubits, type="full", aliases="Qick001"):
 
     # Hardware configuration
     soc = {
-        "adcs": {"readout": {"ch": init_array(0), "attn": init_array(0)}},  # ADC channels and attenuation
+        "adcs": {
+            "readout": {
+                "ch": init_array(0),              # ADC channels
+                "attn": init_array(0),            # ADC attenuation
+                "filter_fc": init_array(0),       # Filter center frequency (MHz, 0 = not set)
+                "filter_bw": init_array(1000),    # Filter bandwidth (MHz)
+                "filter_type": init_array("bypass"),  # bandpass|lowpass|highpass|bypass
+            }
+        },
         "dacs": {
             "readout": {
-                "ch": init_array(0),         # DAC channels
-                "nyquist": init_array(2),    # Nyquist zone
-                "attn1": init_array(0),      # DAC attenuation
-                "attn2": init_array(0),      # DAC attenuation 
-                "type": init_array(type),    # DAC mode
+                "ch": init_array(0),              # DAC channels
+                "nyquist": init_array(2),         # Nyquist zone
+                "attn1": init_array(0),           # DAC attenuation
+                "attn2": init_array(0),           # DAC attenuation
+                "type": init_array(type),         # DAC mode
+                "filter_fc": init_array(0),       # Filter center frequency (MHz, 0 = not set)
+                "filter_bw": init_array(1000),    # Filter bandwidth (MHz)
+                "filter_type": init_array("bypass"),  # bandpass|lowpass|highpass|bypass
             },
         },
     }
+
+    # Build rfboard_active from unique physical channels
+    rfboard_active = {}
+    for active_key, ch_list, attn_defaults in [
+        ("adc", soc["adcs"]["readout"]["ch"], {"attn": 0}),
+        ("dac_readout", soc["dacs"]["readout"]["ch"], {"attn1": 0, "attn2": 0}),
+    ]:
+        rfboard_active[active_key] = {}
+        for ch in set(ch_list):
+            entry = {"filter_fc": 0, "filter_bw": 0, "filter_type": "unknown", "qubit": None}
+            entry.update(attn_defaults)
+            rfboard_active[active_key][str(ch)] = entry
+    soc["rfboard_active"] = rfboard_active
 
     # Assemble the complete configuration
     auto_cfg = {"device": device, "hw": {"soc": soc}, "aliases": {"soc": aliases}}
@@ -828,3 +917,148 @@ def add_pulse(file_name, pulse_name, pulse_type="gauss"):
     cfg.device.qubit.pulses[pulse_name] = new_pulse
 
     return save(cfg, file_name)
+
+
+def init_rfboard_active_section(file_name):
+    """
+    Add an ``rfboard_active`` section to an existing configuration file.
+
+    Scans ``hw.soc.{adcs.readout,dacs.readout,dacs.qubit}.ch`` to discover
+    unique physical channels and creates per-channel entries under
+    ``hw.soc.rfboard_active.{adc,dac_readout,dac_qubit}`` with
+    ``filter_type: "unknown"`` and ``qubit: null`` defaults.
+
+    Idempotent: existing entries are preserved.
+
+    Args:
+        file_name: Path to the configuration file
+
+    Returns:
+        AttrDict: The updated configuration object
+    """
+    cfg = load(file_name)
+    hw = cfg["hw"]["soc"]
+
+    if "rfboard_active" not in hw:
+        hw["rfboard_active"] = {}
+
+    active = hw["rfboard_active"]
+
+    # Map: (config section path, active key, default attn fields)
+    channel_map = [
+        (hw["adcs"]["readout"], "adc", {"attn": 0}),
+        (hw["dacs"]["readout"], "dac_readout", {"attn1": 0, "attn2": 0}),
+    ]
+    if "qubit" in hw["dacs"]:
+        channel_map.append(
+            (hw["dacs"]["qubit"], "dac_qubit", {"attn1": 0, "attn2": 0})
+        )
+
+    for section, active_key, attn_defaults in channel_map:
+        if active_key not in active:
+            active[active_key] = {}
+        for ch in set(section["ch"]):
+            ch_str = str(ch)
+            if ch_str not in active[active_key]:
+                entry = {
+                    "filter_fc": 0,
+                    "filter_bw": 0,
+                    "filter_type": "unknown",
+                    "qubit": None,
+                }
+                entry.update(attn_defaults)
+                active[active_key][ch_str] = entry
+
+    return save(cfg, file_name)
+
+
+def update_rfboard_active(file_name, channel_type, ch, settings):
+    """
+    Persist a channel's active RF state to the configuration file.
+
+    Args:
+        file_name: Path to the configuration file
+        channel_type: One of ``"adc"``, ``"dac_readout"``, ``"dac_qubit"``
+        ch: Physical channel number (int)
+        settings: Dict with keys like ``filter_fc``, ``filter_bw``,
+                  ``filter_type``, ``qubit``, and attenuation fields
+
+    Returns:
+        AttrDict: The updated configuration object
+    """
+    cfg = load(file_name)
+    hw = cfg["hw"]["soc"]
+
+    if "rfboard_active" not in hw:
+        hw["rfboard_active"] = {}
+    if channel_type not in hw["rfboard_active"]:
+        hw["rfboard_active"][channel_type] = {}
+
+    hw["rfboard_active"][channel_type][str(ch)] = dict(settings)
+
+    return save(cfg, file_name)
+
+
+def init_rfboard_section(file_name, num_qubits):
+    """
+    Add RF board filter fields to an existing configuration file.
+
+    Adds ``filter_fc``, ``filter_bw``, and ``filter_type`` arrays to each
+    channel group (``adcs.readout``, ``dacs.qubit``, ``dacs.readout``) with
+    bypass defaults.  Safe to call on configs that already have the fields
+    (existing values are preserved).
+
+    Args:
+        file_name: Path to the configuration file
+        num_qubits: Number of qubits, determines array lengths
+
+    Returns:
+        AttrDict: The updated configuration object
+    """
+    cfg = load(file_name)
+    hw = cfg["hw"]["soc"]
+
+    filter_defaults = {
+        "filter_fc": [0] * num_qubits,
+        "filter_bw": [1000] * num_qubits,
+        "filter_type": ["bypass"] * num_qubits,
+    }
+
+    # Sections to update: (section_dict, exists_check)
+    sections = [hw["adcs"]["readout"], hw["dacs"]["readout"]]
+    if "qubit" in hw["dacs"]:
+        sections.append(hw["dacs"]["qubit"])
+
+    for section in sections:
+        for key, default in filter_defaults.items():
+            if key not in section:
+                section[key] = list(default)  # copy so each section is independent
+
+    return save(cfg, file_name)
+
+
+def update_rfboard(
+    file_name, path, field, value, index=None, verbose=True, sig=4, rng_vals=None
+):
+    """
+    Update an RF board parameter in the configuration.
+
+    Convenience wrapper for ``update_config`` targeting ``hw.soc.{path}``
+    (e.g., ``"dacs.qubit"``, ``"adcs.readout"``).
+
+    Args:
+        file_name: Path to the configuration file
+        path: Dot-separated sub-path under hw.soc (e.g., "dacs.qubit", "adcs.readout")
+        field: Field name to update (e.g., "filter_fc", "filter_bw", "filter_type")
+        value: New value
+        index: Optional channel/qubit index for array values
+        verbose: Whether to print update information (default: True)
+        sig: Number of significant digits (default: 4)
+        rng_vals: Optional range limits (min, max)
+
+    Returns:
+        AttrDict: The updated configuration
+    """
+    return update_config(
+        file_name, f"hw.soc.{path}", field, value, index, verbose, sig, rng_vals
+    )

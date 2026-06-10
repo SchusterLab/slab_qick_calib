@@ -710,6 +710,8 @@ class SingleShotOptExperiment(QickExperiment):
             ax[1].set_ylabel("$\sigma$")
             fig.tight_layout()
 
+        self.save_config()
+
     def check_edges(self):
         do_more = False
         fid = self.data["fid"]

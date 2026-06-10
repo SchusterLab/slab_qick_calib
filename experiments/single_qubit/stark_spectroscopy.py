@@ -409,6 +409,7 @@ class StarkSpec(QickExperiment2DSweep):
             show_hist=False,
             fitfunc=self.fitfunc,
             caption_params=[],  # Pass the new structured parameter list
+            **kwargs,
         )
 
         # Plot the fitted curve

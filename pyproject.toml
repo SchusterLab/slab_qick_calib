@@ -24,6 +24,7 @@ dependencies = [
     "Pyro4",
     "ipywidgets==7.7.2",
     "visdom",
+    "allantools",
 ]
 classifiers = [
     "Programming Language :: Python :: 3",

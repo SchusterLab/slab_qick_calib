@@ -1,11 +1,16 @@
 import matplotlib.pyplot as plt
 import copy
+import functools
 import numpy as np
 from tqdm import tqdm_notebook as tqdm
 from datetime import datetime
 import time
 from pathlib import Path
-from visdom import Visdom
+try:
+    from IPython.display import display as ipy_display, clear_output
+    _HAS_IPYTHON = True
+except ImportError:
+    _HAS_IPYTHON = False
 from scipy.optimize import curve_fit
 import yaml
 from qick import *
@@ -156,50 +161,105 @@ class HistogramProcessor:
         return i_shots_vec, q_shots_vec
 
 
+DISPLAY_PRESETS = {
+    "talk": {
+        "font.size": 16,
+        "axes.titlesize": 16,
+        "axes.labelsize": 17,
+        "xtick.labelsize": 15,
+        "ytick.labelsize": 15,
+        "legend.fontsize": 15,
+        "figure.titlesize": 18,
+        "lines.linewidth": 3,
+        "lines.markersize": 8,
+    },
+}
+
+DISPLAY_FIGSCALE = {
+}
+
+
+def _wrap_display_method(method):
+    """Wrap a display method so it always resets/applies rcParams before plotting."""
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        display_mode = kwargs.get('display') or getattr(self, '_display_mode', None)
+        DisplayManager.apply_display_style(display_mode)
+        return method(self, *args, **kwargs)
+    return wrapper
+
+
 class DisplayManager:
     """
     Utility class for display operations.
     Centralizes plotting logic to reduce duplication.
     """
-    
+
+    _default_rcParams = None
+
     @staticmethod
-    def setup_plot_layout(plot_all=False, plot_amps=False, rescale=False, ax=None):
+    def apply_display_style(display):
+        """Apply display preset rcParams if display mode is set, restoring defaults first."""
+        # Save defaults on first call
+        if DisplayManager._default_rcParams is None:
+            DisplayManager._default_rcParams = {k: plt.rcParams[k] for k in
+                set().union(*DISPLAY_PRESETS.values())}
+
+        # Always restore defaults first
+        plt.rcParams.update(DisplayManager._default_rcParams)
+
+        # Then apply preset if requested
+        if display and display in DISPLAY_PRESETS:
+            plt.rcParams.update(DISPLAY_PRESETS[display])
+
+    @staticmethod
+    def scale_figsize(figsize, display):
+        """Scale figure size tuple based on display mode."""
+        if display and display in DISPLAY_FIGSCALE:
+            s = DISPLAY_FIGSCALE[display]
+            return (figsize[0] * s, figsize[1] * s)
+        return figsize
+
+    @staticmethod
+    def setup_plot_layout(plot_all=False, plot_amps=False, rescale=False, ax=None, display=None):
         """
         Set up plot layout and return configuration.
-        
+
         Args:
             plot_all: Whether to plot all quadratures
             plot_amps: Whether to plot amplitude and phase
             rescale: Whether to show rescaled data
             ax: Existing axis to use
-            
+            display: Display mode preset (e.g. 'talk' for presentations)
+
         Returns:
             tuple: (fig, ax, ydata_lab, ylabels, save_fig)
         """
+        DisplayManager.apply_display_style(display)
         save_fig = ax is None
-        
+
         if plot_all:
-            fig, ax = plt.subplots(3, 1, figsize=(7, 9.5))
+            fig, ax = plt.subplots(3, 1, figsize=DisplayManager.scale_figsize((7, 9.5), display))
             ylabels = ["Amplitude (ADC units)", "I (ADC units)", "Q (ADC units)"]
             ydata_lab = ["amps", "avgi", "avgq"]
         elif plot_amps:
-            fig, ax = plt.subplots(2, 1, figsize=(8, 10))
+            fig, ax = plt.subplots(2, 1, figsize=DisplayManager.scale_figsize((8, 10), display))
             ydata_lab = ["amps", "phases"]
             ylabels = ["Amplitude (ADC level)", "Phase (radians)"]
         else:
             if ax is None:
-                fig, a = plt.subplots(1, 1, figsize=(7, 4))
+                fig, a = plt.subplots(1, 1, figsize=DisplayManager.scale_figsize((7, 4), display))
                 ax = [a]
             else:
                 fig = None
-                
+
             if rescale:
                 ylabels = ["Excited State Probability"]
                 ydata_lab = ["scale_data"]
             else:
                 ylabels = ["I (ADC units)"]
                 ydata_lab = ["avgi"]
-        
+
         return fig, ax, ydata_lab, ylabels, save_fig
     
     @staticmethod
@@ -220,11 +280,11 @@ class DisplayManager:
             debug: Whether to show debug info
         """
         # Plot data points (excluding first and last points)
-        plot_full=True
+        plot_full=False
         if plot_full:
             ax.plot(data["xpts"], data[ydata], "o-", rasterized=True)
         else:
-            ax.plot(data["xpts"][1:-1], data[ydata][1:-1], "o", rasterized=True)
+            ax.plot(data["xpts"][1:-1], data[ydata][1:-1], "o-", rasterized=True)
         if fit_params is not None and fitfunc is not None:
             p = fit_params
             pCov = data.get("fit_err_" + ydata, None)
@@ -297,6 +357,44 @@ class QickExperiment(Experiment):
     specific experiment types (e.g., T1, T2, Rabi oscillations).
     """
 
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        if 'display' in cls.__dict__:
+            cls.display = _wrap_display_method(cls.__dict__['display'])
+
+    @classmethod
+    def from_h5file(cls, fname):
+        """
+        Alternative constructor that loads data and config from an HDF5 file.
+
+        Bypasses the normal __init__ (no hardware connection needed) so that
+        analysis and display methods can be run on previously saved data.
+
+        Args:
+            fname: Path to the .h5 data file.
+
+        Returns:
+            Instance of cls with self.data and self.cfg populated.
+        """
+        from ...exp_handling.datamanagement import SlabFile, AttrDict
+        fname = str(fname)
+        assert Path(fname).exists(), f"Path {fname} does not exist"
+        self = cls.__new__(cls)
+        self.fname = fname
+        self.path = str(Path(fname).parent)
+        self.prefix = Path(fname).stem
+        self.status = None
+        self._display_mode = None
+
+        with SlabFile(fname, 'r') as f:
+            self.data = {}
+            for k in f.keys():
+                self.data[k] = np.array(f[k])
+            self.data['attrs'] = f.get_dict()
+            self.cfg = f.load_config() or AttrDict()
+
+        return self
+
     def __init__(
         self,
         cfg_dict=None,
@@ -305,6 +403,7 @@ class QickExperiment(Experiment):
         fname=None,
         progress=None,
         check_params=True,
+        display=None,
     ):
         """
         Initialize the QickExperiment with hardware configuration and experiment parameters.
@@ -319,6 +418,7 @@ class QickExperiment(Experiment):
             progress: Whether to show progress bars during execution
             qi: Qubit index to use for the experiment
             check_params: Whether to check for unexpected parameters (default True)
+            display: Display mode for plots (e.g. 'talk' for presentation-sized text)
         """
         soccfg = cfg_dict["soc"]
         path = cfg_dict["expt_path"]
@@ -335,6 +435,7 @@ class QickExperiment(Experiment):
         )
         # Store the check_params parameter for use in child classes
         self._check_params = check_params
+        self._display_mode = display
 
         # Calculate repetitions and averages based on qubit-specific settings
         self.reps = int(
@@ -344,6 +445,30 @@ class QickExperiment(Experiment):
             self.cfg.device.readout.rounds[qi]
             * self.cfg.device.readout.rounds_base
         )
+
+    def check_dac_timing(self, num_segments=1):
+        """
+        Check that the sweep step size is larger than the DAC minimum time step.
+        If not, increase span so that each step meets the minimum.
+
+        Args:
+            num_segments: Number of segments per point (1 for T1, num_pi+1 for T2 echo)
+        """
+        qi = self.cfg.expt.qubit[0]
+        qubit_ch = self.cfg.hw.soc.dacs.qubit.ch[qi]
+        # Use the more conservative (larger) of the tproc and DAC clock periods
+        min_step = max(self.soccfg.cycles2us(1, gen_ch=qubit_ch), self.soccfg.cycles2us(1))
+
+        expts = self.cfg.expt.expts
+        span = self.cfg.expt.span
+        nsteps = (expts - 1) * num_segments
+        step = span / nsteps if nsteps > 0 else span
+
+        if step < min_step:
+            new_span = min_step * nsteps
+            print(f"Warning: DAC step size {step:.4f} us < minimum {min_step:.4f} us. "
+                  f"Increasing span from {span:.4f} to {new_span:.4f} us.")
+            self.cfg.expt.span = new_span
 
     def acquire(
         self, prog_name, progress=True, get_hist=True, single=True, compact=False, shots=False
@@ -418,6 +543,13 @@ class QickExperiment(Experiment):
         )
 
         self.data = data
+
+        # Rescale g/e using config means so scale_data is saved with h5
+        try:
+            self.scale_ge_config()
+        except Exception:
+            pass
+
         return data
 
     def _get_final_delay(self):
@@ -435,6 +567,7 @@ class QickExperiment(Experiment):
         fit=True,
         use_i=None,
         get_hist=True,
+        rescale=False,
         verbose=True,
         inds=None,
         **kwargs,
@@ -453,6 +586,7 @@ class QickExperiment(Experiment):
             fit: Whether to perform fitting
             use_i: Whether to use I quadrature for fitting (auto-determined if None)
             get_hist: Whether to generate histogram and scale data
+            rescale: Whether to scale data based on threshold
             verbose: Whether to print fit quality metrics
             inds: Indices of fit parameters to include in error calculation (uses all if None)
             **kwargs: Additional arguments passed to the fitter
@@ -466,9 +600,8 @@ class QickExperiment(Experiment):
         # Determine which data sets to fit
         ydata_lab = ["amps", "avgi", "avgq"]
 
-        # Scale data based on histogram if requested
-        if get_hist:
-            self.scale_ge()
+        # Fit rescaled data if it exists (computed during acquire)
+        if rescale and "scale_data" in data:
             ydata_lab.append("scale_data")
 
         # Perform fits on each data set
@@ -533,6 +666,7 @@ class QickExperiment(Experiment):
         fitfunc=None,
         caption_params=[],
         debug=False,
+        display=None,
         **kwargs,
     ):
         """
@@ -557,14 +691,19 @@ class QickExperiment(Experiment):
             fitfunc: Function used for fitting
             caption_params: List of parameters to display in the legend
             debug: Whether to show debug information (initial guess)
+            display: Display mode for plots (e.g. 'talk' for presentation-sized text).
+                Can also be set via disp_kwargs or self.display.
             **kwargs: Additional arguments for plotting
         """
         if data is None:
             data = self.data
 
+        # Use instance display mode as fallback
+        display = display or getattr(self, '_display_mode', None)
+
         # Set up plot layout
         fig, ax, ydata_lab, ylabels, save_fig = DisplayManager.setup_plot_layout(
-            plot_all, False, rescale, ax
+            plot_all, False, rescale, ax, display=display
         )
 
         if fig and title:
@@ -584,7 +723,7 @@ class QickExperiment(Experiment):
 
         # Show histogram if requested
         if show_hist:
-            self._show_histogram(data)
+            self._show_histogram(data, display=display)
 
         # Save figure if created in this method
         if save_fig and fig:
@@ -592,9 +731,9 @@ class QickExperiment(Experiment):
             self.save_config()
             plt.show()
 
-    def _show_histogram(self, data):
+    def _show_histogram(self, data, display=None):
         """Display histogram plot."""
-        fig2, ax = plt.subplots(1, 1, figsize=(3, 3))
+        fig2, ax = plt.subplots(1, 1, figsize=DisplayManager.scale_figsize((3, 3), display))
         ax.plot(data["bin_centers"], data["hist"], "o-", rasterized=True)
         try:
             ax.plot(
@@ -614,6 +753,7 @@ class QickExperiment(Experiment):
         file_path = Path(self.fname)
         new_filename = file_path.name.rsplit(".", 1)[0] + suffix + ".png"
         output_path = Path(self.path) / "images" / new_filename
+        output_path.parent.mkdir(parents=True, exist_ok=True)
 
         fig.savefig(output_path)
         plt.show()
@@ -622,6 +762,7 @@ class QickExperiment(Experiment):
         file_path = Path(self.fname)
         new_filename = file_path.name.rsplit(".", 1)[0] + suffix + ".yml"
         output_path = Path(self.path) / "images" / new_filename
+        output_path.parent.mkdir(parents=True, exist_ok=True)
 
         with open(output_path, "w") as f:
             YamlNpEncoder.dump(self.cfg, f, default_flow_style=None)
@@ -709,14 +850,13 @@ class QickExperiment(Experiment):
 
     def _configure_display_options(self, qi, disp_kwargs):
         """Configure display options based on qubit state."""
-        if not self.cfg.device.qubit.tuned_up[qi] and disp_kwargs is None:
-            disp_kwargs = {"plot_all": True}
-        
-        if (self.cfg.device.readout.rescale[qi] or 
-            (disp_kwargs is not None and "rescale" in disp_kwargs)):
-            disp_kwargs = {"rescale": True}
-        
-        return disp_kwargs or {}
+        if disp_kwargs is None:
+            disp_kwargs = {}
+
+        if not self.cfg.device.qubit.tuned_up[qi] and "plot_all" not in disp_kwargs:
+            disp_kwargs["plot_all"] = True
+
+        return disp_kwargs
 
     def run(
         self,
@@ -760,7 +900,8 @@ class QickExperiment(Experiment):
         # Execute experiment workflow
         data = self.acquire(progress)
         if analyze:
-            data = self.analyze(data, **kwargs)
+            rescale = disp_kwargs.get("rescale", False)
+            data = self.analyze(data, rescale=rescale, **kwargs)
         if save:
             self.save_data(data)
         if display:
@@ -901,6 +1042,20 @@ class QickExperiment(Experiment):
         self.data["scale_data"] = scale_data
         self.data["hist_fit"] = hist_fit
 
+    def scale_ge_threshold(self):
+        """Scale g->0 and e->1 based on threshold from config"""
+        qi = self.cfg.expt.qubit[0]
+        threshold = self.cfg.device.readout.threshold[qi]
+        self.data["scale_data"] = (self.data["avgi"] > threshold).astype(float)
+
+    def scale_ge_config(self):
+        """Scale g->0 and e->1 based on g_mean and e_mean from config"""
+        qi = self.cfg.expt.qubit[0]
+        g_mean = self.cfg.device.readout.g_mean[qi]
+        e_mean = self.cfg.device.readout.e_mean[qi]
+        dv = e_mean - g_mean
+        self.data["scale_data"] = (self.data["avgi"] - g_mean) / dv
+
 
 class QickExperimentLoop(QickExperiment):
     """
@@ -911,7 +1066,7 @@ class QickExperimentLoop(QickExperiment):
     aggregation of results into a complete dataset.
     """
 
-    def __init__(self, cfg_dict=None, prefix="QickExp", progress=False, qi=0, check_params=True):
+    def __init__(self, cfg_dict=None, prefix="QickExp", progress=False, qi=0, check_params=True, display=None):
         """
         Initialize the QickExperimentLoop.
 
@@ -921,8 +1076,9 @@ class QickExperimentLoop(QickExperiment):
             progress: Whether to show progress bars
             qi: Qubit index to use for the experiment
             check_params: Whether to check for unexpected parameters
+            display: Display mode for plots (e.g. 'talk' for presentation-sized text)
         """
-        super().__init__(cfg_dict=cfg_dict, prefix=prefix, progress=progress, qi=qi, check_params=check_params)
+        super().__init__(cfg_dict=cfg_dict, prefix=prefix, progress=progress, qi=qi, check_params=check_params, display=display)
 
     def acquire(self, prog_name, x_sweep, progress=True, hist=False):
         """
@@ -991,6 +1147,13 @@ class QickExperimentLoop(QickExperiment):
         # Add metadata and store data
         data["start_time"] = current_time
         self.data = data
+
+        # Rescale g/e using config means so scale_data is saved with h5
+        try:
+            self.scale_ge_config()
+        except Exception:
+            pass
+
         return data
 
     def _stow_data(self, iq_list, data):
@@ -1044,6 +1207,7 @@ class QickExperiment2DBase(QickExperimentLoop):
         title="",
         xlabel="",
         ylabel="",
+        display=None,
         **kwargs,
     ):
         """
@@ -1057,10 +1221,14 @@ class QickExperiment2DBase(QickExperimentLoop):
             title: Plot title
             xlabel: X-axis label
             ylabel: Y-axis label
+            display: Display mode for plots (e.g. 'talk' for presentation-sized text)
             **kwargs: Additional arguments for plotting
         """
         if data is None:
             data = self.data
+
+        # Use instance display mode as fallback
+        display = display or getattr(self, '_display_mode', None)
 
         # Get x and y sweep values for the 2D plot
         x_sweep = data["xpts"]
@@ -1070,24 +1238,26 @@ class QickExperiment2DBase(QickExperimentLoop):
 
         # Determine whether to save the figure
         save_fig = ax is None
+        DisplayManager.apply_display_style(display)
 
         # Configure plot layout based on what to display
         if plot_both:
             # Create 2-panel figure for I and Q
-            fig, ax = plt.subplots(2, 1, figsize=(8, 10))
+            fig, ax = plt.subplots(2, 1, figsize=DisplayManager.scale_figsize((8, 10), display))
             ydata_lab = ["avgi", "avgq"]
             ylabels = ["I (ADC level)", "Q (ADC level)"]
             fig.suptitle(title)
         elif plot_amps:
             # Create 2-panel figure for amplitude and phase
-            fig, ax = plt.subplots(2, 1, figsize=(8, 10))
+            fig, ax = plt.subplots(2, 1, figsize=DisplayManager.scale_figsize((8, 10), display))
             ydata_lab = ["amps", "phases"]
-            ylabels = ["Amplitude (ADC level)", "Phase (radians)"]
+            amp_label = "Normalized Amplitude" if kwargs.pop("normalized", False) else "Amplitude (ADC level)"
+            ylabels = [amp_label, "Phase (radians)"]
             fig.suptitle(title)
         else:
             # Create single panel figure for I quadrature
             if ax is None:
-                fig, ax = plt.subplots(1, 1, figsize=(6, 6))
+                fig, ax = plt.subplots(1, 1, figsize=DisplayManager.scale_figsize((6, 6), display))
             ax.set_title(title)
             ydata_lab = ["avgi"]
             ax = [ax]
@@ -1114,6 +1284,7 @@ class QickExperiment2DBase(QickExperimentLoop):
         # Save figure if created in this method
         if save_fig and fig:
             self.save_fig(fig)
+            self.save_config()
             plt.show()
 
     def analyze(self, fitfunc=None, fitterfunc=None, data=None, fit=True, rescale=False, **kwargs):
@@ -1135,8 +1306,8 @@ class QickExperiment2DBase(QickExperimentLoop):
 
         # Define which data sets to fit (focus on I quadrature)
         ydata_lab = ["avgi"]  # Typically only fit I quadrature for speed
-        if rescale: 
-            self.scale_ge()
+        if rescale and "scale_data" not in data:
+            self.scale_ge_config()
 
         # Fit each row (y value) separately
         if fit: 
@@ -1168,6 +1339,28 @@ class QickExperiment2DBase(QickExperimentLoop):
             self.data["scale_data"].append(scale_data)
             self.data["hist_fit"].append(hist_fit)
 
+    def scale_ge_threshold(self):
+        """Scale g->0 and e->1 based on threshold from config"""
+        qi = self.cfg.expt.qubit[0]
+        threshold = self.cfg.device.readout.threshold[qi]
+        self.data["scale_data"] = []
+        for j in range(len(self.data["ypts"])):
+            self.data["scale_data"].append(
+                (self.data["avgi"][j, :] > threshold).astype(float)
+            )
+
+    def scale_ge_config(self):
+        """Scale g->0 and e->1 based on g_mean and e_mean from config"""
+        qi = self.cfg.expt.qubit[0]
+        g_mean = self.cfg.device.readout.g_mean[qi]
+        e_mean = self.cfg.device.readout.e_mean[qi]
+        dv = e_mean - g_mean
+        self.data["scale_data"] = []
+        for j in range(len(self.data["ypts"])):
+            self.data["scale_data"].append(
+                (self.data["avgi"][j, :] - g_mean) / dv
+            )
+
 
 class QickExperiment2D(QickExperiment2DBase):
     """
@@ -1178,8 +1371,8 @@ class QickExperiment2D(QickExperiment2DBase):
     - The y-axis parameter is swept by this class (e.g., time, power, etc.)
     """
 
-    def __init__(self, cfg_dict=None, prefix="QickExp", progress=None, qi=0):
-        super().__init__(cfg_dict=cfg_dict, prefix=prefix, progress=progress, qi=qi)
+    def __init__(self, cfg_dict=None, prefix="QickExp", progress=None, qi=0, display=None):
+        super().__init__(cfg_dict=cfg_dict, prefix=prefix, progress=progress, qi=qi, display=display)
 
     def acquire(self, prog_name, y_sweep, progress=True):
         """
@@ -1201,7 +1394,7 @@ class QickExperiment2D(QickExperiment2DBase):
         current_time = get_current_time_string()
 
         # Iterate through each point in the y-axis parameter sweep
-        for i in tqdm(yvals):
+        for i in tqdm(yvals, disable=not progress):
             # Update configuration with current y-axis parameter value
             for j in range(len(y_sweep)):
                 self.cfg.expt[y_sweep[j]["var"]] = y_sweep[j]["pts"][i]
@@ -1216,7 +1409,7 @@ class QickExperiment2D(QickExperiment2DBase):
                 self.im[self.cfg.aliases.soc],
                 rounds=self.cfg.expt.rounds,
                 threshold=None,
-                progress=progress,
+                progress=False,
             )
 
             # Store measurement data for this y value
@@ -1237,7 +1430,296 @@ class QickExperiment2D(QickExperiment2DBase):
         # Add metadata and store data
         data["start_time"] = current_time
         self.data = data
+
+        # Rescale g/e using config means so scale_data is saved with h5
+        try:
+            self.scale_ge_config()
+        except Exception:
+            pass
+
         return data
+
+
+class LivePlotter:
+    """Live plotting helper using IPython.display for Jupyter notebooks.
+
+    Creates a 4-panel heatmap (Amps, Phases, AvgI, AvgQ) that updates
+    in-place during 2D acquisition loops.  Updates are throttled to avoid
+    overwhelming the VSCode notebook renderer.
+    """
+
+    def __init__(self, display_mode=None, xlabel=None, ylabel=None, logy=False,
+                 update_interval=5.0):
+        self.display_mode = display_mode
+        self.xlabel = xlabel
+        self.ylabel = ylabel
+        self.logy = logy
+        self.update_interval = update_interval  # minimum seconds between display updates
+        self.fig = None
+        self.axs = None
+        self.meshes = None
+        self.colorbars = None
+        self._display_handle = None
+        self._progress_handle = None
+        self._last_update_time = 0.0
+        self._active = _HAS_IPYTHON and self._check_jupyter()
+        if not self._active:
+            print("[LivePlot] Not in a Jupyter environment, live plotting disabled.")
+
+    @staticmethod
+    def _check_jupyter():
+        try:
+            from IPython import get_ipython
+            ip = get_ipython()
+            return ip is not None and hasattr(ip, 'kernel')
+        except Exception:
+            return False
+
+    def _render_to_image(self):
+        """Render the current figure to an IPython Image to keep display lightweight."""
+        import io
+        from IPython.display import Image
+        buf = io.BytesIO()
+        self.fig.savefig(buf, format="png", bbox_inches="tight", dpi=80)
+        buf.seek(0)
+        return Image(data=buf.getvalue())
+
+    def update(self, data, y_sweep, step=None, total=None):
+        """Update the live plot with the latest data. Called once per y-iteration.
+
+        Skips rendering if less than ``update_interval`` seconds have elapsed
+        since the last update (always renders the first and last frame).
+        """
+        if not self._active:
+            return
+
+        now = time.time()
+        is_last = (step is not None and total is not None and step >= total)
+        if self.fig is not None and not is_last:
+            if (now - self._last_update_time) < self.update_interval:
+                return
+
+        try:
+            amps = np.array(data.get("amps", []))
+            phases = np.array(data.get("phases", []))
+            avgi = np.array(data.get("avgi", []))
+            avgq = np.array(data.get("avgq", []))
+
+            if amps.size == 0:
+                return
+
+            xvals = data["xpts"][0]
+            yvals = np.array(y_sweep[0]["pts"][:amps.shape[0]])
+
+            datasets = [amps, phases, avgi, avgq]
+            titles = ["Amps", "Phases", "AvgI", "AvgQ"]
+
+            if self.fig is None:
+                self._create_figure(xvals, yvals, datasets, titles)
+                img = self._render_to_image()
+                self._display_handle = ipy_display(img, display_id=True)
+                if step is not None and total is not None:
+                    from IPython.display import HTML
+                    self._progress_handle = ipy_display(
+                        HTML(f"<pre>Step {step}/{total} ({100*step/total:.0f}%)</pre>"),
+                        display_id=True,
+                    )
+            else:
+                self._update_figure(xvals, yvals, datasets)
+                img = self._render_to_image()
+                if self._display_handle is not None:
+                    self._display_handle.update(img)
+                if step is not None and total is not None:
+                    from IPython.display import HTML
+                    if self._progress_handle is not None:
+                        self._progress_handle.update(
+                            HTML(f"<pre>Step {step}/{total} ({100*step/total:.0f}%)</pre>")
+                        )
+                    else:
+                        self._progress_handle = ipy_display(
+                            HTML(f"<pre>Step {step}/{total} ({100*step/total:.0f}%)</pre>"),
+                            display_id=True,
+                        )
+            self._last_update_time = time.time()
+        except Exception as e:
+            print(f"[LivePlot] Update failed: {e}")
+
+    def _create_figure(self, xvals, yvals, datasets, titles):
+        """Create the initial 4-panel figure."""
+        DisplayManager.apply_display_style(self.display_mode)
+        self.fig, self.axs = plt.subplots(
+            2, 2,
+            figsize=DisplayManager.scale_figsize((10, 8), self.display_mode),
+            dpi=80,
+        )
+        self.meshes = []
+        self.colorbars = []
+        for ax, d, title in zip(self.axs.flat, datasets, titles):
+            mesh = ax.pcolormesh(xvals, yvals, d, cmap="viridis", shading="auto",
+                                 rasterized=True)
+            ax.set_title(title)
+            cb = plt.colorbar(mesh, ax=ax)
+            self.meshes.append(mesh)
+            self.colorbars.append(cb)
+            if self.ylabel:
+                ax.set_ylabel(self.ylabel)
+            if self.xlabel:
+                ax.set_xlabel(self.xlabel)
+            if self.logy:
+                ax.set_yscale("log")
+        self.fig.tight_layout()
+        # Prevent matplotlib from rendering this figure to the notebook output
+        plt.close(self.fig)
+
+    def _update_figure(self, xvals, yvals, datasets):
+        """Redraw pcolormesh on existing axes (y-axis grows each iteration)."""
+        titles = ["Amps", "Phases", "AvgI", "AvgQ"]
+        for i, (ax, cb, d, title) in enumerate(
+            zip(self.axs.flat, self.colorbars, datasets, titles)
+        ):
+            ax.clear()
+            mesh = ax.pcolormesh(xvals, yvals, d, cmap="viridis", shading="auto",
+                                 rasterized=True)
+            ax.set_title(title)
+            cb.update_normal(mesh)
+            self.meshes[i] = mesh
+            if self.ylabel:
+                ax.set_ylabel(self.ylabel)
+            if self.xlabel:
+                ax.set_xlabel(self.xlabel)
+            if self.logy:
+                ax.set_yscale("log")
+        self.fig.tight_layout()
+
+    def close(self):
+        """Close the figure to free memory."""
+        if self.fig is not None:
+            plt.close(self.fig)
+            self.fig = None
+
+
+class QubitSpecFastFluxLivePlotter:
+    """Live plotting helper for QubitSpecFastFlux.
+
+    Shows a 2-panel figure that updates in-place during acquisition:
+      - Left: qubit frequency vs flux gain (scatter + running quadratic fit)
+      - Right: 2D color map of avgi growing one row at a time
+
+    Updates are throttled via ``update_interval`` (default 5 s). Always renders
+    the first and last frame. Disabled automatically outside Jupyter.
+    """
+
+    def __init__(self, update_interval=5.0):
+        self.update_interval = update_interval
+        self.fig = None
+        self.ax_freq = None
+        self.ax_color = None
+        self._display_handle = None
+        self._progress_handle = None
+        self._last_update_time = 0.0
+        self._active = _HAS_IPYTHON and LivePlotter._check_jupyter()
+        if not self._active:
+            print("[LivePlot] Not in a Jupyter environment, live plotting disabled.")
+
+    def _render_to_image(self):
+        import io
+        from IPython.display import Image
+        buf = io.BytesIO()
+        self.fig.savefig(buf, format="png", bbox_inches="tight", dpi=80)
+        buf.seek(0)
+        return Image(data=buf.getvalue())
+
+    def update(self, data, step, total):
+        """Update the live plot after each gain-point iteration.
+
+        Parameters
+        ----------
+        data : dict
+            Accumulated data dict from QubitSpecFluxSweep.acquire() so far.
+        step : int
+            Number of gain points completed (1-based).
+        total : int
+            Total number of gain points in the sweep.
+        """
+        if not self._active:
+            return
+
+        now = time.time()
+        is_last = step >= total
+        if self.fig is not None and not is_last:
+            if (now - self._last_update_time) < self.update_interval:
+                return
+
+        try:
+            gain_pts = np.asarray(data.get("sweep_pts", []))[:step]
+            freq_list = np.asarray(data.get("qubit_freq_list", []))[:step]
+            avgi_rows = data.get("avgi", [])
+
+            if len(gain_pts) == 0:
+                return
+
+            if self.fig is None:
+                self._create_figure()
+
+            # --- Left: freq vs gain ---
+            self.ax_freq.cla()
+            valid = np.isfinite(freq_list)
+            self.ax_freq.plot(gain_pts[valid], freq_list[valid], "o", ms=4)
+            if valid.sum() >= 3:
+                coeffs = np.polyfit(gain_pts[valid], freq_list[valid], 2)
+                g_dense = np.linspace(gain_pts.min(), gain_pts.max(), 200)
+                self.ax_freq.plot(g_dense, np.polyval(coeffs, g_dense), "-", lw=1.5)
+            self.ax_freq.set_xlabel("Flux Gain")
+            self.ax_freq.set_ylabel("Qubit Frequency (MHz)")
+
+            # --- Right: color map (avgi) ---
+            self.ax_color.cla()
+            if len(avgi_rows) > 0:
+                xpts_ref = np.asarray(data["xpts"][0])
+                matrix = np.array([np.asarray(r) for r in avgi_rows])
+                # Pad/trim rows to reference length if center_freq tracking shifted them
+                n = len(xpts_ref)
+                if matrix.shape[1] != n:
+                    padded = np.full((matrix.shape[0], n), np.nan)
+                    m = min(matrix.shape[1], n)
+                    padded[:, :m] = matrix[:, :m]
+                    matrix = padded
+                self.ax_color.pcolormesh(
+                    xpts_ref, gain_pts, matrix,
+                    cmap="viridis", shading="auto", rasterized=True,
+                )
+                self.ax_color.set_xlabel("Frequency (MHz)")
+                self.ax_color.set_ylabel("Flux Gain")
+
+            self.fig.tight_layout()
+
+            img = self._render_to_image()
+            if self._display_handle is None:
+                self._display_handle = ipy_display(img, display_id=True)
+            else:
+                self._display_handle.update(img)
+
+            from IPython.display import HTML
+            progress_html = HTML(f"<pre>Step {step}/{total} ({100*step/total:.0f}%)</pre>")
+            if self._progress_handle is None:
+                self._progress_handle = ipy_display(progress_html, display_id=True)
+            else:
+                self._progress_handle.update(progress_html)
+
+            self._last_update_time = time.time()
+        except Exception as e:
+            print(f"[LivePlot] Update failed: {e}")
+
+    def _create_figure(self):
+        self.fig, (self.ax_freq, self.ax_color) = plt.subplots(
+            1, 2, figsize=(12, 4), dpi=80
+        )
+        plt.close(self.fig)  # prevent inline rendering
+
+    def close(self):
+        if self.fig is not None:
+            plt.close(self.fig)
+            self.fig = None
 
 
 class QickExperiment2DSimple(QickExperiment2DBase):
@@ -1248,7 +1730,7 @@ class QickExperiment2DSimple(QickExperiment2DBase):
     x-axis parameter is swept by a separate experiment instance.
     """
 
-    def __init__(self, cfg_dict=None, prefix="QickExp", progress=None, qi=0, live_plot=False, auto_close_visdom=True):
+    def __init__(self, cfg_dict=None, prefix="QickExp", progress=None, qi=0, live_plot=False, display=None):
         """
         Initialize the QickExperiment2DSimple.
 
@@ -1257,27 +1739,17 @@ class QickExperiment2DSimple(QickExperiment2DBase):
             prefix: Prefix for saved data files
             progress: Whether to show progress bars
             qi: Qubit index to use for the experiment
-            live_plot: Whether to enable live plotting with Visdom during acquisition
-            auto_close_visdom: Whether to automatically close visdom plots after experiment finishes
+            live_plot: Whether to enable live plotting during acquisition
+            display: Display mode for plots (e.g. 'talk' for presentation-sized text)
         """
-        super().__init__(cfg_dict=cfg_dict, prefix=prefix, progress=progress, qi=qi)
+        super().__init__(cfg_dict=cfg_dict, prefix=prefix, progress=progress, qi=qi, display=display)
 
         self.live_plot = live_plot
         self.save_interim=True
-        self.viz = None
-        self.viz_window = None
-        self.auto_close_visdom = auto_close_visdom
+        self.live_plotter = None
+        self._display = display
 
-        if self.live_plot:
-            try:
-                self.viz = Visdom()
-                assert self.viz.check_connection(), "Visdom server not running."
-                self.viz_window = self.viz.text("Starting 2D Scan...", opts={"title": "Qick 2D Scan"})
-            except Exception as e:
-                print(f"[Visdom] Could not connect: {e}")
-                self.live_plot = False
-
-    def acquire(self, y_sweep, progress=False):
+    def acquire(self, y_sweep, progress=True):
         """
         Acquire data for a 2D parameter sweep using a nested experiment.
 
@@ -1288,19 +1760,33 @@ class QickExperiment2DSimple(QickExperiment2DBase):
         Returns:
             Dictionary containing 2D measurement data
         """
+        # Create live plotter now that config/labels are fully populated
+        if self.live_plot and self.live_plotter is None:
+            self.live_plotter = LivePlotter(
+                display_mode=self._display,
+                xlabel=getattr(self, 'xlabel', None),
+                ylabel=getattr(self, 'ylabel', None),
+                logy=bool(getattr(self.cfg.expt, 'log', False)),
+            )
+            if not self.live_plotter._active:
+                self.live_plot = False
+
         # Initialize data dictionary
         data = {}
         yvals = np.arange(len(y_sweep[0]["pts"]))
         data['time'] = []
 
+        # Store sweep parameters upfront so interim saves include them
+        self._store_sweep_parameters(data, y_sweep)
+
         # Iterate through each point in the y-axis parameter sweep
-        for i in tqdm(yvals):
+        for i in tqdm(yvals, disable=not progress):
             # Update nested experiment configuration
             for j in range(len(y_sweep)):
                 self.expt.cfg.expt[y_sweep[j]["var"]] = y_sweep[j]["pts"][i]
 
-            # Run the nested experiment
-            data_new = self.expt.acquire(progress=progress)
+            # Run the nested experiment (suppress inner progress bar)
+            data_new = self.expt.acquire(progress=False)
 
             # Store all data from the nested experiment
             for key in data_new:
@@ -1310,15 +1796,14 @@ class QickExperiment2DSimple(QickExperiment2DBase):
             
             data["time"].append(time.time())
             
-            # Live update heatmap plot using Visdom
+            # Live update heatmap plot
             if self.live_plot and i>0:
-                self._plot_live_update(data, y_sweep)
-            if self.save_interim: 
+                self.live_plotter.update(data, y_sweep, step=int(i)+1, total=len(yvals))
+            if self.save_interim:
                 super().save_data(data=data)
 
         # Set y-axis values
         self._determine_y_axis_values(data, y_sweep)
-        self._store_sweep_parameters(data, y_sweep)
 
         # Use the x-axis values from the first nested experiment run
         data["xpts"] = data["xpts"][0]
@@ -1326,84 +1811,18 @@ class QickExperiment2DSimple(QickExperiment2DBase):
             data[k] = np.array(a)
         self.data = data
 
-        # Close visdom plot if auto_close_visdom is enabled
-        if self.auto_close_visdom and self.live_plot and self.viz is not None:
-            self._close_visdom_plots()
+        # Rescale g/e using config means if not already present from nested acquire
+        if "scale_data" not in data:
+            try:
+                self.scale_ge_config()
+            except Exception:
+                pass
+
+        # Close live plot figure
+        if self.live_plot and self.live_plotter is not None:
+            self.live_plotter.close()
 
         return data
-    
-    def _plot_live_update(self, data, y_sweep):
-        """Update the live plot with the latest data."""
-        try:
-            from io import BytesIO
-            import PIL.Image
-
-            # Extract data arrays
-            amps_so_far = np.array(data.get("amps", []))
-            phases_so_far = np.array(data.get("phases", []))
-            avgi_so_far = np.array(data.get("avgi", []))
-            avgq_so_far = np.array(data.get("avgq", []))
-
-            if amps_so_far.size > 0:
-                # Get axis values
-                xvals = data["xpts"][0]
-                yvals = np.array(y_sweep[0]["pts"][:amps_so_far.shape[0]])
-                
-                # Create 4 subplots
-                fig, axs = plt.subplots(2, 2, figsize=(10, 8), dpi=100)
-
-                # Plot each data type
-                im1 = axs[0,0].pcolormesh(xvals, yvals, amps_so_far, cmap="viridis", shading="auto")
-                axs[0, 0].set_title("Amps")
-                plt.colorbar(im1, ax=axs[0, 0])
-
-                im2 = axs[0, 1].pcolormesh(xvals, yvals, phases_so_far, cmap="viridis", shading="auto")
-                axs[0, 1].set_title("Phases")
-                plt.colorbar(im2, ax=axs[0, 1])
-
-                im3 = axs[1, 0].pcolormesh(xvals, yvals, avgi_so_far, cmap="viridis", shading="auto")
-                axs[1, 0].set_title("AvgI")
-                plt.colorbar(im3, ax=axs[1, 0])
-
-                im4 = axs[1, 1].pcolormesh(xvals, yvals, avgq_so_far, cmap="viridis", shading="auto")
-                axs[1, 1].set_title("AvgQ")
-                plt.colorbar(im4, ax=axs[1, 1])
-
-                # Set labels if available
-                for ax in axs.flat:
-                    if hasattr(self, "ylabel"):
-                        ax.set_ylabel(self.ylabel)
-                    if hasattr(self,'xlabel'):
-                        ax.set_xlabel(self.xlabel)
-
-                plt.tight_layout()
-
-                # Convert to image for Visdom
-                buf = BytesIO()
-                plt.savefig(buf, format='png')
-                plt.close(fig)
-                buf.seek(0)
-                img = PIL.Image.open(buf).convert("RGB")
-                img = np.array(img).transpose(2, 0, 1)
-
-                self.viz.image(img, win=self.viz_window, opts={"title": "Live Channels"})
-
-        except Exception as e:
-            print(f"[Visdom] Live plot failed: {e}")
-
-    def _close_visdom_plots(self):
-        """Close visdom plots after experiment completion."""
-        try:
-            if self.viz_window is not None:
-                # Close the specific window
-                self.viz.close(win=self.viz_window)
-                print("[Visdom] Closed experiment plot window")
-            else:
-                # If no specific window, close all windows in the current environment
-                self.viz.close(win=None)
-                print("[Visdom] Closed all visdom windows")
-        except Exception as e:
-            print(f"[Visdom] Failed to close plots: {e}")
 
 
 class QickExperiment2DSweep(QickExperiment2DBase):
@@ -1459,8 +1878,15 @@ class QickExperiment2DSweep(QickExperiment2DBase):
         )
 
         self.data = data
+
+        # Rescale g/e using config means so scale_data is saved with h5
+        try:
+            self.scale_ge_config()
+        except Exception:
+            pass
+
         return data
-    
+
     def display(
         self,
         data=None,

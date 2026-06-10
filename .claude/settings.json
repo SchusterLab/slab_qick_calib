@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(*)",
+      "Read(//c/_Lib/python/fridge/**)",
+      "WebFetch(domain:github.com)",
+      "Read(//c/_Data/sample_50_new/data/t1_fastflux_loop_repeated_qubit2_00006/csvs/**)",
+      "Read(//c/_Data/sample_50_new/images/**)",
+      "WebFetch(domain:arxiv.org)",
+      "WebFetch(domain:docs.qick.dev)",
+      "WebFetch(domain:api.github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Read(//c/_Lib/python/**)",
+      "WebFetch(domain:qick-docs.readthedocs.io)",
+      "Read(//c/Users/circu/**)",
+      "Read(//c/_Data/sample_50_new/data/**)",
+      "Read(//c/_Data/sample_50_new/**)"
+    ],
+    "defaultMode": "acceptEdits"
+  }
+}

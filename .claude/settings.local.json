@@ -1,6 +1,7 @@
 {
   "permissions": {
     "allow": [
+<<<<<<< HEAD
       "Bash(git add:*)",
       "Bash(git commit:*)",
       "Bash(python:*)",
@@ -18,6 +19,10 @@
       "Bash(find:*)",
       "Bash(cmd /c \"where python 2>nul & where python3 2>nul & where py 2>nul\")",
       "Bash(cmd /c \"conda run -n base python -c \"\"import fridge.bluefors; print\\(fridge.bluefors.__file__\\)\"\"\")"
+=======
+      "Bash(xargs grep:*)",
+      "Bash(ls /c/_Lib/python/qq/slab_qick_calib/notebooks/*.ipynb)"
+>>>>>>> live-plot-ipython
     ]
   }
 }

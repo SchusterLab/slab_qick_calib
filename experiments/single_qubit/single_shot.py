@@ -91,7 +91,7 @@ class HistogramProgram(QickProgram):
         self.frequency = cfg.expt.frequency
         self.gain = cfg.expt.gain
         # Set phase based on whether active reset is enabled
-        if cfg.expt.active_reset or cfg.expt.remeas:
+        if cfg.expt.active_reset or cfg.expt.remeas or cfg.expt.calibrate:
             self.phase = cfg.device.readout.phase[cfg.expt.qubit[0]]
         else:
             self.phase = 0
@@ -138,7 +138,10 @@ class HistogramProgram(QickProgram):
             self.pulse(ch=self.qubit_ch, name="pi_ef", t=0)
 
         # Add small delay before readout
-        self.delay_auto(t=0.01, tag="wait")
+        if cfg.expt.calibrate:
+            self.delay_auto(t=0.1, tag="wait")
+        else:
+            self.delay_auto(t=0.01, tag="wait")
 
         # Apply readout pulse and trigger data acquisition
         self.pulse(ch=self.res_ch, name="readout_pulse", t=0)
@@ -368,6 +371,7 @@ class HistogramExperiment(QickExperiment):
             qubit_chan=self.cfg.hw.soc.adcs.readout.ch[qi],  # Readout channel
             ddr4=False,  # Whether to use DDR4 memory
             remeas=False,  # Whether to do repeated measurement
+            calibrate=False,
             final_delay=self.cfg.device.readout.readout_length[qi],  # Final delay
         )
 
@@ -570,6 +574,8 @@ class HistogramExperiment(QickExperiment):
             data["shots"] = self.cfg.expt.shots
             data['e_mean'] = p['e_mean']
             data['g_mean'] = p['g_mean']
+            data['g_peak'] = p['g_peak']
+            data['e_peak'] = p['e_peak']
             dv = self.data['ve'] - self.data['vg']
             data['e_norm'] = (self.data['e_mean']-self.data['vg'])/dv
 
@@ -665,8 +671,9 @@ class HistogramExperiment(QickExperiment):
         if savefig:
             plt.show()
             self.save_fig(fig)
+            self.save_config()
 
-    def update(self, freq=True, fast=False, verbose=True):
+    def update(self, freq=True, fast=False, verbose=True, use_peak=False):
         """
         Update configuration file with the results of the experiment.
 
@@ -700,6 +707,14 @@ class HistogramExperiment(QickExperiment):
         )
         config.update_readout(
             cfg_file, "fidelity", self.data["fids"][0], qi, verbose=verbose
+        )
+        g_key = "g_peak" if use_peak else "g_mean"
+        e_key = "e_peak" if use_peak else "e_mean"
+        config.update_readout(
+            cfg_file, "g_mean", self.data[g_key], qi, verbose=verbose
+        )
+        config.update_readout(
+            cfg_file, "e_mean", self.data[e_key], qi, verbose=verbose
         )
 
         # Update additional parameters if not in fast mode

@@ -124,7 +124,7 @@ def validate_bounds(
     """
     for i, param in enumerate(fitparams):
         if not (bounds[0][i] < param < bounds[1][i]):
-            fitparams[i] = np.mean((bounds[0][i], bounds[1][i]))
+            fitparams[i] = np.clip(param, bounds[0][i], bounds[1][i])
             print(
                 f"Attempted to init fitparam {i} to {param}, which is out of bounds {bounds[0][i]} to {bounds[1][i]}. Instead init to {fitparams[i]}"
             )
@@ -167,7 +167,7 @@ def generic_fit(
         else:
             pOpt, pCov = sp.optimize.curve_fit(fitfunc, xdata, ydata, p0=fitparams)
     except RuntimeError:
-        print(error_message)
+        #print(error_message)
         pOpt = [np.nan] * len(pOpt)
 
     return pOpt, pCov, fitparams
@@ -410,6 +410,376 @@ def fitexp(
 
 
 # ====================================================== #
+# Sum-of-Exponentials (Step Response) Fit Functions
+# ====================================================== #
+
+
+def sum_exp_func(t: np.ndarray, *p) -> np.ndarray:
+    """
+    Sum-of-exponentials model for step response fitting.
+
+    f(t) = f_inf + a1*exp(-t/tau1) + a2*exp(-t/tau2) + ...
+
+    Args:
+        t: Time data points
+        p: Parameters [f_inf, a1, tau1, a2, tau2, ..., aN, tauN]
+
+    Returns:
+        Model values at each time point
+    """
+    f_inf = p[0]
+    result = np.full_like(t, f_inf, dtype=float)
+    for i in range(1, len(p), 2):
+        a_i = p[i]
+        tau_i = p[i + 1]
+        result = result + a_i * np.exp(-t / tau_i)
+    return result
+
+
+def fit_step_response(
+    tdata: np.ndarray,
+    fdata: np.ndarray,
+    n_exp: int = 3,
+    fitparams: Optional[List[float]] = None,
+    f_inf: Optional[float] = None,
+    t_range: Optional[Tuple[float, float]] = None,
+) -> Tuple[List[float], np.ndarray, List[float]]:
+    """
+    Fit step response data (frequency vs delay time) to a sum of exponentials.
+
+    Model: f(t) = f_inf + sum_i a_i * exp(-t / tau_i)
+
+    This corresponds to Figure 4 of arXiv:2503.04610 — characterizing the
+    exponential droops in a flux control line step response.
+
+    Args:
+        tdata: Delay times (µs)
+        fdata: Measured qubit frequencies (MHz)
+        n_exp: Number of exponential terms (default: 3)
+        fitparams: Optional initial parameters [f_inf, a1, tau1, a2, tau2, ...].
+            Use None entries for auto-guess.
+        f_inf: If provided, fix f_inf to this value (MHz) instead of fitting it.
+            Useful when the sweet-spot frequency is known but the data window
+            doesn't extend long enough to determine f_inf from data alone.
+        t_range: Optional (t_min, t_max) to restrict the fit range (µs).
+            Data outside this range is excluded from the fit.
+
+    Returns:
+        Tuple of (optimized_parameters, covariance_matrix, initial_parameters).
+        When f_inf is fixed, the returned pOpt still has f_inf as the first
+        element (for compatibility with sum_exp_func).
+    """
+    tdata = np.asarray(tdata, dtype=float)
+    fdata = np.asarray(fdata, dtype=float)
+
+    # Apply time range filter
+    if t_range is not None:
+        t_lo = t_range[0] if t_range[0] is not None else -np.inf
+        t_hi = t_range[1] if t_range[1] is not None else np.inf
+        mask = (tdata >= t_lo) & (tdata <= t_hi)
+        tdata = tdata[mask]
+        fdata = fdata[mask]
+
+    t_min_data = max(tdata[tdata > 0].min(), 1e-6) if np.any(tdata > 0) else 1e-6
+    t_max_data = float(tdata.max())
+
+    if f_inf is not None:
+        # Fixed f_inf: fit only the exponential terms
+        f_inf_val = float(f_inf)
+        fdata_shifted = fdata - f_inf_val  # now fitting: g(t) = sum a_i exp(-t/tau_i)
+
+        if fitparams is None:
+            fitparams_inner = [None] * (2 * n_exp)
+        else:
+            # Strip f_inf from fitparams if it was included
+            fitparams_inner = list(fitparams[1:]) if len(fitparams) == 1 + 2 * n_exp else list(fitparams)
+
+        tau_guesses = np.logspace(np.log10(t_min_data), np.log10(t_max_data), n_exp)
+        total_dev = float(fdata_shifted[0])
+
+        for i in range(n_exp):
+            idx_a = 2 * i
+            idx_tau = 2 * i + 1
+            if idx_a >= len(fitparams_inner) or fitparams_inner[idx_a] is None:
+                if idx_a >= len(fitparams_inner):
+                    fitparams_inner.extend([None, None])
+                fitparams_inner[idx_a] = total_dev / n_exp
+            if idx_tau >= len(fitparams_inner) or fitparams_inner[idx_tau] is None:
+                if idx_tau >= len(fitparams_inner):
+                    fitparams_inner.append(None)
+                fitparams_inner[idx_tau] = float(tau_guesses[i])
+
+        def _model(t, *p):
+            return sum_exp_func(t, f_inf_val, *p)
+
+        lower = [-np.inf, 1e-6] * n_exp
+        upper = [np.inf, t_max_data * 100] * n_exp
+
+        pOpt_inner, pCov_inner, pInit_inner = generic_fit(
+            _model, tdata, fdata, fitparams_inner,
+            bounds=(lower, upper),
+            error_message="Warning: step response fit failed!",
+        )
+
+        # Reconstruct full parameter vector with f_inf
+        pOpt = [f_inf_val] + list(pOpt_inner)
+        # Expand covariance: add zero row/col for fixed f_inf
+        n_inner = len(pOpt_inner)
+        pCov = np.zeros((n_inner + 1, n_inner + 1))
+        pCov[1:, 1:] = pCov_inner
+        pInit = [f_inf_val] + list(pInit_inner)
+        return pOpt, pCov, pInit
+
+    # Free f_inf: fit all parameters
+    if fitparams is None:
+        fitparams = [None] * (1 + 2 * n_exp)
+
+    if fitparams[0] is None:
+        fitparams[0] = float(fdata[-1])
+
+    total_deviation = float(fdata[0] - fdata[-1])
+    tau_guesses = np.logspace(np.log10(t_min_data), np.log10(t_max_data), n_exp)
+
+    for i in range(n_exp):
+        idx_a = 1 + 2 * i
+        idx_tau = 2 + 2 * i
+        if fitparams[idx_a] is None:
+            fitparams[idx_a] = total_deviation / n_exp
+        if fitparams[idx_tau] is None:
+            fitparams[idx_tau] = float(tau_guesses[i])
+
+    lower = [-np.inf] + [-np.inf, 1e-6] * n_exp
+    upper = [np.inf] + [np.inf, t_max_data * 100] * n_exp
+
+    return generic_fit(
+        sum_exp_func,
+        tdata,
+        fdata,
+        fitparams,
+        bounds=(lower, upper),
+        error_message="Warning: step response fit failed!",
+    )
+
+
+def extract_step_response_params(pOpt: List[float]) -> dict:
+    """
+    Unpack fitted sum-of-exponentials parameters into a structured dict.
+
+    Args:
+        pOpt: Fitted parameters [f_inf, a1, tau1, a2, tau2, ...]
+
+    Returns:
+        Dict with keys 'f_inf', 'alphas' (list), 'taus' (list), sorted by tau
+    """
+    f_inf = pOpt[0]
+    alphas = []
+    taus = []
+    for i in range(1, len(pOpt), 2):
+        alphas.append(pOpt[i])
+        taus.append(pOpt[i + 1])
+
+    # Sort by time constant (ascending)
+    order = np.argsort(taus)
+    alphas = [alphas[i] for i in order]
+    taus = [taus[i] for i in order]
+
+    return {"f_inf": f_inf, "alphas": alphas, "taus": taus}
+
+
+def fit_step_response_flux(
+    tdata: np.ndarray,
+    fdata: np.ndarray,
+    flux_converter,
+    flux_gain_target: float,
+    n_exp: int = 3,
+    alpha0: Optional[float] = None,
+    s0: Optional[float] = None,
+    fitparams: Optional[List[float]] = None,
+    t_range: Optional[Tuple[float, float]] = None,
+) -> Tuple[dict, np.ndarray, np.ndarray]:
+    """
+    Fit step response in normalized flux space (arXiv:2503.04610, Section III).
+
+    Converts measured frequencies to normalized flux using the transmon model,
+    then fits s(t) = α₀ + Σ αᵢ·exp(-t/τᵢ) where s=1 at the target flux and
+    s=0 at the sweet spot. This linearizes the nonlinear frequency–flux mapping.
+
+    Args:
+        tdata: Delay times (µs)
+        fdata: Measured qubit frequencies (MHz)
+        flux_converter: TransmonFluxConverter or QuadraticFluxConverter instance
+        flux_gain_target: Target flux gain value used in the experiment
+        n_exp: Number of exponential terms
+        alpha0: Steady-state value α₀ = s(t→∞). If None (default), fit as a
+            free parameter. If a float, fix it. Use alpha0=0 for a pure
+            high-pass bias tee where flux fully decays.
+        s0: Constrain the initial step response value s(0) = α₀ + Σαᵢ.
+            Reparameterizes the fit so α₀ = s0 − Σαᵢ, breaking the
+            degeneracy between α₀ and long-τ exponentials whose decay is
+            unresolvable within the measurement window. Typical value: 1.0
+            (line transmits the step immediately). Cannot be combined with
+            a fixed alpha0.
+        fitparams: Optional initial parameters. Layout depends on alpha0/s0:
+            - alpha0=None, s0=None (free): [alpha0, a1, tau1, a2, tau2, ...]
+            - alpha0=fixed: [a1, tau1, a2, tau2, ...]
+            - s0=constrained: [a1, tau1, a2, tau2, ...]
+        t_range: Optional (t_min, t_max) in µs to restrict the fit range
+
+    Returns:
+        Tuple of (params_dict, s_data, s_fit) where:
+            params_dict: {'alpha0': float, 'alphas': [...], 'taus': [...],
+                          'gain_sweet': ..., 'gain_target': ..., 'delta_gain': ...}
+            s_data: Normalized step response data
+            s_fit: Fitted normalized step response
+    """
+    if alpha0 is not None and s0 is not None:
+        raise ValueError("Cannot specify both alpha0 and s0. Use one or the other.")
+    tdata = np.asarray(tdata, dtype=float)
+    fdata = np.asarray(fdata, dtype=float)
+
+    # Convert to normalized flux
+    gain_t = flux_converter.freq_to_gain(fdata)
+    gain_sweet = flux_converter.sweet_spot
+    delta_gain = flux_gain_target - gain_sweet
+    s_data = (gain_t - gain_sweet) / delta_gain
+
+    # Apply time range filter for fitting
+    if t_range is not None:
+        t_lo = t_range[0] if t_range[0] is not None else -np.inf
+        t_hi = t_range[1] if t_range[1] is not None else np.inf
+        mask = (tdata >= t_lo) & (tdata <= t_hi)
+    else:
+        mask = np.ones(len(tdata), dtype=bool)
+    t_fit = tdata[mask]
+    s_fit_data = s_data[mask]
+
+    t_min_data = max(t_fit[t_fit > 0].min(), 1e-6) if np.any(t_fit > 0) else 1e-6
+    t_max_data = float(t_fit.max())
+
+    if alpha0 is not None:
+        # Fixed α₀: fit only the exponential terms
+        alpha0_val = float(alpha0)
+        s_shifted = s_fit_data - alpha0_val
+
+        if fitparams is None:
+            tau_guesses = np.logspace(np.log10(t_min_data), np.log10(t_max_data), n_exp)
+            total_dev = float(s_shifted[0]) if len(s_shifted) > 0 else 1.0
+            fitparams_inner = []
+            for i in range(n_exp):
+                fitparams_inner.extend([total_dev / n_exp, float(tau_guesses[i])])
+        else:
+            fitparams_inner = list(fitparams)
+
+        def s_model_fixed(t, *p):
+            result = np.full_like(t, alpha0_val, dtype=float)
+            for i in range(0, len(p), 2):
+                result += p[i] * np.exp(-t / p[i + 1])
+            return result
+
+        lower = [-2, 1e-4] * n_exp
+        upper = [2, t_max_data * 1000] * n_exp
+
+        pOpt_inner, pCov, pInit = generic_fit(
+            s_model_fixed, t_fit, s_fit_data, fitparams_inner,
+            bounds=(lower, upper),
+            error_message="Warning: step response flux fit failed!",
+        )
+
+        s_fit = s_model_fixed(tdata, *pOpt_inner)
+
+        alphas = [pOpt_inner[i] for i in range(0, len(pOpt_inner), 2)]
+        taus = [pOpt_inner[i] for i in range(1, len(pOpt_inner), 2)]
+
+    elif s0 is not None:
+        # Constrained s(0): α₀ = s0 − Σαᵢ, so we only fit [a1, tau1, ...]
+        # This breaks the degeneracy between α₀ and long-τ terms.
+        s0_val = float(s0)
+
+        if fitparams is None:
+            tau_guesses = np.logspace(np.log10(t_min_data), np.log10(t_max_data), n_exp)
+            # At the earliest data point, s ≈ s0, and at the latest, s ≈ α₀.
+            # So α₀ ≈ s_fit_data[-1], and Σαᵢ ≈ s0 − α₀.
+            total_dev = s0_val - float(s_fit_data[-1])
+            fitparams_s0 = []
+            for i in range(n_exp):
+                fitparams_s0.extend([total_dev / n_exp, float(tau_guesses[i])])
+        else:
+            fitparams_s0 = list(fitparams)
+
+        def s_model_s0(t, *p):
+            # p = [a1, tau1, a2, tau2, ...]
+            sum_alphas = sum(p[i] for i in range(0, len(p), 2))
+            alpha0_computed = s0_val - sum_alphas
+            result = np.full_like(t, alpha0_computed, dtype=float)
+            for i in range(0, len(p), 2):
+                result += p[i] * np.exp(-t / p[i + 1])
+            return result
+
+        lower = [-2, 1e-4] * n_exp
+        upper = [2, t_max_data * 1000] * n_exp
+
+        pOpt_s0, pCov, pInit = generic_fit(
+            s_model_s0, t_fit, s_fit_data, fitparams_s0,
+            bounds=(lower, upper),
+            error_message="Warning: step response flux fit (s0-constrained) failed!",
+        )
+
+        s_fit = s_model_s0(tdata, *pOpt_s0)
+
+        alphas = [pOpt_s0[i] for i in range(0, len(pOpt_s0), 2)]
+        taus = [pOpt_s0[i] for i in range(1, len(pOpt_s0), 2)]
+        alpha0_val = s0_val - sum(alphas)
+
+    else:
+        # Free α₀: fit alpha0 + exponentials
+        # Parameter layout: [alpha0, a1, tau1, a2, tau2, ...]
+        if fitparams is None:
+            tau_guesses = np.logspace(np.log10(t_min_data), np.log10(t_max_data), n_exp)
+            alpha0_guess = float(s_fit_data[-1])
+            total_dev = float(s_fit_data[0] - s_fit_data[-1])
+            fitparams = [alpha0_guess]
+            for i in range(n_exp):
+                fitparams.extend([total_dev / n_exp, float(tau_guesses[i])])
+
+        def s_model_free(t, *p):
+            result = np.full_like(t, p[0], dtype=float)
+            for i in range(1, len(p), 2):
+                result += p[i] * np.exp(-t / p[i + 1])
+            return result
+
+        lower = [-2] + [-2, 1e-4] * n_exp
+        upper = [2] + [2, t_max_data * 1000] * n_exp
+
+        pOpt, pCov, pInit = generic_fit(
+            s_model_free, t_fit, s_fit_data, fitparams,
+            bounds=(lower, upper),
+            error_message="Warning: step response flux fit failed!",
+        )
+
+        s_fit = s_model_free(tdata, *pOpt)
+
+        alpha0_val = pOpt[0]
+        alphas = [pOpt[i] for i in range(1, len(pOpt), 2)]
+        taus = [pOpt[i] for i in range(2, len(pOpt), 2)]
+
+    # Sort by time constant (ascending)
+    order = np.argsort(taus)
+    alphas = [alphas[i] for i in order]
+    taus = [taus[i] for i in order]
+
+    params = {
+        "alpha0": float(alpha0_val),
+        "alphas": alphas,
+        "taus": taus,
+        "gain_sweet": float(gain_sweet),
+        "gain_target": float(flux_gain_target),
+        "delta_gain": float(delta_gain),
+    }
+
+    return params, s_data, s_fit
+
+
+# ====================================================== #
 # Lorentzian Fit Functions
 # ====================================================== #
 
@@ -591,7 +961,7 @@ def fitdecaysin(
         fitparams[4] = np.mean(ydata)  # y0
 
     bounds = (
-        [0.6 * fitparams[0], 1e-3, -360, 0.1, np.min(ydata)],
+        [0.6 * fitparams[0], 1e-3, -360, 0.05, np.min(ydata)],
         [1.5 * fitparams[0], 1e3, 360, np.inf, np.max(ydata)],
     )
 
@@ -676,7 +1046,7 @@ def fitdecayslopesin(
         fitparams[5] = 0  # slope
 
     bounds = (
-        [0.6 * fitparams[0], 1e-3, -360, 0.1, np.min(ydata), -np.inf],
+        [0.6 * fitparams[0], 1e-3, -360, 0.03, np.min(ydata), -np.inf],
         [1.5 * fitparams[0], 1e3, 360, np.inf, np.max(ydata), np.inf],
     )
 
@@ -1104,3 +1474,220 @@ def adiabatic_iqamp(
     iamp = amp * (np.cos(phase) + 1j * np.sin(phase))
     qamp = amp * (-np.sin(phase) + 1j * np.cos(phase))
     return np.real(iamp), np.real(qamp)
+
+
+# ====================================================== #
+# Transmon Flux Model
+# Koch et al., Phys. Rev. A 76, 042319 (2007)
+# ====================================================== #
+
+
+def transmon_flux(
+    g: np.ndarray,
+    f_max: float,
+    E_C: float,
+    g_period: float,
+    g_offset: float,
+    d: float,
+) -> np.ndarray:
+    """
+    Transmon qubit frequency as a function of external flux (gain).
+
+    f(g) = (f_max + E_C) * (cos^2(phi) + d^2 * sin^2(phi))^0.25 - E_C
+
+    where phi = pi * (g - g_offset) / g_period.
+
+    Args:
+        g: Flux gain values
+        f_max: Maximum qubit frequency at the sweet spot (MHz)
+        E_C: Charging energy (MHz), typically 150-300 for transmons
+        g_period: Gain period corresponding to one flux quantum
+        g_offset: Gain value at the sweet spot
+        d: Junction asymmetry, (EJ1 - EJ2) / (EJ1 + EJ2), in [0, 1]
+
+    Returns:
+        Qubit frequency in MHz
+    """
+    phi = np.pi * (g - g_offset) / g_period
+    return (f_max + E_C) * (np.cos(phi) ** 2 + d**2 * np.sin(phi) ** 2) ** 0.25 - E_C
+
+
+def fit_transmon_flux(
+    gain: np.ndarray,
+    freq: np.ndarray,
+    E_C: float,
+    fitparams: Optional[List[Optional[float]]] = None,
+) -> Tuple[List[float], np.ndarray, List[float]]:
+    """
+    Fit transmon frequency vs flux gain with E_C fixed.
+
+    Fits 4 free parameters (f_max, g_period, g_offset, d) while holding E_C
+    constant (from device config).
+
+    Args:
+        gain: Flux gain values
+        freq: Measured qubit frequencies (MHz)
+        E_C: Charging energy (MHz), held fixed
+        fitparams: Optional initial guesses [f_max, g_period, g_offset, d].
+            Use None for individual entries to auto-guess.
+
+    Returns:
+        Tuple of (pOpt, pCov, fitparams) where pOpt is the full 5-parameter
+        tuple (f_max, E_C, g_period, g_offset, d).
+    """
+    if fitparams is None:
+        fitparams = [None, None, None, None]
+
+    # Auto-guess initial parameters
+    f_max_guess = fitparams[0] if fitparams[0] is not None else np.nanmax(freq)
+    g_period_guess = fitparams[1] if fitparams[1] is not None else 2 * abs(gain[-1] - gain[0])
+    g_offset_guess = fitparams[2] if fitparams[2] is not None else gain[np.nanargmax(freq)]
+    d_guess = fitparams[3] if fitparams[3] is not None else 0.01
+
+    p0 = [f_max_guess, g_period_guess, g_offset_guess, d_guess]
+
+    # Filter out NaN/inf entries before fitting
+    mask = np.isfinite(freq) & np.isfinite(gain)
+    gain_fit = gain[mask]
+    freq_fit = freq[mask]
+
+    bounds = (
+        [0, 0.001, gain_fit.min() - abs(np.ptp(gain_fit)), 0],
+        [np.inf, np.inf, gain_fit.max() + abs(np.ptp(gain_fit)), 1],
+    )
+
+    # Inner function with E_C closed over
+    def _model(g, f_max, g_period, g_offset, d):
+        return transmon_flux(g, f_max, E_C, g_period, g_offset, d)
+
+    pOpt, pCov, p0_used = generic_fit(
+        _model, gain_fit, freq_fit, p0, bounds=bounds,
+        error_message="Warning: transmon flux fit failed!",
+    )
+
+    # Return full 5-parameter tuple, inserting E_C
+    pOpt_full = [pOpt[0], E_C, pOpt[1], pOpt[2], pOpt[3]]
+    # Expand covariance to 5x5 with zeros for the fixed E_C row/col
+    pCov_full = np.zeros((5, 5))
+    idx = [0, 2, 3, 4]  # indices in full param list that were fitted
+    for i, ii in enumerate(idx):
+        for j, jj in enumerate(idx):
+            pCov_full[ii, jj] = pCov[i, j]
+
+    return pOpt_full, pCov_full, p0_used
+
+
+class QuadraticFluxConverter:
+    """Convert between flux gain and qubit frequency using a quadratic model."""
+
+    def __init__(self, a, b, c, direction="pos"):
+        self.a = a
+        self.b = b
+        self.c = c
+        self.direction = direction
+
+    @property
+    def sweet_spot(self):
+        return -self.b / (2 * self.a)
+
+    @property
+    def f_max(self):
+        return self.c - self.b**2 / (4 * self.a)
+
+    def gain_to_freq(self, g):
+        g = np.asarray(g)
+        return self.a * g**2 + self.b * g + self.c
+
+    def freq_to_gain(self, f):
+        f = np.asarray(f)
+        discriminant = self.b**2 - 4 * self.a * (self.c - f)
+        discriminant = np.maximum(discriminant, 0)
+        root_pos = (-self.b + np.sqrt(discriminant)) / (2 * self.a)
+        root_neg = (-self.b - np.sqrt(discriminant)) / (2 * self.a)
+        if self.direction == "pos":
+            return np.maximum(root_pos, root_neg)
+        else:
+            return np.minimum(root_pos, root_neg)
+
+
+class TransmonFluxConverter:
+    """Convert between flux gain and qubit frequency using the transmon SQUID model."""
+
+    def __init__(self, f_max, E_C, g_period, g_offset, d, direction="pos"):
+        self.params = (f_max, E_C, g_period, g_offset, d)
+        self.direction = direction
+
+    @property
+    def sweet_spot(self):
+        return self.params[3]  # g_offset
+
+    @property
+    def f_max(self):
+        return self.params[0]
+
+    def gain_to_freq(self, g):
+        return transmon_flux(np.asarray(g, dtype=float), *self.params)
+
+    def freq_to_gain(self, f):
+        """Invert the transmon model numerically using brentq on the monotonic branch."""
+        f = np.asarray(f, dtype=float)
+        scalar = f.ndim == 0
+        f = np.atleast_1d(f)
+
+        g_offset = self.params[3]
+        g_period = self.params[2]
+
+        # Search on the monotonic half-period branch.
+        # g_period is a full period of the cosine, so f(g_offset) = f(g_offset ± g_period) = f_max.
+        # Using the full period makes brentq fail (same value at both endpoints).
+        half = g_period / 2
+        if self.direction == "pos":
+            g_lo, g_hi = g_offset, g_offset + half
+        else:
+            g_lo, g_hi = g_offset - half, g_offset
+
+        results = np.empty_like(f)
+        for i, fi in enumerate(f):
+            try:
+                results[i] = sp.optimize.brentq(
+                    lambda g: transmon_flux(g, *self.params) - fi,
+                    g_lo, g_hi,
+                )
+            except ValueError:
+                # Target frequency outside model range — clamp to boundary
+                f_lo = transmon_flux(g_lo, *self.params)
+                f_hi = transmon_flux(g_hi, *self.params)
+                results[i] = g_lo if abs(f_lo - fi) < abs(f_hi - fi) else g_hi
+
+        return float(results[0]) if scalar else results
+
+
+def flux_converter_from_config(cfg_flux, cfg_qubit, qi, direction="pos"):
+    """
+    Factory: load a FluxConverter from config, preferring transmon params over quadratic.
+
+    Args:
+        cfg_flux: Config section for hw.soc.dacs.flux
+        cfg_qubit: Config section for device.qubit
+        qi: Qubit index
+        direction: 'pos' or 'neg' sweep direction from sweet spot
+
+    Returns:
+        TransmonFluxConverter, QuadraticFluxConverter, or None
+    """
+    if cfg_flux is not None and hasattr(cfg_flux, "transmon_f_max"):
+        return TransmonFluxConverter(
+            cfg_flux.transmon_f_max[qi],
+            cfg_flux.transmon_E_C[qi],
+            cfg_flux.transmon_g_period[qi],
+            cfg_flux.transmon_g_offset[qi],
+            cfg_flux.transmon_d[qi],
+            direction,
+        )
+    if cfg_flux is not None:
+        a = cfg_flux.quad_a[qi] if hasattr(cfg_flux, "quad_a") else 0
+        b = cfg_flux.quad_b[qi] if hasattr(cfg_flux, "quad_b") else 0
+        c = cfg_flux.quad_c[qi] if hasattr(cfg_flux, "quad_c") else 0
+        if a != 0 or b != 0:
+            return QuadraticFluxConverter(a, b, c, direction)
+    return None

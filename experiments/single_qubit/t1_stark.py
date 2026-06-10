@@ -198,10 +198,10 @@ class T1StarkExperiment(QickExperiment):
 
         return self.data
 
-    def display(self, data=None, fit=True, plot_all=False, ax=None, show_hist=False):
+    def display(self, data=None, fit=True, plot_all=False, ax=None, show_hist=False, **kwargs):
         """
         Display T1 Stark measurement results with exponential fit.
-        
+
         Creates a plot showing the T1 decay curve under Stark drive
         with fitted exponential decay and extracted T1 value.
         
@@ -235,6 +235,7 @@ class T1StarkExperiment(QickExperiment):
             show_hist=show_hist,
             fitfunc=self.fitfunc,
             caption_params=caption_params,
+            **kwargs,
         )
 
 
@@ -407,7 +408,7 @@ class T1StarkPowerExperiment(QickExperiment2DSimple):
         
         
         # Display main 2D plot using parent class method
-        super().display(plot_both=plot_both, title=title, xlabel=self.xlabel, ylabel=self.ylabel)
+        super().display(plot_both=plot_both, title=title, xlabel=self.xlabel, ylabel=self.ylabel, **kwargs)
 
         # Plot fit parameter trends if fitting was performed
         xval = data["stark_gain_pts"]
@@ -536,7 +537,7 @@ class T1StarkFreqExperiment(QickExperiment2DSimple):
 
         title = f"T1 Stark Freq Q{qubit} Gain: {gain}"
         ylabel = "Frequency [MHz]"
-        super().display(plot_both=False, title=title, xlabel=XLABEL, ylabel=ylabel)
+        super().display(plot_both=False, title=title, xlabel=XLABEL, ylabel=ylabel, **kwargs)
 
         fig, ax = plt.subplots(3, 1, figsize=(6, 8))
 
@@ -926,7 +927,7 @@ class T1StarkPowerQuad2D(QickExperiment2DSimple):
         title = f"T1 Stark Power Q{qubit} Freqs: {df1}, {df2}"
         ylabel = "Time (hr)"
 
-        super().display(plot_both=plot_both, title=title, xlabel=self.xlabel, ylabel=ylabel)
+        super().display(plot_both=plot_both, title=title, xlabel=self.xlabel, ylabel=ylabel, **kwargs)
 
         if 't1_norm' in data:
             fig, ax = plt.subplots(1, 1, figsize=(6, 6))

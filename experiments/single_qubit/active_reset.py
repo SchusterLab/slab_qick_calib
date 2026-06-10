@@ -593,6 +593,7 @@ class RepMeasExperiment(QickExperiment):
         if savefig:
             plt.show()
             self.save_fig(fig)
+            self.save_config()
 
     def check_reset(self):
         nbins = 75

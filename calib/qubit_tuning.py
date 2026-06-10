@@ -17,7 +17,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from ..helpers import config
+from ..helpers import config, rfboard
 from . import measure_func
 from .. import experiments as meas
 
@@ -26,9 +26,27 @@ plt.rcParams["legend.handlelength"] = 0.5
 
 # Default parameters
 MAX_T1 = 500  # Maximum T1 time in microseconds
+DEFAULT_MIN_T1 = 1.5  # Default minimum T1 time in microseconds
+DEFAULT_MIN_T2 = 1.5  # Default minimum T2 time in microseconds
 MAX_ERR = 1  # Maximum acceptable error in fits
 MIN_R2 = 0.35  # Minimum acceptable R² value for fits
 TOL = 0.3  # Tolerance for parameter convergence
+
+
+def get_min_t1(cfg, qi):
+    """Get per-qubit minimum T1 from config, falling back to DEFAULT_MIN_T1."""
+    try:
+        return cfg.device.qubit.min_T1[qi]
+    except (AttributeError, KeyError, IndexError):
+        return DEFAULT_MIN_T1
+
+
+def get_min_t2(cfg, qi):
+    """Get per-qubit minimum T2 from config, falling back to DEFAULT_MIN_T2."""
+    try:
+        return cfg.device.qubit.min_T2[qi]
+    except (AttributeError, KeyError, IndexError):
+        return DEFAULT_MIN_T2
 
 
 def tune_up_qubit(
@@ -43,6 +61,7 @@ def tune_up_qubit(
     max_err=MAX_ERR,
     min_r2=MIN_R2,
     tol=TOL,
+    soc=None,
 ):
     """
     Comprehensive measure_func procedure for a single qubit.
@@ -87,6 +106,10 @@ def tune_up_qubit(
     """
     cfg_path = cfg_dict["cfg_file"]
     auto_cfg = config.load(cfg_path)
+
+    # Switch RF board to this qubit's settings
+    if soc is not None:
+        auto_cfg = rfboard.activate_qubit_rf(qi, soc, auto_cfg, cfg_file=cfg_path)
 
     # Step 1: Resonator spectroscopy to find/verify resonator frequency
     rspec = meas.ResSpec(cfg_dict, qi=qi, params={"span": "kappa"})
@@ -497,8 +520,9 @@ def get_coherence(
 
         if prog.status:
             # Update parameter if measurement successful
+            min_val = get_min_t1(auto_cfg, qi) if par == "T1" else get_min_t2(auto_cfg, qi)
             auto_cfg = config.update_qubit(
-                cfg_dict["cfg_file"], par, new_par, qi, sig=2, rng_vals=[1.5, max_t1]
+                cfg_dict["cfg_file"], par, new_par, qi, sig=2, rng_vals=[min_val, max_t1]
             )
             err = np.abs(new_par - old_par) / old_par
         elif prog.data["fit_err"] > max_err:

@@ -269,6 +269,7 @@ class Rabi_2Q(QickExperiment2Q):
             show_hist=show_hist,
             fitfunc=fitfunc,
             caption_params=caption_params,
+            **kwargs,
         )
 
 

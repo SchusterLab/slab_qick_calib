@@ -541,3 +541,5 @@ class T1Cont2QExperiment(QickExperiment2Q):
                     i += 1
 
         plt.show()
+        if savefig:
+            self.save_config()
