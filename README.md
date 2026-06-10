@@ -65,7 +65,8 @@ from slab_qick_calib.exp_handling.instrumentmanager import InstrumentManager
 - `analysis/`: Data analysis and fitting tools
   - `allan.py`: Allan variance analysis for measuring qubit stability and noise characterization
   - `collections.py`: Data collection, processing, and visualization tools (histograms, violin plots, time series)
-  - `fitting.py`: Curve fitting functions for experiment data (exponential, sinusoidal, Lorentzian, etc.)
+  - `fitting.py`: Curve fitting functions for experiment data (exponential, sinusoidal, Lorentzian, flux models, step responses, etc.)
+  - `flux_filter.py`: Inverse IIR filters and predistorted envelope generation for flux-line compensation
   - `qubit_params.py`: Theoretical qubit parameter calculations and circuit QED formulas
   - `time_series.py`: Power spectral density and time series analysis for noise characterization
 - `calib/`: Calibration modules for qubit tuning
@@ -76,40 +77,52 @@ from slab_qick_calib.exp_handling.instrumentmanager import InstrumentManager
 - `configs/`: Configuration files for different systems
   - Various `.yml` and `.cfg` files for instrument configurations
 - `exp_handling/`: Experiment handling modules for data management and analysis (slab files, so that you don't need to install slab)
-  - `dataanalysis.py`: Data analysis utilities
-  - `datamanagement.py`: Data storage and retrieval
+  - `datamanagement.py`: Data storage and retrieval (HDF5 files, AttrDict)
   - `experiment.py`: Base experiment classes
-  - `instrumentmanager.py`: Instrument management and control
+  - `instrumentmanager.py`: Instrument management and control via Pyro4
 - `experiments/`: Experiment implementations
   - `general/`: Base classes for QICK experiments
     - `qick_experiment.py`: Base classes for single qubit QICK experiments
     - `qick_experiment_2q.py`: Base classes for two qubit QICK experiments
+    - `qick_flux_experiment.py`: Base class for experiments swept over flux gain
     - `qick_program.py`: Base classes for QICK programs
   - `single_qubit/`: Single qubit experiments
     - `active_reset.py`: Checks of active qubit reset parameters, mostly not used
+    - `power_calibration.py`: Drive power calibration
     - `pulse_probe_spectroscopy.py`: Measures qubit transition frequencies
     - `rabi.py`: Calibrates qubit control pulses
+    - `rb.py`: Randomized benchmarking
     - `resonator_spectroscopy.py`: Characterizes readout resonators
     - `single_shot.py`: Single-shot readout fidelity
     - `single_shot_opt.py`: Optimizes single-shot readout
     - `stark_spectroscopy.py`: Measures AC Stark shifts, still writing up.
-    - `t1.py`: Measures energy relaxation time
+    - `t1.py`: Measures energy relaxation time (includes T1FastFlux flux sweeps)
     - `t1_cont.py`: Fast continuous T1 measurements 
     - `t1_stark.py`: T1 measurements with Stark shifts of qubit
     - `t1_stark_complex.py`: Complex T1 measurements with multiple Stark tones
     - `t2.py`: Measures phase coherence time (Ramsey and Echo)
     - `t2_ramsey_stark.py`: Ramsey T2 with Stark shifts
     - `tof_calibration.py`: Calibrates time of flight for readout
+    - `4WM_sweeps.py`, `qubit_spec_shot.py`, `qubit_buffer_spec_shot.py`, `photon_number_splitting.py`: Four-wave mixing and photon-number experiments (work in progress)
   - `two_qubit/`: Two qubit experiments
     - `rabi_2q.py`: Two-qubit Rabi oscillations
     - `t1_2q.py`: Two-qubit T1 measurements
     - `t1_2q_cont.py`: Continuous two-qubit T1 measurements
+  - `flux/`: Fast flux experiments — flux sweeps and predistorted flux pulses (see [README_fast_flux.md](README_fast_flux.md))
+    - `pulse_probe_spectroscopy_flux.py`: Qubit spectroscopy vs DC bias or fast flux gain
+    - `resonator_spectroscopy_flux.py`: Resonator spectroscopy vs fast flux gain
+    - `rabi_flux.py`, `single_shot_flux.py`: Rabi and single-shot readout with concurrent flux pulse
+    - `t1_fastflux_loop.py`, `t1_cont_flux.py`: Fast adaptive T1 vs flux sweeps
+    - `t1_predistorted.py`, `qubit_spec_predistorted.py`, `t1_predist_fastflux.py`: Experiments using predistorted flux envelopes
+  - `smpd/`: Superconducting microwave photon detector experiments (work in progress)
 - `helpers/`: Utility functions and configuration helpers
   - `config.py`: Configuration file handling with YAML load/save and parameter updates
   - `handy.py`: General utility functions for plotting and data visualization
   - `qick_check.py`: QICK system verification, channel mapping, and debugging tools
+  - `rfboard.py`: RF board control — ADMV8818 filters, attenuators, DC bias (see [README_rfboard.md](README_rfboard.md))
 - `notebooks/`: Example notebooks and tutorials
   - Various Jupyter notebooks demonstrating package usage
+- `scripts/`: Standalone runner scripts for flux and readout experiments (non-interactive, no Jupyter required)
 
 For detailed documentation on the experiments, see [README_experiments.md](README_experiments.md).
 
@@ -122,6 +135,10 @@ For documentation on the process of tuning up qubits, see [README_qubit_tuning.m
 For information on the structure of data that is saved, see [README_data_structures.md](README_data_structures.md).
 
 For information on connecting to the QICK board remotely, see [README_connecting_to_qick.md](README_connecting_to_qick.md).
+
+For documentation on the on-board RF front end (filters, attenuators, DC bias), see [README_rfboard.md](README_rfboard.md).
+
+For documentation on fast flux sweep scans and predistorted flux pulses, see [README_fast_flux.md](README_fast_flux.md).
 
 ## Analysis Tools
 

@@ -43,6 +43,7 @@ class HistogramFluxProgram(QickProgram):
         super().__init__(soccfg, final_delay=final_delay, cfg=cfg, final_wait=final_wait)
 
     def _initialize(self, cfg):
+        """Set up readout, pi pulses (at f_ge_max), and a const flux pulse long enough to cover the whole shot."""
         cfg = AttrDict(self.cfg)
         self.add_loop("shotloop", cfg.expt.shots)
 
@@ -92,6 +93,7 @@ class HistogramFluxProgram(QickProgram):
         self.delay(0.5)
 
     def _body(self, cfg):
+        """Start the flux pulse, settle, optionally prepare e/f, then read out with flux still on."""
         cfg = AttrDict(self.cfg)
 
         # Configure readout
@@ -123,6 +125,7 @@ class HistogramFluxProgram(QickProgram):
         self.trigger(ros=[self.adc_ch], ddr4=True, pins=[0], t=self.trig_offset)
 
     def collect_shots(self, offset=0):
+        """Return flattened per-shot (I, Q) arrays from the raw ADC buffer."""
         for i, (ch, rocfg) in enumerate(self.ro_chs.items()):
             iq_raw = self.get_raw()
             i_shots = iq_raw[i][:, :, 0, 0]
@@ -193,6 +196,7 @@ class HistogramFluxExperiment(QickExperiment):
             self.go(analyze=True, display=display, progress=progress, save=True)
 
     def acquire(self, progress=False, debug=False):
+        """Collect single-shot I/Q data for ground (and optionally e/f) preparations at the flux point."""
         data = dict()
 
         if "setup_reset" in self.cfg.expt and self.cfg.expt.setup_reset:
@@ -284,6 +288,7 @@ class HistogramFluxExperiment(QickExperiment):
         return data
 
     def analyze(self, data=None, span=None, verbose=False, **kwargs):
+        """Rotate IQ data, fit g/e histograms, and compute fidelity and normalized state voltages."""
         if data is None:
             data = self.data
 
@@ -323,6 +328,7 @@ class HistogramFluxExperiment(QickExperiment):
         plot=True,
         **kwargs,
     ):
+        """Plot the single-shot IQ clouds and histograms with fidelity annotations."""
         if data is None:
             data = self.data
 
@@ -366,6 +372,7 @@ class HistogramFluxExperiment(QickExperiment):
             self.save_config()
 
     def update(self, freq=True, fast=False, verbose=True, use_peak=False):
+        """Write the fitted readout phase, threshold, fidelity, and g/e means back to the config file."""
         qi = self.cfg.expt.qubit[0]
         cfg_file = self.config_file
 

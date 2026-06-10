@@ -490,6 +490,17 @@ class ResSpec(QickExperiment):
 
     def find_resonator(self, data, prom=0.1, debug=False): 
         # Find peaks in the data (useful for coarse scans)
+            """
+            Locate resonator dips in a coarse scan by peak-finding on the smoothed amplitude.
+
+            Args:
+                data: Data dict with xpts and amps
+                prom: Minimum peak prominence (fraction of amplitude range)
+                debug: Plot the filtered data and detected peaks
+
+            Returns:
+                dict: Data with detected peak frequencies stored in data["freq"]
+            """
             xdata = data["xpts"][1:-1]
             ydata = data["amps"][1:-1]
             
@@ -1315,6 +1326,7 @@ class ResSpecFlux(QickExperiment2DSimple):
             self.run(progress=progress, analyze=False, display=display, save=True)
 
     def acquire(self, progress=False):
+        """Sweep the DC flux bias, setting it via soc.rfb_set_bias and running the inner ResSpec per row."""
         import time
         try:
             from tqdm import tqdm

@@ -46,6 +46,7 @@ class RabiFluxProgram(QickProgram):
         super().__init__(soccfg, final_delay=final_delay, cfg=cfg)
 
     def _initialize(self, cfg):
+        """Set up readout, the swept qubit pulse, optional EF pi pulses, and the const flux pulse."""
         cfg = AttrDict(self.cfg)
         q = cfg.expt.qubit[0]
 
@@ -88,6 +89,7 @@ class RabiFluxProgram(QickProgram):
         super().make_pulse(flux_pulse, "flux_pulse")
 
     def _get_pulse_params(self, cfg):
+        """Build the swept qubit pulse dict from cfg.expt (type, freq, gain, length/sigma, phase)."""
         pulse = {
             "freq": cfg.expt.freq,
             "gain": cfg.expt.gain,
@@ -108,6 +110,7 @@ class RabiFluxProgram(QickProgram):
         return pulse
 
     def _body(self, cfg):
+        """Start the flux pulse, settle, play the (repeated) Rabi pulse and optional EF wrappers, read out."""
         cfg = AttrDict(self.cfg)
 
         # Configure readout
@@ -226,6 +229,7 @@ class RabiFluxExperiment(QickExperiment):
         )
 
     def _generate_prefix(self, params, qi):
+        """Build the file prefix from sweep type, EF flags, and qubit index."""
         if "checkEF" in params and params["checkEF"]:
             ef = "ef_" if params.get("pulse_ge", True) else "ef_no_ge_"
         else:
@@ -237,6 +241,7 @@ class RabiFluxExperiment(QickExperiment):
         return f"{name}_rabi_flux_{ef}qubit{qi}"
 
     def _configure_pulse_params(self, params, params_def, qi):
+        """Fill pulse defaults (freq, gain, sigma/length, type) from the pi_ge or pi_ef config."""
         if params["checkEF"]:
             pulse_config = self.cfg.device.qubit.pulses.pi_ef
             params_def["freq"] = self.cfg.device.qubit.f_ef[qi]
@@ -268,6 +273,7 @@ class RabiFluxExperiment(QickExperiment):
         return params
 
     def _configure_sweep_params(self, params, params_def):
+        """Set the sweep range (start, max_gain or max_length) based on sweep type and n_pulses."""
         min_gain = 2**-15
 
         if params["sweep"] == "amp":
@@ -301,6 +307,7 @@ class RabiFluxExperiment(QickExperiment):
         return params
 
     def acquire(self, progress=False, debug=False):
+        """Acquire the Rabi sweep, on hardware when possible, else in a Python loop."""
         self.qubit = self.cfg.expt.qubit
         self.param = {"label": "qubit_pulse", "param_type": "pulse"}
 
@@ -313,6 +320,7 @@ class RabiFluxExperiment(QickExperiment):
             return self._acquire_qick_sweep(progress)
 
     def _acquire_qick_sweep(self, progress):
+        """Sweep gain or length on hardware with QickSweep1D."""
         if self.cfg.expt.sweep == "amp":
             self.cfg.expt["gain"] = QickSweep1D(
                 "sweep_loop", self.cfg.expt.start, self.cfg.expt.max_gain
@@ -332,6 +340,7 @@ class RabiFluxExperiment(QickExperiment):
         return self.data
 
     def _acquire_loop(self, progress):
+        """Sweep gain or length point-by-point in Python (needed for Gaussian length sweeps)."""
         if self.cfg.expt.sweep == "length":
             len_pts = np.linspace(
                 self.cfg.expt.start, self.cfg.expt.max_length, self.cfg.expt.expts
@@ -358,6 +367,7 @@ class RabiFluxExperiment(QickExperiment):
         return self.data
 
     def analyze(self, data=None, fit=True, **kwargs):
+        """Fit a sinusoid to the oscillation and extract the pi/pi-half pulse parameters."""
         if data is None:
             data = self.data
 
@@ -379,6 +389,7 @@ class RabiFluxExperiment(QickExperiment):
         return data
 
     def update(self, verbose=True):
+        """Write the fitted pi pulse gain or length back to the config file."""
         qi = self.cfg.expt.qubit[0]
         if "pi_length" not in self.data:
             print("No pi_length found in data, cannot update.")
@@ -414,6 +425,7 @@ class RabiFluxExperiment(QickExperiment):
         rescale=False,
         **kwargs,
     ):
+        """Plot the Rabi oscillation with the fitted pi length in the caption."""
         if data is None:
             data = self.data
 
@@ -435,6 +447,7 @@ class RabiFluxExperiment(QickExperiment):
         )
 
     def _get_plot_labels(self):
+        """Return (title, xlabel) appropriate for an amplitude or length sweep."""
         q = self.cfg.expt.qubit[0]
 
         if self.cfg.expt.sweep == "amp":
@@ -500,11 +513,13 @@ class RabiFluxChevronExperiment(QickExperiment2DSimple):
             super().run(progress=progress)
 
     def _get_prefix(self, params, qi):
+        """Build the file prefix from sweep type, EF flag, and qubit index."""
         sweep_type = params.get("sweep", "amp")
         ef = "ef_" if params.get("checkEF", False) else ""
         return f"{sweep_type}_rabi_flux_chevron_{ef}qubit{qi}"
 
     def acquire(self, progress=False, debug=False):
+        """Sweep the qubit drive frequency in Python, running the inner Rabi at each point."""
         freqpts = np.linspace(
             self.cfg.expt["start_f"],
             self.cfg.expt["start_f"] + self.cfg.expt["span_f"],
@@ -518,6 +533,7 @@ class RabiFluxChevronExperiment(QickExperiment2DSimple):
         return self.data
 
     def analyze(self, data=None, fit=True, **kwargs):
+        """Fit each frequency row, then fit Rabi frequency/amplitude vs detuning to the chevron model."""
         if data is None:
             data = self.data
 
@@ -557,6 +573,7 @@ class RabiFluxChevronExperiment(QickExperiment2DSimple):
         return data
 
     def display(self, data=None, fit=True, plot_all=False, **kwargs):
+        """Plot the chevron heatmap and, when fitted, the chevron frequency/amplitude curves."""
         if data is None:
             data = self.data
 
@@ -574,6 +591,7 @@ class RabiFluxChevronExperiment(QickExperiment2DSimple):
             self._plot_chevron_fits(data)
 
     def _get_title_and_labels(self):
+        """Set self.title/xlabel/ylabel for the chevron plot based on sweep type."""
         if self.cfg.expt.sweep == "amp":
             self.xlabel = "Gain / Max Gain"
             param = "sigma" if self.cfg.expt.pulse_type == "gauss" else "length"
@@ -588,6 +606,7 @@ class RabiFluxChevronExperiment(QickExperiment2DSimple):
         self.ylabel = "Frequency (MHz)"
 
     def _plot_chevron_fits(self, data):
+        """Plot Rabi frequency and amplitude vs detuning with their chevron-model fits."""
         fig, ax = plt.subplots(2, 1, figsize=(6, 6))
         qubit_freq = self.cfg.device.qubit.f_ge_max[self.cfg.expt.qubit[0]]
         detuning = data["ypts"] - qubit_freq
@@ -608,8 +627,10 @@ class RabiFluxChevronExperiment(QickExperiment2DSimple):
 
 
 def chevron_freq(x, w0, x0):
+    """Generalized Rabi frequency vs detuning: sqrt(w0^2 + (x - x0)^2)."""
     return np.sqrt(w0**2 + (x - x0)**2)
 
 
 def chevron_amp(x, w0, a, x0):
+    """Rabi oscillation amplitude vs detuning: Lorentzian of width w0."""
     return a / (1 + ((x - x0) / w0) ** 2)

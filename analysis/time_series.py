@@ -1,3 +1,10 @@
+"""
+Power spectral density analysis of qubit parameter time series.
+
+Welch PSD estimation and noise-model fitting (power law, white noise +
+Lorentzian) for identifying noise sources in tracked qubit parameters.
+"""
+
 from scipy import signal
 import numpy as np
 from scipy.optimize import curve_fit
@@ -213,6 +220,7 @@ def analyze_qubit_psd(
         # Plot time series
 
         def power_law(f, A, alpha):
+            """PSD power law: A * f^alpha."""
             return A * np.power(f, alpha)
 
         # Use only nonzero frequencies for fitting (avoid DC and Nyquist)
@@ -241,9 +249,11 @@ def analyze_qubit_psd(
 
         # --- Fit PSD to a sum of power law and Lorentzian: PSD(f) = A * f^alpha + B / (1 + ((f - f0)/gamma)^2) ---
         def power_law_lorentzian(f, A, alpha, B, gamma):
+            """PSD model: power law plus a Lorentzian of width gamma."""
             return A * np.power(f, alpha) + B / (1 + (f / gamma) ** 2)
         
         def white_lorentzian(f, A, B, gamma):
+            """PSD model: white noise floor plus a Lorentzian of width gamma."""
             return A + B / (1 + (f / gamma) ** 2)
             # --- Fit PSD to white noise + Lorentzian: PSD(f) = A + B / (1 + (f/gamma)^2) ---
 

@@ -1,3 +1,11 @@
+"""
+Measurement functions for calibration.
+
+Standalone routines built on the experiment classes: dispersive shift
+(chi) measurement via excited-state resonator spectroscopy and qubit
+temperature measurement via EF Rabi contrast.
+"""
+
 import datetime
 import matplotlib.pyplot as plt
 import numpy as np

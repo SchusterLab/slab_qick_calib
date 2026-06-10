@@ -480,8 +480,10 @@ def activate_qubit_rf(qubit, soc, cfg, cfg_file=None,
         soc: QICK SoC object
         cfg: Configuration AttrDict
         cfg_file: Optional path to persist active state to disk
-        channels: Tuple of channel types to activate
-                  (default: all three — ``"adc"``, ``"dac_readout"``, ``"dac_qubit"``)
+        channels: Tuple of channel types to activate. Any subset of
+                  ``"adc"``, ``"dac_readout"``, ``"dac_qubit"``, ``"dc_bias"``
+                  (default: all four). Types whose config sections are missing
+                  are skipped silently.
         verbose: Print summary of what was activated (default: True)
 
     Returns:

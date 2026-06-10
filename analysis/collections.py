@@ -1,3 +1,11 @@
+"""
+Processing and visualization of tracked qubit parameter collections.
+
+Loads long-term tracking data, computes derived quantities (quality factors,
+dephasing times, loss rates), and provides histogram, violin, and time-series
+plots for comparing parameters across qubits and runs.
+"""
+
 import numpy as np
 import matplotlib.units as munits
 import matplotlib.dates as mdates
@@ -214,6 +222,19 @@ def detect_t2_type(tracking_dir, qi=0):
 
 
 def process_data(tt, qubit_list=None):
+    """
+    Convert tracking data to arrays and compute derived parameters per qubit.
+
+    Normalizes t2e/t2 keys, computes quality factors and dephasing times, and
+    returns the processed data together with per-qubit summary statistics.
+
+    Args:
+        tt: Tracking data — list (per qubit) of dicts of parameter arrays
+        qubit_list: Qubits to include (default: all)
+
+    Returns:
+        (tt, stats): The processed tracking data and a stats dict
+    """
 
     if qubit_list is None:
         qubit_list = list(range(len(tt)))
@@ -263,6 +284,20 @@ def process_data(tt, qubit_list=None):
 
 
 def plot_all(tt, qubit_list=None, fname='def', param_keys=None, use_mean=False, nbins=40, plot_time=False, save_path=None, tracking_id=None, t2_type=None):
+    """
+    Plot histograms (or time series) of every tracked parameter, one panel per parameter.
+
+    Args:
+        tt: Tracking data — list (per qubit) of dicts of parameter arrays
+        qubit_list: Qubits to include (default: all)
+        fname: Base name for the saved figure
+        param_keys: Parameters to plot (default: standard set)
+        use_mean: Annotate means instead of medians
+        nbins: Histogram bin count
+        plot_time: Plot vs time instead of histograms
+        save_path, tracking_id: Where to save and which tracking run to label
+        t2_type: 'ramsey'/'echo' label override (default: auto-detect)
+    """
 
     if qubit_list is None:
         qubit_list = [i for i in range(len(tt))]
@@ -476,6 +511,7 @@ def calculate_subplot_layout(n_plots, max_cols=5, subplot_width=3.5, subplot_hei
 
 
 def nice_dates():
+    """Return (locator, formatter) for concise date axes on time-series plots."""
     locator = mdates.AutoDateLocator(minticks=3, maxticks=7)
     formatter = mdates.ConciseDateFormatter(locator)
     formats = [
@@ -672,6 +708,17 @@ def plot_violin(tt, qubit_list=None, fname='def', param_keys=None, use_mean=Fals
 
 
 def plot_sets(d, xvals, yvals, cols=4, nrep=10, fit_func=None, params=None):
+    """
+    Plot grouped repeated scans, nrep traces per panel, with optional fits.
+
+    Args:
+        d: List of data dicts with xvals/yvals keys
+        xvals, yvals: Keys to plot
+        cols: Panels per row
+        nrep: Number of consecutive datasets overlaid in each panel
+        fit_func: Optional fit function plotted using params
+        params: Fit parameters per dataset (used with fit_func)
+    """
     sns.set_palette("coolwarm", nrep)
     nsets = len(d)
     rows = int(np.ceil(nsets / nrep / cols))
@@ -830,6 +877,7 @@ def plot_vs_temperature(tt, qubit_list=None, param_keys=None, use_mean=False, sa
 
 
 def add_losses(tt):
+    """Add loss-rate keys (Gamma1, Gamma2r, ... in 1/ms) computed from the coherence times."""
     par_list = ['t1','t2r','t2', 'tphi', 'tsphi']
     for j in range(len(tt)):
         for par in par_list:

@@ -184,6 +184,16 @@ def cohere(cfg_path, t2_type=None):
         config.update_config(model_name, None, 'T1_nopurcell', T1nopurcell, index=i, verbose=False, sig=4)
 
 def stats(cfg_path, tt_stats, qubit_list, t2='auto', tracking_dir=None):
+    """
+    Write tracked coherence statistics (mean/max/std of T1, T2, Q1, Tphi) into the model config.
+
+    Args:
+        cfg_path: Path to the device config file
+        tt_stats: Per-qubit statistics dict from collections.process_data
+        qubit_list: Qubits to include
+        t2: 'ramsey'/'echo', a per-qubit list, or 'auto' to detect from tracking_dir
+        tracking_dir: Tracking directory (required when t2='auto')
+    """
     from .collections import detect_t2_type
 
     # Resolve per-qubit T2 type

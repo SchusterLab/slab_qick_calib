@@ -1,5 +1,8 @@
 # CLAUDE.md
 
+User-facing guides: [README_rfboard.md](README_rfboard.md) (RF board filters/attenuators/DC bias)
+and [README_fast_flux.md](README_fast_flux.md) (fast flux sweeps and predistortion).
+
 ## Running experiments from scripts
 
 ### Connecting to hardware

@@ -1,3 +1,12 @@
+"""
+Base classes for single-qubit QICK experiments.
+
+Provides the experiment hierarchy documented in README_classes.md:
+QickExperiment (1D hardware sweeps), QickExperimentLoop (Python-loop sweeps),
+QickExperiment2D / 2DSimple / 2DSweep (2D variants), plus DataProcessor for
+IQ data handling and live-plotting helpers for Jupyter.
+"""
+
 import matplotlib.pyplot as plt
 import copy
 import functools
@@ -183,6 +192,7 @@ def _wrap_display_method(method):
     """Wrap a display method so it always resets/applies rcParams before plotting."""
     @functools.wraps(method)
     def wrapper(self, *args, **kwargs):
+        """Apply the display style, then call the wrapped method."""
         display_mode = kwargs.get('display') or getattr(self, '_display_mode', None)
         DisplayManager.apply_display_style(display_mode)
         return method(self, *args, **kwargs)
@@ -759,6 +769,7 @@ class QickExperiment(Experiment):
         plt.show()
 
     def save_config(self, suffix=''):
+        """Save the experiment's config as a YAML file alongside the saved images."""
         file_path = Path(self.fname)
         new_filename = file_path.name.rsplit(".", 1)[0] + suffix + ".yml"
         output_path = Path(self.path) / "images" / new_filename
@@ -1468,6 +1479,7 @@ class LivePlotter:
 
     @staticmethod
     def _check_jupyter():
+        """Return True when running under a Jupyter kernel (required for live plotting)."""
         try:
             from IPython import get_ipython
             ip = get_ipython()
@@ -1622,6 +1634,7 @@ class QubitSpecFastFluxLivePlotter:
             print("[LivePlot] Not in a Jupyter environment, live plotting disabled.")
 
     def _render_to_image(self):
+        """Render the current figure to an IPython Image to keep display lightweight."""
         import io
         from IPython.display import Image
         buf = io.BytesIO()
@@ -1711,12 +1724,14 @@ class QubitSpecFastFluxLivePlotter:
             print(f"[LivePlot] Update failed: {e}")
 
     def _create_figure(self):
+        """Create the two-panel (frequency trace, color map) live-plot figure without rendering it."""
         self.fig, (self.ax_freq, self.ax_color) = plt.subplots(
             1, 2, figsize=(12, 4), dpi=80
         )
         plt.close(self.fig)  # prevent inline rendering
 
     def close(self):
+        """Close the live-plot figure and release it."""
         if self.fig is not None:
             plt.close(self.fig)
             self.fig = None
@@ -1835,6 +1850,7 @@ class QickExperiment2DSweep(QickExperiment2DBase):
     def acquire(
         self, prog_name, progress=True, get_hist=True, single=True, compact=False, shots=False
     ):
+        """Run a single program containing both hardware sweep dimensions and reshape the result to 2D."""
                 # Set appropriate final delay based on whether active reset is enabled
         final_delay = self._get_final_delay()
 

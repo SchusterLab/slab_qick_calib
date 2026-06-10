@@ -15,6 +15,8 @@ The system consists of three components:
 - Firewall must allow connections on the chosen ports (default 9090)
 - IP addresses must be known for Nameserver and QICK board.
 
+**Note**: the `InstrumentManager` port must match the port the nameserver was actually started on. The `nameserver.py` script at the repo root (and `start_nameserver.bat`) starts the nameserver on port **8888**, so connect with `InstrumentManager(ns_address=..., port=8888)`. The examples below use the Pyro4 default of 9090 — substitute your port.
+
 ## Step-by-Step Setup
 
 ### Step 1: Start the Nameserver

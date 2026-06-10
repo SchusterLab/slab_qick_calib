@@ -12,7 +12,17 @@ import numpy as np
 
 
 def get_dac_ch_name(soc, gen_ch):
-    """Gets the name of a DAC channel."""
+    """
+    Get the physical connector name of a DAC (generator) channel.
+
+    Args:
+        soc: QICK SoC or QickConfig object (indexable, e.g. soc['gens'])
+        gen_ch (int): Generator channel index
+
+    Returns:
+        str: Board-specific connector name (RFSoC4x2, ZCU111, and ZCU216
+        are recognized; other boards get a generic "DAC_<tile><block>" label)
+    """
     dac_ch_str = soc['gens'][gen_ch]['dac']
     tile, block = [int(c) for c in dac_ch_str]
     if soc['board']=='RFSoC4x2':
@@ -24,7 +34,17 @@ def get_dac_ch_name(soc, gen_ch):
     return f"DAC_{dac_ch_str}"
 
 def get_adc_ch_name(soc, ro_ch):
-    """Gets the name of an ADC channel."""
+    """
+    Get the physical connector name of an ADC (readout) channel.
+
+    Args:
+        soc: QICK SoC or QickConfig object (indexable, e.g. soc['readouts'])
+        ro_ch (int): Readout channel index
+
+    Returns:
+        str: Board-specific connector name (RFSoC4x2, ZCU111, and ZCU216
+        are recognized; other boards get a generic "ADC_<tile><block>" label)
+    """
     adc_ch_str = soc['readouts'][ro_ch]['adc']
     tile, block = [int(c) for c in adc_ch_str]
     if soc['board']=='RFSoC4x2':
@@ -38,7 +58,16 @@ def get_adc_ch_name(soc, ro_ch):
 
 def get_ch(soc, name, type='dac'):
     """
-    Get the channel number for a given DAC or ADC name.
+    Look up a channel index from (part of) its connector name.
+
+    Args:
+        soc: QICK SoC or QickConfig object
+        name (str): Substring of the connector name as returned by
+            get_dac_ch_name / get_adc_ch_name (e.g. "DAC_A", "0_228")
+        type (str): 'dac' or 'adc' (default: 'dac')
+
+    Returns:
+        int or None: First matching channel index, or None if no match
     """
     if type == 'dac':
         for i in range(len(soc['gens'])):

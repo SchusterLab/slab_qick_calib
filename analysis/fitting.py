@@ -510,6 +510,7 @@ def fit_step_response(
                 fitparams_inner[idx_tau] = float(tau_guesses[i])
 
         def _model(t, *p):
+            """Sum-of-exponentials with f_inf closed over."""
             return sum_exp_func(t, f_inf_val, *p)
 
         lower = [-np.inf, 1e-6] * n_exp
@@ -671,6 +672,7 @@ def fit_step_response_flux(
             fitparams_inner = list(fitparams)
 
         def s_model_fixed(t, *p):
+            """Step-response model with alpha0 fixed."""
             result = np.full_like(t, alpha0_val, dtype=float)
             for i in range(0, len(p), 2):
                 result += p[i] * np.exp(-t / p[i + 1])
@@ -707,6 +709,7 @@ def fit_step_response_flux(
             fitparams_s0 = list(fitparams)
 
         def s_model_s0(t, *p):
+            """Step-response model with s(0) constrained (alpha0 derived from the alphas)."""
             # p = [a1, tau1, a2, tau2, ...]
             sum_alphas = sum(p[i] for i in range(0, len(p), 2))
             alpha0_computed = s0_val - sum_alphas
@@ -742,6 +745,7 @@ def fit_step_response_flux(
                 fitparams.extend([total_dev / n_exp, float(tau_guesses[i])])
 
         def s_model_free(t, *p):
+            """Step-response model with alpha0 as a free parameter (p[0])."""
             result = np.full_like(t, p[0], dtype=float)
             for i in range(1, len(p), 2):
                 result += p[i] * np.exp(-t / p[i + 1])
@@ -1558,6 +1562,7 @@ def fit_transmon_flux(
 
     # Inner function with E_C closed over
     def _model(g, f_max, g_period, g_offset, d):
+        """Transmon flux model with E_C closed over."""
         return transmon_flux(g, f_max, E_C, g_period, g_offset, d)
 
     pOpt, pCov, p0_used = generic_fit(
@@ -1588,17 +1593,21 @@ class QuadraticFluxConverter:
 
     @property
     def sweet_spot(self):
+        """Gain at the parabola vertex (maximum frequency)."""
         return -self.b / (2 * self.a)
 
     @property
     def f_max(self):
+        """Maximum frequency, at the sweet spot (MHz)."""
         return self.c - self.b**2 / (4 * self.a)
 
     def gain_to_freq(self, g):
+        """Evaluate f(g) = a*g^2 + b*g + c."""
         g = np.asarray(g)
         return self.a * g**2 + self.b * g + self.c
 
     def freq_to_gain(self, f):
+        """Invert the quadratic analytically, picking the root on the configured direction side."""
         f = np.asarray(f)
         discriminant = self.b**2 - 4 * self.a * (self.c - f)
         discriminant = np.maximum(discriminant, 0)
@@ -1619,13 +1628,16 @@ class TransmonFluxConverter:
 
     @property
     def sweet_spot(self):
+        """Gain at the flux sweet spot (g_offset)."""
         return self.params[3]  # g_offset
 
     @property
     def f_max(self):
+        """Maximum frequency, at the sweet spot (MHz)."""
         return self.params[0]
 
     def gain_to_freq(self, g):
+        """Evaluate the transmon SQUID model f(g)."""
         return transmon_flux(np.asarray(g, dtype=float), *self.params)
 
     def freq_to_gain(self, f):

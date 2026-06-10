@@ -92,6 +92,22 @@ Adds a new pulse definition to the configuration under `device.qubit.pulses`. Us
 - **const**: `gain`=0.15, `length`=1
 - **flat_top**: `gain`=0.15, `length`=0.1, `ramp_sigma`=0.02, `ramp_sigma_inc`=4
 
+## RF Board Configuration Functions
+
+For systems with an on-board RF front end (filters, attenuators, DC bias), four functions manage the per-qubit RF board settings under `hw.soc`. See [README_rfboard.md](README_rfboard.md) for the full workflow.
+
+### `init_rfboard_section(file_name, num_qubits)`
+Adds `filter_fc`, `filter_bw`, and `filter_type` arrays to `adcs.readout`, `dacs.readout`, and (if present) `dacs.qubit`, with bypass defaults. Idempotent — existing values are preserved.
+
+### `init_rfboard_active_section(file_name)`
+Adds the `hw.soc.rfboard_active` section that tracks the last-programmed state of each physical RF channel. Idempotent.
+
+### `update_rfboard(file_name, path, field, value, index=None, ...)`
+Updates a single RF board parameter, e.g. `update_rfboard(cfg_path, "dacs.qubit", "filter_bw", 500, index=qi)`. Convenience wrapper for `update_config` targeting `hw.soc.{path}`.
+
+### `update_rfboard_active(file_name, channel_type, ch, settings)`
+Persists a channel's active RF state to disk. Normally called internally by the `helpers/rfboard.py` functions rather than directly.
+
 ## Configuration Structure
 
 The configuration is organized into three main sections:

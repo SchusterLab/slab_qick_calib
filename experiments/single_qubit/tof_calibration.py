@@ -1,3 +1,17 @@
+"""
+Time of Flight (ToF) Calibration Module
+
+Purpose:
+    Run this calibration when the wiring of the setup is changed.
+    
+    This calibration measures the time of flight of measurement pulse so we only start 
+    capturing data from this point in time onwards. Time of flight (tof) is stored in 
+    parameter cfg.device.readout.trig_offset.
+    
+    By calibrating this delay, we ensure that data acquisition starts at the optimal time
+    when the signal actually arrives at the detector, avoiding dead time or missed signals.
+"""
+
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
@@ -16,19 +30,6 @@ def exp_func(x, a, b, c):
     """Exponential decay/rise: a * exp(-x * b) + c"""
     return a * np.exp(-x * b) + c
 
-"""
-Time of Flight (ToF) Calibration Module
-
-Purpose:
-    Run this calibration when the wiring of the setup is changed.
-    
-    This calibration measures the time of flight of measurement pulse so we only start 
-    capturing data from this point in time onwards. Time of flight (tof) is stored in 
-    parameter cfg.device.readout.trig_offset.
-    
-    By calibrating this delay, we ensure that data acquisition starts at the optimal time
-    when the signal actually arrives at the detector, avoiding dead time or missed signals.
-"""
 
 
 class LoopbackProgram(QickProgram):
@@ -356,6 +357,7 @@ class ToFCalibrationExperiment(QickExperiment):
 
 
     def update(self, verbose=True):
+        """Write the measured trigger offset back to the config file."""
         qi = self.cfg.expt.qubit[0]
         cfg_file = self.config_file
         if 'trig_offset' in self.data:

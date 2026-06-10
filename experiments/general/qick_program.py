@@ -1,7 +1,3 @@
-from qick.asm_v2 import AveragerProgramV2
-from ...exp_handling.datamanagement import AttrDict
-from qick import *
-
 """
 QICK Program Module
 
@@ -16,6 +12,10 @@ The module contains two main classes:
 - QickProgram: For single-qubit experiments
 - QickProgram2Q: For two-qubit experiments
 """
+
+from qick.asm_v2 import AveragerProgramV2
+from ...exp_handling.datamanagement import AttrDict
+from qick import *
 
 
 class QickProgram(AveragerProgramV2):
@@ -49,6 +49,7 @@ class QickProgram(AveragerProgramV2):
         super().__init__(soccfg, self.cfg.expt.reps, final_delay, final_wait=final_wait, cfg=cfg)
 
     def save_params(self, readout='standard'):
+        """Cache qubit/readout channel numbers, types, and readout parameters as attributes."""
         cfg = AttrDict(self.cfg)
 
         # Get qubit index from configuration
@@ -1114,6 +1115,7 @@ class QickSMPDProgram(QickProgram):
                 declared_gens.append(self.qubit_ch)
 
     def _body(self, cfg):
+        """Default body: configure readouts, play the readout pulse, and trigger all ADCs."""
         cfg = AttrDict(self.cfg)
         if self.adc_type == "dyn":
             for a_ch, i in zip(self.all_adc_chs, range(len(self.all_adc_chs))):
@@ -1124,6 +1126,7 @@ class QickSMPDProgram(QickProgram):
         self.trigger(ros=self.all_adc_chs, pins=[0], t=self.trig_offset, ddr4=True)
 
     def measure(self, cfg):
+        """Play the readout pulse (and LO mix pulse if present), trigger the ADCs, and optionally reset."""
         cfg = AttrDict(self.cfg)
         self.pulse(ch=self.res_ch, name="readout_pulse", t=0)
         if self.lo_ch is not None:
@@ -1193,6 +1196,7 @@ class QickSMPDProgram(QickProgram):
             #     self.delay_auto(0.01)  # Final small delay after last iteration
 
     def cond_reset(self, i):
+        """Two-round conditional reset: measure and apply a pi pulse only when the qubit reads as |1>."""
         n = 0
         cfg = AttrDict(self.cfg)
         self.wait_auto(cfg.expt.read_wait)
@@ -1229,6 +1233,14 @@ class QickSMPDProgram(QickProgram):
         self.label(f"NOPULSE0")
 
     def collect_shots(self, offset=0, single=True):
+        """
+        Return per-shot (I, Q) values from the raw ADC buffer, normalized by readout length.
+
+        Args:
+            offset: Value subtracted from each normalized sample
+            single: If True, return flattened arrays for the active channel;
+                if False, return lists with one entry per readout
+        """
         if not single:
             i_shots = []
             q_shots = []

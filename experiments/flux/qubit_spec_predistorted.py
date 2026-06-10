@@ -44,6 +44,7 @@ class QubitSpecPredistProgram(QickProgram):
         super().__init__(soccfg, final_delay=final_delay, cfg=cfg)
 
     def _initialize(self, cfg):
+        """Set up readout, probe pulse, and the predistorted flux envelope (lead + probe + trail)."""
         cfg = AttrDict(self.cfg)
 
         q = cfg.expt.qubit[0]
@@ -137,6 +138,7 @@ class QubitSpecPredistProgram(QickProgram):
             super().make_cfg_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
 
     def _body(self, cfg):
+        """Play flux pulse, probe after flux_lead_time, readout, and the optional negative reset."""
         cfg = AttrDict(self.cfg)
 
         if self.adc_type == "dyn":
@@ -287,6 +289,7 @@ class QubitSpecPredist(QickExperiment):
                         display=display, progress=progress)
 
     def acquire(self, progress=False):
+        """Sweep the probe frequency with a hardware QickSweep1D and acquire."""
         q = self.cfg.expt.qubit[0]
         final_delay = self.cfg.expt.final_delay
         if self.cfg.expt.flux and self.cfg.expt.flux_negative_reset:
@@ -304,6 +307,7 @@ class QubitSpecPredist(QickExperiment):
         return self.data
 
     def analyze(self, data=None, fit=True, **kwargs):
+        """Fit a Lorentzian to the spectrum and store the peak as new_freq."""
         if data is None:
             data = self.data
         if fit:
@@ -389,6 +393,7 @@ class QubitSpecPredist(QickExperiment):
         return env
 
     def display(self, fit=True, ax=None, plot_all=True, **kwargs):
+        """Plot the spectrum with fitted frequency and linewidth in the caption."""
         fitfunc = self.fitfunc
         xlabel = "Qubit Frequency (MHz)"
         title = (f"Spectroscopy Q{self.cfg.expt.qubit[0]} "

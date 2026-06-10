@@ -180,6 +180,7 @@ class RBProgram(QickProgram):
         super().__init__(soccfg, final_delay=final_delay, cfg=cfg, final_wait=0)
 
     def _initialize(self, cfg):
+        """Set up readout and the Clifford gate set: pi pulses at 0/90 and pi/2 pulses at 0/90/180/270."""
         cfg = AttrDict(self.cfg)
         super()._initialize(cfg, readout="standard")
 
@@ -210,6 +211,7 @@ class RBProgram(QickProgram):
             super().make_cfg_pulse(q, cfg.device.qubit.f_ge, "pi_ge")
 
     def _body(self, cfg):
+        """Play the random gate sequence from cfg.expt.gate_list, then measure."""
         cfg = AttrDict(self.cfg)
         if self.adc_type == "dyn":
             self.send_readoutconfig(ch=self.adc_ch, name="readout", t=0)
@@ -293,6 +295,7 @@ class RBExperiment(QickExperiment):
         )
 
     def acquire(self, progress=False):
+        """Run num_seeds random sequences at each depth, measuring the return probability."""
         depths = np.array(self.cfg.expt.depths)
         num_seeds = self.cfg.expt.num_seeds
 
@@ -362,6 +365,7 @@ class RBExperiment(QickExperiment):
         return data
 
     def analyze(self, data=None, fit=True, verbose=True, **kwargs):
+        """Fit survival probability vs depth to an exponential and extract the error per Clifford."""
         if data is None:
             data = self.data
 
@@ -409,6 +413,7 @@ class RBExperiment(QickExperiment):
         return data
 
     def display(self, data=None, fit=True, ax=None, savefig=True, **kwargs):
+        """Plot survival probability vs sequence depth with the RB decay fit."""
         import matplotlib.pyplot as plt
 
         if data is None:

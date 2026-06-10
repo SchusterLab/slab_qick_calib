@@ -8,6 +8,7 @@ This document provides a comprehensive guide to configuring and running various 
 - [Available Experiments](#available-experiments)
   - [Single Qubit Experiments](#single-qubit-experiments)
   - [Two Qubit Experiments](#two-qubit-experiments)
+  - [Flux Experiments](#flux-experiments)
 - [Common Experiment Workflows](#common-experiment-workflows)
 - [Parameter Reference](#parameter-reference)
 
@@ -714,6 +715,35 @@ t1_2q = meas.T1_2Q(cfg_dict, qi=[0, 1])
 **Example**:
 ```python
 t1_2q_cont = meas.T1Cont2QExperiment(cfg_dict, qi=[0, 1], params={'shots': 50000})
+```
+
+### Flux Experiments
+
+**Directory**: `experiments/flux/` (plus `T1FastFlux` in `experiments/single_qubit/t1.py`)
+
+Experiments that pulse the qubit flux line with a fast QICK DAC and sweep measurements across flux. They share common sweep parameters (`gain_start`, `gain_stop`, `expts_gain`, `direction`, `freq_span`, `lin_freq`) through the `QickFluxSweep` base class in `experiments/general/qick_flux_experiment.py`. See [README_fast_flux.md](README_fast_flux.md) for a full guide, including the flux-line predistortion pipeline.
+
+| Experiment | File | Measures |
+|------------|------|----------|
+| `QubitSpecFlux` | `pulse_probe_spectroscopy_flux.py` | Qubit spectroscopy vs DC bias (2D) |
+| `QubitSpecFastFlux` | `pulse_probe_spectroscopy_flux.py` | Qubit frequency vs fast flux gain; fits the flux model |
+| `QubitSpecFluxSweep` | `pulse_probe_spectroscopy_flux.py` | Spectroscopy vs an arbitrary parameter (e.g. `flux_lead_time` for step-response characterization) |
+| `ResSpecFastFlux` | `resonator_spectroscopy_flux.py` | Resonator frequency vs flux gain |
+| `RabiFluxExperiment` | `rabi_flux.py` | Rabi oscillations with concurrent flux pulse |
+| `HistogramFluxExperiment` | `single_shot_flux.py` | Single-shot readout at an operating flux point |
+| `T1FastFlux` | `../single_qubit/t1.py` | Full T1 decay curves at each flux point |
+| `T1FastFluxLoop` | `t1_fastflux_loop.py` | Fast adaptive single-point T1 vs flux |
+| `T1ContFluxExperiment` | `t1_cont_flux.py` | T1 vs flux with inline g/e calibration |
+| `T1Predist`, `QubitSpecPredist` | `t1_predistorted.py`, `qubit_spec_predistorted.py` | T1 / spectroscopy with predistorted flux envelopes |
+| `T1PredistFastFlux` | `t1_predist_fastflux.py` | T1 vs flux with predistorted pulses |
+
+The `*Repeated` variants (`T1FastFluxLoopRepeated`, `T1ContFluxRepeated`, `T1PredistFastFluxRepeated`) rerun their sweep continuously to build T1(frequency, time) heatmaps with live plotting and incremental CSV saves.
+
+**Example**:
+```python
+t1_loop = meas.T1FastFluxLoop(cfg_dict, qi=2, params={
+    'gain_start': 0.16, 'gain_stop': -0.28, 'expts_gain': 300,
+    'lin_freq': True, 'direction': 'neg'})
 ```
 
 ## Common Experiment Workflows

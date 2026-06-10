@@ -47,6 +47,7 @@ class T1PredistProgram(QickProgram):
         super().__init__(soccfg, final_delay=final_delay, cfg=cfg)
 
     def _initialize(self, cfg):
+        """Set up readout, pi pulse, and the predistorted flux envelope sized to wait_time."""
         cfg = AttrDict(self.cfg)
 
         q = cfg.expt.qubit[0]
@@ -113,6 +114,7 @@ class T1PredistProgram(QickProgram):
                 )
 
     def _body(self, cfg):
+        """Play pi pulse, predistorted flux pulse, readout, and the optional negative reset pulse."""
         cfg = AttrDict(self.cfg)
 
         if self.adc_type == "dyn":
@@ -241,6 +243,13 @@ class T1Predist(QickExperiment):
             )
 
     def acquire(self, progress=False, debug=False, **kwargs):
+        """
+        Sweep wait_time in a Python loop, rebuilding the program per point.
+
+        The arb envelope length is fixed at program load, so each wait time
+        gets a fresh T1PredistProgram with a correctly-sized envelope.  The
+        span is capped so the longest envelope fits in generator memory.
+        """
         q = self.cfg.expt.qubit[0]
         final_delay = self._get_final_delay()
 
@@ -341,6 +350,7 @@ class T1Predist(QickExperiment):
         return self.data
 
     def analyze(self, data=None, **kwargs):
+        """Fit the decay to an exponential and store the new T1 estimate."""
         if data is None:
             data = self.data
 
@@ -362,6 +372,7 @@ class T1Predist(QickExperiment):
         rescale=False,
         **kwargs,
     ):
+        """Plot the T1 decay with the fitted T1 in the caption."""
         qubit = self.cfg.expt.qubit[0]
         title = f"$T_1$ Q{qubit}"
         flux_gain = self.cfg.expt.flux_gain
@@ -468,6 +479,7 @@ class T1Predist(QickExperiment):
         return env
 
     def update(self, rng_vals=[0.5, 500], first_time=False, no_final=False, verbose=True):
+        """Write the fitted T1 (and derived final_delay) back to the config file."""
         qi = self.cfg.expt.qubit[0]
         if self.status:
             config.update_qubit(

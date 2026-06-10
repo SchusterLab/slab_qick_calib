@@ -1,3 +1,11 @@
+"""
+Continuous two-qubit T1 measurements.
+
+Monitors T1 on two qubits over time using interleaved ground/excited/T1
+measurements (see T1Cont2QExperiment in t1_2q_conttest.py for the
+shot-resolved variant under development).
+"""
+
 import numpy as np
 from qick import *
 

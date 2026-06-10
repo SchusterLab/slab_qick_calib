@@ -1,3 +1,17 @@
+"""
+T1 vs flux gain with inline g/e calibration.
+
+Each pulse program interleaves short-wait (excited proxy), long-wait
+(ground proxy), and T1-wait measurements, so every flux point carries its
+own ve/vg calibration — robust against slow drifts and flux-dependent
+readout shifts.
+
+Classes:
+- T1ContFluxProgram: Pulse sequence with the interleaved calibration shots
+- T1ContFluxExperiment: T1 vs flux gain sweep using the inline calibration
+- T1ContFluxRepeated: Repeated sweeps building a T1(frequency, time) heatmap
+"""
+
 import numpy as np
 import time
 from datetime import datetime
@@ -23,6 +37,7 @@ class T1ContFluxProgram(QickProgram):
         super().__init__(soccfg, final_delay=final_delay, cfg=cfg)
 
     def _initialize(self, cfg):
+        """Set up readout, pi pulse, and three const flux pulses (short/long/T1 wait lengths)."""
         cfg = AttrDict(self.cfg)
 
         # Standard readout and pi pulse
@@ -45,6 +60,7 @@ class T1ContFluxProgram(QickProgram):
         super().make_pulse({**flux_base, "length": cfg.expt.wait_time}, "flux_pulse_t1")
 
     def _body(self, cfg):
+        """Play the interleaved sequence: n_e excited-proxy, n_g ground-proxy, then n_t1 T1 shots."""
         cfg = AttrDict(self.cfg)
 
         if self.adc_type == "dyn":
@@ -80,6 +96,7 @@ class T1ContFluxProgram(QickProgram):
             self.delay_auto(t=cfg.expt["final_delay"] + 0.01, tag=f"final_delay_t1_{i}")
 
     def measure(self, cfg):
+        """Play the readout pulse (and LO mix pulse if present) and trigger the ADC."""
         self.pulse(ch=self.res_ch, name="readout_pulse", t=0)
         if self.lo_ch is not None:
             self.pulse(ch=self.lo_ch, name="mix_pulse", t=0.01)
@@ -189,6 +206,18 @@ class T1ContFluxExperiment(QickExperimentLoop):
             self.display()
 
     def acquire(self, progress=True, display=False):
+        """
+        Run the adaptive T1 sweep over all gain points with inline calibration.
+
+        Per gain point, runs T1ContFluxProgram once, splits the shots into
+        ve (short-wait), vg (long-wait), and T1 groups, converts the T1 group
+        to a population, and updates the adaptive wait time (T1/2).  Saves
+        interim HDF5 data and an incremental CSV after every point.
+
+        Returns:
+            dict: Data with gain_pts, freq_pts (if a flux model exists),
+            ve_list/vg_list per point, population, wait_times, and t1_list
+        """
         from pathlib import Path
 
         final_delay = self._get_final_delay()
@@ -331,6 +360,7 @@ class T1ContFluxExperiment(QickExperimentLoop):
         return data
 
     def display(self, data=None, **kwargs):
+        """Plot T1, population, and ve/vg calibration voltages vs gain (and T1 vs frequency)."""
         import matplotlib.pyplot as plt
 
         if data is None:
@@ -444,6 +474,17 @@ class T1ContFluxRepeated(T1ContFluxExperiment):
             self.display()
 
     def acquire(self, progress=False, display=True):
+        """
+        Run repeated inline-calibrated sweeps until n_repeats / duration_hours / interrupt.
+
+        Each iteration runs one T1ContFluxExperiment sweep (which carries its
+        own calibration), appends the T1 row to the heatmap data, live-plots
+        it, and saves the master HDF5.
+
+        Returns:
+            dict: Data with t1_list (2D: sweeps × gain points), timestamps
+            (hours elapsed), gain_pts, and freq_pts
+        """
         from pathlib import Path
 
         try:
@@ -545,6 +586,7 @@ class T1ContFluxRepeated(T1ContFluxExperiment):
         return self.data
 
     def _update_heatmap(self, data):
+        """Refresh the live Jupyter heatmap (frequency × elapsed time, color = T1) after a sweep."""
         import sys
         import io
         import matplotlib.pyplot as plt
@@ -612,6 +654,7 @@ class T1ContFluxRepeated(T1ContFluxExperiment):
             print(f"[LivePlot] Heatmap update failed: {e}")
 
     def display(self, data=None, **kwargs):
+        """Plot the accumulated T1(frequency, time) heatmap with robust color limits."""
         import matplotlib.pyplot as plt
 
         if data is None:

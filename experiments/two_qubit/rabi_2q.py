@@ -1,3 +1,10 @@
+"""
+Two-qubit Rabi oscillations.
+
+Drives both qubits simultaneously with amplitude-swept pulses and reads both
+out, including an EF variant and a 2D chevron (frequency × amplitude) version.
+"""
+
 import matplotlib.pyplot as plt
 import matplotlib.pyplot as plt
 import numpy as np
@@ -16,10 +23,13 @@ from ...analysis import fitting as fitter
 
 
 class RabiProgram_2Q(QickProgram2Q):
+    """Pulse sequence driving amplitude-swept Rabi pulses on two qubits simultaneously."""
+
     def __init__(self, soccfg, final_delay, cfg):
         super().__init__(soccfg, final_delay=final_delay, cfg=cfg)
 
     def _initialize(self, cfg):
+        """Set up readout and the swept Rabi pulse (plus optional EF pi pulses) for each qubit."""
         cfg = AttrDict(self.cfg)
 
         super()._initialize(cfg, readout="standard")
@@ -39,6 +49,7 @@ class RabiProgram_2Q(QickProgram2Q):
         # if cfg.expt.checkEF and cfg.expt.pulse_ge:
 
     def _body(self, cfg):
+        """Play the Rabi pulses on both qubits (with EF wrappers when enabled) and read both out."""
 
         cfg = AttrDict(self.cfg)
         for q in range(len(cfg.expt.qubit)):
@@ -72,6 +83,7 @@ class RabiProgram_2Q(QickProgram2Q):
             self.reset(3)
 
     def reset(self, i):
+        """Run the standard two-qubit active reset protocol."""
         super().reset(i)
 
 
@@ -175,6 +187,7 @@ class Rabi_2Q(QickExperiment2Q):
             super().run(min_r2=min_r2, max_err=max_err)
 
     def acquire(self, progress=False, debug=False):
+        """Sweep both qubits' pulse gains on hardware and acquire."""
         self.qubit = self.cfg.expt.qubit
         param_pulse = "gain"
         self.cfg.expt["gain"] = [
@@ -200,6 +213,7 @@ class Rabi_2Q(QickExperiment2Q):
         return self.data
 
     def analyze(self, data=None, fit=True, **kwargs):
+        """Fit a sinusoid to each qubit's oscillation."""
         if data is None:
             data = self.data
 
@@ -230,6 +244,7 @@ class Rabi_2Q(QickExperiment2Q):
         show_hist=True,
         **kwargs,
     ):
+        """Plot both qubits' Rabi oscillations with fits."""
         if data is None:
             data = self.data
 
@@ -339,6 +354,7 @@ class RabiChevron_2Q(QickExperiment2DSimple):
             super().run()
 
     def acquire(self, progress=False, debug=False):
+        """Sweep the drive frequency in Python, running the 2Q Rabi at each point."""
         # expand entries in config that are length 1 to fill all qubits
 
         freqpts = np.linspace(
@@ -353,6 +369,7 @@ class RabiChevron_2Q(QickExperiment2DSimple):
         return self.data
 
     def analyze(self, data=None, fit=True, **kwargs):
+        """Fit each frequency row, then fit Rabi frequency/amplitude vs detuning to the chevron model."""
         if data is None:
             data = self.data
 
@@ -372,6 +389,7 @@ class RabiChevron_2Q(QickExperiment2DSimple):
             data["chevron_amp"] = p2
 
     def display(self, data=None, fit=True, plot_both=False, show_hist=False, **kwargs):
+        """Plot the two-qubit chevron heatmaps."""
         if data is None:
             data = self.data
         if self.cfg.expt.checkEF:
@@ -420,8 +438,10 @@ class RabiChevron_2Q(QickExperiment2DSimple):
 
 
 def chevron_freq(x, w0):
+    """Generalized Rabi frequency vs detuning: sqrt(w0^2 + x^2)."""
     return np.sqrt(w0**2 + x**2)
 
 
 def chevron_amp(x, w0, a):
+    """Rabi oscillation amplitude vs detuning: Lorentzian of width w0."""
     return a / (1 + (x / w0) ** 2)

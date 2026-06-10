@@ -18,12 +18,15 @@ from ..general.qick_experiment import QickExperiment
 
 
 class PowerCalibrationProgram(AveragerProgramV2):
+    """Minimal program: periodic const pulse on an arbitrary generator, read back on an arbitrary ADC."""
+
     def __init__(self, soccfg, final_delay, cfg):
         cfg = AttrDict(cfg)
         reps = cfg.expt.reps
         super().__init__(soccfg, reps, final_delay, cfg=cfg)
 
     def _initialize(self, cfg):
+        """Declare the generator/readout channels and define the periodic const pulse."""
         cfg = AttrDict(self.cfg)
         gen_ch = cfg.expt.gen_ch
         ro_ch = cfg.expt.ro_ch
@@ -45,6 +48,7 @@ class PowerCalibrationProgram(AveragerProgramV2):
         self.send_readoutconfig(ch=ro_ch, name="myro", t=0)
 
     def _body(self, cfg):
+        """Play the pulse and trigger the readout."""
         cfg = AttrDict(self.cfg)
         self.pulse(ch=cfg.expt.gen_ch, name="mypulse", t=0)
         self.trigger(ros=[cfg.expt.ro_ch], t=cfg.expt.trig_time)
@@ -98,6 +102,7 @@ class PowerCalibration(QickExperiment):
             super().run(display=display, progress=progress, save=save, analyze=False)
 
     def acquire(self, progress=False):
+        """Acquire the averaged I/Q response of the constant tone."""
         final_delay = self.cfg.expt.final_delay
 
         prog = PowerCalibrationProgram(
@@ -126,6 +131,7 @@ class PowerCalibration(QickExperiment):
         return self.data
 
     def display(self, data=None, ax=None, **kwargs):
+        """Print the measured mean I, Q, and amplitude with the channel settings used."""
         if data is None:
             data = self.data
 

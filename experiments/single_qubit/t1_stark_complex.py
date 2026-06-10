@@ -1,3 +1,12 @@
+"""
+Complex T1 Stark measurements with multiple interleaved tones.
+
+Variants of the Stark-shifted T1 experiment that interleave T1, excited-state,
+and ground-state reference measurements in one program (T1MultiProgram) and
+sweep the Stark tone power so frequency shifts are sampled uniformly, including
+continuous time-tracking versions.
+"""
+
 import matplotlib.pyplot as plt
 import numpy as np
 from qick import *
@@ -23,10 +32,13 @@ from .t1 import T1Program
 
 
 class T1MultiProgram(QickProgram):
+    """Pulse sequence interleaving a T1 measurement with excited- and ground-state reference shots."""
+
     def __init__(self, soccfg, final_delay, cfg):
         super().__init__(soccfg, final_delay=final_delay, cfg=cfg)
 
     def _initialize(self, cfg):
+        """Set up readout, pi pulse, and the optional Stark tone sized to the wait time."""
         cfg = AttrDict(self.cfg)
 
         super()._initialize(cfg, readout="standard")
@@ -47,6 +59,7 @@ class T1MultiProgram(QickProgram):
             super().make_pulse(pulse, "stark_pulse")
 
     def _body(self, cfg):
+        """Play three back-to-back measurements: T1 (wait or Stark), excited reference, ground reference."""
 
         cfg = AttrDict(self.cfg)
         if self.adc_type == "dyn":
@@ -101,9 +114,11 @@ class T1MultiProgram(QickProgram):
         # Then, the "ground" state
 
     def collect_shots(self, offset=0):
+        """Return per-shot (I, Q) values; offset is ignored (always 0)."""
         return super().collect_shots(offset=0)
 
     def reset(self, i):
+        """Run the standard active reset protocol."""
         super().reset(i)
 
 
@@ -180,6 +195,7 @@ class T1StarkPowerQuadMulti(QickExperimentLoop):
             super().run(min_r2=min_r2, max_err=max_err)
 
     def acquire(self, progress=False):
+        """Loop the multi-measurement program over frequency-spaced Stark gains for each wait time."""
         qi = self.cfg.expt.qubit[0]
         self.param = {"label": "stark_pulse", "param": "gain", "param_type": "pulse"}
         gain_pts, stark_freq_pts, f_pts = self.get_gain_pts()
@@ -205,9 +221,11 @@ class T1StarkPowerQuadMulti(QickExperimentLoop):
         return self.data
 
     def analyze(self, data=None, **kwargs):
+        """No-op: data is normalized in display()."""
         pass
 
     def display(self, data=None, fit=True, plot_all=False, ax=None, show_hist=False):
+        """Plot the normalized T1 response vs Stark frequency shift for each wait time."""
         if data is None:
             data = self.data
 
@@ -300,6 +318,7 @@ class T1StarkPowerContTimeExperiment(QickExperiment2DSimple):
             super().run(min_r2=min_r2, max_err=max_err)
 
     def acquire(self, progress=False, debug=False):
+        """Repeatedly sweep Stark gain (sqrt-spaced) over time, with g/e references per row."""
         q_ind = self.cfg.expt.qubit[0]
         self.update_config(q_ind)
 
@@ -427,9 +446,11 @@ class T1StarkPowerContTimeExperiment(QickExperiment2DSimple):
         return data
 
     def analyze(self, data=None, fit=True, **kwargs):
+        """No-op: data is normalized in display()."""
         pass
 
     def display(self, data=None, fit=True, plot_both=False, **kwargs):
+        """Plot the normalized response as a 2D map vs Stark gain and time."""
         if data is None:
             data = self.data
 
@@ -522,6 +543,7 @@ class T1StarkPowerContTime(QickExperiment2DSimple):
             super().run(min_r2=min_r2, max_err=max_err)
 
     def acquire(self, progress=False, debug=False):
+        """Repeatedly sweep frequency-spaced Stark gains (both detuning branches) over time."""
         q_ind = self.cfg.expt.qubit[0]
         self.update_config(q_ind)
 
@@ -648,9 +670,11 @@ class T1StarkPowerContTime(QickExperiment2DSimple):
         return data
 
     def analyze(self, data=None, fit=True, **kwargs):
+        """No-op: data is normalized in display()."""
         pass
 
     def display(self, data=None, fit=True, plot_both=False, **kwargs):
+        """Plot the normalized response as a 2D map vs Stark frequency shift and time."""
         if data is None:
             data = self.data
 
@@ -676,6 +700,7 @@ class T1StarkPowerContTime(QickExperiment2DSimple):
 
 
 def find_inverse_quad_fit(y, a, b, c):
+    """Invert y = a*x^2 + b*x + c for each y, returning the physical root (None where complex)."""
     rt = []
     for yt in y:
         if yt == 0:

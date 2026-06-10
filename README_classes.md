@@ -181,6 +181,24 @@ exp_2d = QickExperiment2DSimple(cfg_dict, live_plot=True)
 
 ---
 
+## QickFluxSweep
+
+The `QickFluxSweep` class (`experiments/general/qick_flux_experiment.py`) extends `QickExperiment2DSimple` for 2D experiments that sweep an inner experiment over fast flux gain. It centralizes the flux sweep setup shared by `QubitSpecFastFlux`, `ResSpecFastFlux`, `T1FastFlux`, and `T1PredistFastFlux`. See [README_fast_flux.md](README_fast_flux.md) for usage.
+
+### Key Features
+
+- **Flux Model Integration**: Loads a gain↔frequency converter from config (transmon or quadratic model) via `analysis.fitting.flux_converter_from_config`
+- **Frequency-based Ranges**: A `freq_span` parameter (MHz) can replace an explicit `gain_stop`
+- **Linear-in-frequency Spacing**: With `lin_freq=True`, sweep points are spaced uniformly in qubit frequency rather than gain
+
+### Methods
+
+- `_init_flux_sweep(qi, params, default_offset=0.4)`: Resolves the gain sweep endpoints from the sweet spot, `direction`, and `freq_span`/`gain_stop`; stores the flux converter. Returns `(sweet_spot, gain_stop)`.
+
+- `_build_gain_freq_pts()`: Builds `self.gain_pts` and `self.freq_pts` from `cfg.expt` and the flux converter.
+
+---
+
 ## QickExperiment2DSweep
 
 The `QickExperiment2DSweep` class extends `QickExperiment` for 2D parameter sweeps where both dimensions are performed on the QICK hardware, instead of the y-axis being swept in Python. This provides the fastest execution but is limited to parameters that can be swept by the QICK hardware.

@@ -1,3 +1,11 @@
+"""
+Two-qubit T1 measurements.
+
+Measures energy relaxation on two qubits in one program: both qubits are
+excited with pi pulses, wait times are swept together, and both readouts are
+triggered, with an optional AC Stark tone during the wait.
+"""
+
 import numpy as np
 from qick import *
 
@@ -10,10 +18,13 @@ from qick.asm_v2 import QickSweep1D
 
 
 class T1_2Q_Program(QickProgram2Q):
+    """Pulse sequence exciting both qubits and measuring after a shared swept wait time."""
+
     def __init__(self, soccfg, final_delay, cfg):
         super().__init__(soccfg, final_delay=final_delay, cfg=cfg)
 
     def _initialize(self, cfg):
+        """Set up readout, pi pulses for both qubits, and optional Stark tones sized to the wait times."""
         cfg = AttrDict(self.cfg)
 
         super()._initialize(cfg, readout="standard")
@@ -34,6 +45,7 @@ class T1_2Q_Program(QickProgram2Q):
         self.add_loop("wait_loop", cfg.expt.expts)
 
     def _body(self, cfg):
+        """Excite both qubits (longer-span qubit first), wait, and read both out."""
 
         cfg = AttrDict(self.cfg)
         for q in range(len(cfg.expt.qubit)):
@@ -79,9 +91,11 @@ class T1_2Q_Program(QickProgram2Q):
             self.reset(3)
 
     def collect_shots(self, offset=[0, 0]):
+        """Return per-shot (I, Q) values for both readout channels."""
         return super().collect_shots(offset=offset)
 
     def reset(self, i):
+        """Run the standard two-qubit active reset protocol."""
         super().reset(i)
 
 
@@ -143,6 +157,7 @@ class T1_2Q(QickExperiment2Q):
             super().run(min_r2=min_r2, max_err=max_err)
 
     def acquire(self, progress=False, debug=False):
+        """Sweep the wait times on hardware and acquire both qubits' decays."""
         self.param = []
         for i in range(len(self.cfg.expt.qubit)):
             self.param.append(
@@ -199,6 +214,7 @@ class T1_2Q(QickExperiment2Q):
         return self.data
 
     def analyze(self, data=None, **kwargs):
+        """Fit each qubit's decay to an exponential."""
         if data is None:
             data = self.data
 
@@ -213,6 +229,7 @@ class T1_2Q(QickExperiment2Q):
     def display(
         self, data=None, fit=True, plot_all=False, ax=None, show_hist=True, **kwargs
     ):
+        """Plot both qubits' T1 decays with fits."""
 
         title = [f"$T_1$ Q{q}" for q in self.cfg.expt.qubit]
         xlabel = "Wait Time ($\mu$s)"
@@ -266,6 +283,7 @@ class T1_2Q_Continuous(QickExperiment2Q):
         )
 
     def acquire(self, progress=False, debug=False):
+        """Acquire using the legacy T1Program interface."""
 
         self.update_config(q_ind=self.cfg.expt.qubit)
         t1 = T1Program(soccfg=self.soccfg, cfg=self.cfg)
@@ -304,7 +322,9 @@ class T1_2Q_Continuous(QickExperiment2Q):
         return data
 
     def analyze(self, data=None, **kwargs):
+        """Not implemented."""
         pass
 
     def display(self, data=None, fit=True, show=False, **kwargs):
+        """Not implemented."""
         pass

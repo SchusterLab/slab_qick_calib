@@ -1,3 +1,18 @@
+"""
+Fast adaptive T1 vs flux gain sweeps.
+
+Instead of taking a full T1 decay curve at each flux point, these experiments
+measure the excited-state population at a single wait time per gain point and
+invert the exponential (T1 = -wait / ln(P)), adapting the wait time to T1/2 as
+the sweep progresses.  This makes dense T1(flux) maps roughly an order of
+magnitude faster than T1FastFlux.
+
+Classes:
+- T1FastFluxLoop: Single sweep of adaptive single-point T1 vs flux gain
+- T1FastFluxLoopRepeated: Repeat the sweep to build a T1(frequency, time)
+  heatmap, with periodic g/e calibration
+"""
+
 import numpy as np
 import time
 from datetime import datetime
@@ -135,6 +150,26 @@ class T1FastFluxLoop(QickExperimentLoop):
         return self
 
     def acquire(self, progress=True, display=False, ve=None, vg=None):
+        """
+        Run the adaptive T1 sweep over all gain points.
+
+        At each gain point, measures the I/Q response after waiting T1/2
+        (current estimate), converts it to a population via the ve/vg
+        calibration, and updates the running T1 estimate.  Saves interim
+        HDF5 data and an incremental CSV after every point.
+
+        Args:
+            progress: Show a tqdm progress bar
+            display: Unused (kept for interface compatibility)
+            ve: Excited-state I voltage — scalar or per-gain-point array
+                (default: config e_mean)
+            vg: Ground-state I voltage — scalar or per-gain-point array
+                (default: config g_mean)
+
+        Returns:
+            dict: Data with gain_pts, freq_pts (if a flux model exists),
+            avgi/avgq/amps/phases, population, wait_times, and t1_list
+        """
         from pathlib import Path
 
         final_delay = self._get_final_delay()
@@ -264,6 +299,7 @@ class T1FastFluxLoop(QickExperimentLoop):
         return data
 
     def display(self, data=None, **kwargs):
+        """Plot T1 vs gain (with IQR outlier marking), population vs gain, and T1 vs frequency."""
         import matplotlib.pyplot as plt
 
         if data is None:
@@ -421,6 +457,18 @@ class T1FastFluxLoopRepeated(T1FastFluxLoop):
         return vg, ve
 
     def acquire(self, progress=False, display=True):
+        """
+        Run repeated sweeps until n_repeats / duration_hours / interrupt.
+
+        Each iteration optionally refreshes the g/e calibration (per the
+        ``calibration`` mode), runs one T1FastFluxLoop sweep, appends the
+        resulting T1 row to the heatmap data, live-plots it, and saves the
+        master HDF5.
+
+        Returns:
+            dict: Data with t1_list (2D: sweeps × gain points), timestamps
+            (hours elapsed), calib_ve/calib_vg, gain_pts, and freq_pts
+        """
         from pathlib import Path
 
         try:
@@ -559,6 +607,7 @@ class T1FastFluxLoopRepeated(T1FastFluxLoop):
         return self.data
 
     def _update_heatmap(self, data):
+        """Refresh the live Jupyter heatmap (frequency × elapsed time, color = T1) after a sweep."""
         import sys
         import io
         import matplotlib.pyplot as plt
@@ -643,6 +692,7 @@ class T1FastFluxLoopRepeated(T1FastFluxLoop):
             print(f"[LivePlot] Heatmap update failed: {e}")
 
     def display(self, data=None, **kwargs):
+        """Plot the accumulated T1(frequency, time) heatmap with robust color limits."""
         import matplotlib.pyplot as plt
 
         if data is None:

@@ -295,6 +295,7 @@ class QubitSpecFlux(QickExperiment2DSimple):
         return data
 
     def display(self, data=None, fit=True, plot_amps=True, ax=None, **kwargs):
+        """Plot the 2D spectroscopy map vs DC bias, plus resonator frequency vs bias when tracked."""
         import matplotlib.pyplot as plt
 
         if data is None:
@@ -430,6 +431,7 @@ class QubitSpecFluxSweep(QickFluxSweep):
 
     @classmethod
     def from_h5file(cls, fname):
+        """Load from h5, restoring the sweep variable/label attributes from the saved config."""
         self = super().from_h5file(fname)
         cfg_e = self.cfg.expt
         self._sweep_var = cfg_e.get("sweep_var", "flux_gain")
@@ -446,6 +448,17 @@ class QubitSpecFluxSweep(QickFluxSweep):
         pass
 
     def acquire(self, progress=True, display=False):
+        """
+        Run a QubitSpec at each sweep point, tracking the qubit frequency.
+
+        Each scan is re-centered on the previous fitted frequency; failed
+        scans are retried and then skipped (filled with NaN).  Saves interim
+        HDF5 data and an incremental CSV of (sweep value, freq, kappa).
+
+        Returns:
+            dict: 2D avgi/avgq/amps/phases (sweep × frequency), per-point
+            qubit_freq_list, kappa_list, fit_params_list, and r2_list
+        """
         from pathlib import Path
 
         data = {"time": []}
@@ -720,6 +733,7 @@ class QubitSpecFluxSweep(QickFluxSweep):
         config.save(cfg, self.config_file)
 
     def display(self, data=None, plot_amps=None, **kwargs):
+        """Plot fitted qubit frequency and kappa vs the sweep variable, plus interpolated color maps."""
         import matplotlib.pyplot as plt
 
         if data is None:
@@ -825,6 +839,7 @@ class QubitSpecFluxSweep(QickFluxSweep):
                 fig_w = max(8, n_sweep / 40)
 
                 def _interp_grid(traces_all):
+                    """Interpolate per-row traces onto the common frequency axis."""
                     grid = np.full((n_sweep, n_common), np.nan)
                     for i, (f, a) in enumerate(zip(freq_trimmed, [np.asarray(t) for t in traces_all])):
                         fn = interp1d(f, a, kind="linear", bounds_error=False, fill_value=np.nan)
@@ -833,6 +848,7 @@ class QubitSpecFluxSweep(QickFluxSweep):
                     return grid
 
                 def _color_plot(grid, label, suffix):
+                    """Draw and save one interpolated color map."""
                     fig, ax = plt.subplots(figsize=(fig_w, 6))
                     pcm = ax.pcolormesh(sweep_pts, common_freq, grid.T,
                                         cmap="viridis", shading="nearest", rasterized=True)
@@ -951,6 +967,7 @@ class QubitSpecFastFlux(QubitSpecFluxSweep):
 
         # Validate and store spec_gain_pts / spec_length_pts
         def _validate_sweep_pts(key):
+            """Check a co-swept points array matches the gain sweep length."""
             pts = self.cfg.expt.get(key, None)
             if pts is not None:
                 pts = np.asarray(pts, dtype=float)
@@ -973,18 +990,27 @@ class QubitSpecFastFlux(QubitSpecFluxSweep):
                      min_r2=min_r2, max_err=max_err)
 
     def _live_update(self, data, step, total):
+        """Forward progress to the live plotter, closing it after the final step."""
         if self._live_plotter is not None:
             self._live_plotter.update(data, step, total)
             if step >= total:
                 self._live_plotter.close()
 
     def _pre_sweep_step(self, i, _val):
+        """Apply the co-swept drive gain/length for this flux step, if configured."""
         if self._spec_gain_pts is not None:
             self.expt.cfg.expt["gain"] = float(self._spec_gain_pts[i])
         if self._spec_length_pts is not None:
             self.expt.cfg.expt["length"] = float(self._spec_length_pts[i])
 
     def analyze(self, data=None, fit_model='quadratic', Ec=None, **kwargs):
+        """
+        Fit the measured freq(gain) curve to flux models.
+
+        Always fits a quadratic (storing freq_coeffs and the sweet spot);
+        with fit_model='transmon' additionally fits the transmon SQUID model
+        with E_C fixed (storing transmon_fit and f_ge_max).
+        """
         if data is None:
             data = self.data
 
@@ -1037,6 +1063,7 @@ class QubitSpecFastFlux(QubitSpecFluxSweep):
         return data
 
     def display(self, data=None, plot_amps=False, **kwargs):
+        """Plot qubit frequency vs flux gain with model fits, plus interpolated spectroscopy color maps."""
         import matplotlib.pyplot as plt
 
         if data is None:
@@ -1104,6 +1131,7 @@ class QubitSpecFastFlux(QubitSpecFluxSweep):
                 fig_w = max(8, n_gain / 40)
 
                 def _interp_grid(traces_all):
+                    """Interpolate per-row traces onto the common frequency axis."""
                     grid = np.full((len(gain_pts), n_common), np.nan)
                     for i, (f, a) in enumerate(zip(freq_trimmed, [np.asarray(t) for t in traces_all])):
                         fn = interp1d(f, a, kind="linear", bounds_error=False, fill_value=np.nan)
@@ -1112,6 +1140,7 @@ class QubitSpecFastFlux(QubitSpecFluxSweep):
                     return grid
 
                 def _color_plot(grid, label, suffix):
+                    """Draw and save one interpolated color map."""
                     fig, ax = plt.subplots(figsize=(fig_w, 6))
                     pcm = ax.pcolormesh(gain_pts, common_freq, grid.T,
                                         cmap="viridis", shading="nearest", rasterized=True)
@@ -1138,6 +1167,7 @@ class QubitSpecFastFlux(QubitSpecFluxSweep):
         self.save_config()
 
     def update(self, verbose=True):
+        """Write the fitted flux model (quadratic and/or transmon) and sweet spot to the config file."""
         qi = self.cfg.expt["qubit"][0]
         data = self.data
         if data.get("freq_coeffs") is not None:

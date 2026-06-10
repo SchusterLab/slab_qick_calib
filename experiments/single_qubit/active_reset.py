@@ -1,3 +1,13 @@
+"""
+Active reset diagnostics.
+
+Experiments for validating measurement-based active qubit reset: MemoryProgram
+checks that values read into the tProc data memory match the streamed readout,
+and RepMeasProgram/RepMeasExperiment characterize how well repeated
+measurement-conditioned pi pulses reset the qubit to the ground state.
+Mostly used during bring-up; not part of routine calibration.
+"""
+
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.optimize import curve_fit
@@ -18,11 +28,14 @@ red = "#b51d14"
 int_rgain = True
 
 class MemoryProgram(QickProgram):
+    """Single-shot program that also writes each readout into tProc data memory for cross-checking."""
+
     # This checks that the two memories are getting the same values
     def __init__(self, soccfg, final_delay, cfg):
         super().__init__(soccfg, final_delay=final_delay, cfg=cfg)
 
     def _initialize(self, cfg):
+        """Set up readout and the pi_ge/pi_ef preparation pulses."""
         cfg = AttrDict(self.cfg)
         self.add_loop("shotloop", cfg.expt.shots)  # number of total shots
 
@@ -37,6 +50,7 @@ class MemoryProgram(QickProgram):
         super().make_cfg_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ef, "pi_ef")
 
     def _body(self, cfg):
+        """Prepare the state, measure, copy the readout into data memory, and optionally reset."""
 
         cfg = AttrDict(self.cfg)
         if self.adc_type == "dyn":
@@ -62,6 +76,7 @@ class MemoryProgram(QickProgram):
             self.reset(5)
 
     def reset(self, i):
+        """Apply i rounds of measurement-conditioned pi pulses (active reset)."""
 
         # Perform active reset i times
         cfg = AttrDict(self.cfg)
@@ -89,6 +104,7 @@ class MemoryProgram(QickProgram):
                     self.pulse(ch=self.lo_ch, name="mix_pulse", t=0.0)
 
     def collect_shots(self, offset=0):
+        """Return flattened per-shot (I, Q) arrays from the raw ADC buffer."""
 
         for i, (ch, rocfg) in enumerate(self.ro_chs.items()):
             # nsamp = rocfg["length"]
@@ -100,11 +116,13 @@ class MemoryProgram(QickProgram):
         return i_shots, q_shots
 
 class RepMeasProgram(QickProgram):
+    """Single-shot program with repeated unconditioned measurements, for reset characterization."""
 
     def __init__(self, soccfg, final_delay, cfg):
         super().__init__(soccfg, final_delay=final_delay, cfg=cfg)
 
     def _initialize(self, cfg):
+        """Set up readout and the pi_ge preparation pulse."""
         cfg = AttrDict(self.cfg)
         self.add_loop("shotloop", cfg.expt.shots)  # number of total shots
 
@@ -118,6 +136,7 @@ class RepMeasProgram(QickProgram):
 
 
     def _body(self, cfg):
+        """Prepare the state, measure, then take the repeated follow-up measurements."""
 
         cfg = AttrDict(self.cfg)
         self.send_readoutconfig(ch=self.adc_ch, name="readout", t=0)
@@ -138,6 +157,7 @@ class RepMeasProgram(QickProgram):
             self.reset(5)
 
     def reset(self, i):
+        """Take i additional unconditioned measurements (no conditional pi pulses)."""
 
         # Perform active reset i times
         cfg = AttrDict(self.cfg)
@@ -153,6 +173,7 @@ class RepMeasProgram(QickProgram):
                 self.delay_auto(0.01)
 
     def collect_shots(self, offset=0):
+        """Return flattened per-shot (I, Q) arrays from the raw ADC buffer."""
 
         for i, (ch, rocfg) in enumerate(self.ro_chs.items()):
             # nsamp = rocfg["length"]
@@ -232,6 +253,7 @@ class MemoryExperiment(QickExperiment):
             self.go(analyze=True, display=False, progress=progress, save=True)
 
     def acquire(self, progress=False, debug=False):
+        """Collect single-shot data while also reading back the tProc data-memory copies."""
 
         data = dict()
         if "setup_reset" in self.cfg.expt and self.cfg.expt.setup_reset:
@@ -357,6 +379,7 @@ class MemoryExperiment(QickExperiment):
         return data
 
     def analyze(self, data=None, span=None, verbose=False, **kwargs):
+        """No-op: the memory comparison is printed during acquire()."""
         if data is None:
             data = self.data
 
@@ -373,10 +396,12 @@ class MemoryExperiment(QickExperiment):
         plot=True,
         **kwargs,
     ):
+        """Plot single-shot histograms of the collected data."""
         if data is None:
             data = self.data
 
     def check_reset(self):
+        """Plot g/e histograms after each reset round and print residual excited/ground fractions."""
         nbins = 75
         fig, ax = plt.subplots(2, 1, figsize=(6, 7))
         fig.suptitle(f"Q{self.cfg.expt.qubit[0]}")
@@ -393,6 +418,7 @@ class MemoryExperiment(QickExperiment):
             ax[1].semilogy(v, hist, color=b[i], linewidth=1, label=f"{i+1}")
 
         def find_bin_closest_to_value(bins, value):
+            """Return the index of the histogram bin nearest to value."""
             return np.argmin(np.abs(bins - value))
 
         ind = find_bin_closest_to_value(v, self.data["ie"])
@@ -468,6 +494,7 @@ class RepMeasExperiment(QickExperiment):
             self.go(analyze=True, display=display, progress=progress, save=True)
 
     def acquire(self, progress=False, debug=False):
+        """Collect single-shot data with repeated follow-up measurements for g and e preparations."""
 
         data = dict()
         if "setup_reset" in self.cfg.expt and self.cfg.expt.setup_reset:
@@ -529,6 +556,7 @@ class RepMeasExperiment(QickExperiment):
         return data
 
     def analyze(self, data=None, span=None, verbose=False, **kwargs):
+        """Compute histogram fidelity metrics and fit the single-shot distributions."""
         if data is None:
             data = self.data
 
@@ -559,6 +587,7 @@ class RepMeasExperiment(QickExperiment):
         plot=True,
         **kwargs,
     ):
+        """Plot single-shot histograms of the collected data."""
         if data is None:
             data = self.data
 
@@ -596,6 +625,7 @@ class RepMeasExperiment(QickExperiment):
             self.save_config()
 
     def check_reset(self):
+        """Plot g/e histograms after each repeated measurement and print residual state fractions."""
         nbins = 75
         fig, ax = plt.subplots(2, 1, figsize=(6, 7))
         fig.suptitle(f"Q{self.cfg.expt.qubit[0]}")
@@ -612,6 +642,7 @@ class RepMeasExperiment(QickExperiment):
             ax[1].semilogy(v, hist, color=b[i], linewidth=1, label=f"{i+1}")
 
         def find_bin_closest_to_value(bins, value):
+            """Return the index of the histogram bin nearest to value."""
             return np.argmin(np.abs(bins - value))
 
         ind = find_bin_closest_to_value(v, self.data["ie"])

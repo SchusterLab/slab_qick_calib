@@ -1,15 +1,25 @@
+"""
+Experiment package auto-importer.
+
+Walks the experiment subpackages (single_qubit, two_qubit, flux, ...) and
+re-exports every experiment class at the package level, so users can write
+``import slab_qick_calib.experiments as meas; meas.T1Experiment(...)``.
+"""
+
 import importlib, inspect
 from pathlib import Path
 import sys
 
 
-"""
-module_path: parent directory path with . as subfile dividers
-f: filename to import modules from
-"""
-
-
 def import_modules_from_files(module_path, f):
+    """
+    Import a module file and re-export its classes on this package.
+
+    Args:
+        module_path: Parent package path with . separators (e.g.
+            "slab_qick_calib.experiments.single_qubit")
+        f: File name within that package to import classes from
+    """
     if f[0] != "_" and f[0] != ".":
         module_name = module_path + "." + f.split(".")[0]
         m = importlib.import_module(module_name)

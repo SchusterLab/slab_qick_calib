@@ -91,6 +91,7 @@ t1_arr = np.array(t1_list, dtype=float)
 mask = np.isfinite(t1_arr)
 
 def plot_with_outlier_rejection(ax, x, y, mask):
+    """Plot y vs x, marking IQR outliers with red crosses and clipping the y-limits to inliers."""
     if mask.sum() > 2:
         q1, q3 = np.percentile(y[mask], [25, 75])
         iqr = q3 - q1

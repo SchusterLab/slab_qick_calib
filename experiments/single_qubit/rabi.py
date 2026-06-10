@@ -470,6 +470,7 @@ class RabiExperiment(QickExperiment):
         return data
 
     def update(self, verbose=True):
+        """Write the fitted pi pulse gain or length/sigma back to the config file."""
         qi = self.cfg.expt.qubit[0]
         if "pi_length" not in self.data:
             print("No pi_length found in data, cannot update.")
@@ -505,6 +506,7 @@ class RabiExperiment(QickExperiment):
         rescale=False,
         **kwargs,
     ):
+        """Plot the Rabi oscillation with the fitted pi length in the caption."""
         if data is None:
             data = self.data
 

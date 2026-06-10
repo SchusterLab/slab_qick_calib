@@ -86,6 +86,14 @@ class ResSpecFastFlux(QickFluxSweep):
             self.display()
 
     def acquire(self, progress=True, display=False):
+        """
+        Run a ResSpec at each flux gain point and fit the resonator frequency.
+
+        Returns:
+            dict: 2D amps/avgi/avgq/phases (gain × frequency), the shared
+            frequency axis, gain_pts, freq_pts (if a flux model exists), and
+            res_freq_list with the fitted resonator frequency per gain point
+        """
         data = {}
         res_freq_list = []
 
@@ -135,6 +143,7 @@ class ResSpecFastFlux(QickFluxSweep):
         return data
 
     def display(self, data=None, **kwargs):
+        """Plot the amplitude map vs (frequency, flux gain) and the fitted resonator frequency vs gain."""
         if data is None:
             data = self.data
 

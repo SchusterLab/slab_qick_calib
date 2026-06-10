@@ -1,3 +1,10 @@
+"""
+Single-shot readout optimization.
+
+Sweeps readout frequency, gain, and length, running a HistogramExperiment at
+each point and mapping the readout fidelity over the 3D parameter space.
+"""
+
 from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
@@ -153,6 +160,7 @@ class SingleShotOptExperiment(QickExperiment):
             self.display()
 
     def acquire(self, progress=False, debug=False):
+        """Run a HistogramExperiment at every (frequency, gain, length) point and record fidelities."""
         fpts = self.cfg.expt["start_f"] + self.cfg.expt["step_f"] * np.arange(
             self.cfg.expt["expts_f"]
         )
@@ -305,6 +313,7 @@ class SingleShotOptExperiment(QickExperiment):
         return self.data
 
     def analyze(self, data=None, fit=True, low_gain=True, **kwargs):
+        """Find the fidelity-maximizing point (preferring lower gain when nearly equal) and store it."""
         if data == None:
             data = self.data
         fid = data["fid"]
@@ -351,6 +360,7 @@ class SingleShotOptExperiment(QickExperiment):
         return imax
 
     def display(self, data=None, plot_pars=False, **kwargs):
+        """Plot fidelity vs frequency for each (gain, length) combination, plus optional fit-parameter maps."""
         if data is None:
             data = self.data
 
@@ -381,6 +391,7 @@ class SingleShotOptExperiment(QickExperiment):
             inds.append(2)
 
         def smart_ax(n):
+            """Choose a subplot grid (rows, cols) for n panels, max 5 per row."""
             row = int(np.ceil(n / 5))
             if n < 5:
                 col = n
@@ -391,6 +402,7 @@ class SingleShotOptExperiment(QickExperiment):
         title = f"Single Shot Optimization Q{self.cfg.expt.qubit[0]}"
 
         def return_dim(data, dim, i):
+            """Slice the 3D fidelity array along the non-swept dimensions at index i."""
             if len(dim) == 1:
                 if dim[0] == 0:
                     return data[i, :, :].reshape(-1)
@@ -713,6 +725,7 @@ class SingleShotOptExperiment(QickExperiment):
         self.save_config()
 
     def check_edges(self):
+        """Return True when the fidelity maximum sits on the sweep edge, i.e. the sweep should be extended."""
         do_more = False
         fid = self.data["fid"]
         fid_expts = fid.shape
@@ -735,6 +748,7 @@ class SingleShotOptExperiment(QickExperiment):
         return do_more
 
     def update(self, verbose=True):
+        """Write the optimal readout gain, length, and frequency back to the config file."""
         qi = self.cfg.expt.qubit[0]
         cfg_file= self.config_file
         config.update_readout(cfg_file, "gain", self.data["gain"], qi, verbose=verbose)

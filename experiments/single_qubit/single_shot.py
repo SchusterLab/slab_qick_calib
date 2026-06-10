@@ -782,6 +782,7 @@ class HistogramExperiment(QickExperiment):
         ax[1].axhline(0.5, color="gray", linestyle="--", linewidth=1)
         # Helper function to find bin index closest to a value
         def find_bin_closest_to_value(bins, value):
+            """Return the index of the histogram bin nearest to value."""
             return np.argmin(np.abs(bins - value))
 
         # Find indices for excited state level in different histograms

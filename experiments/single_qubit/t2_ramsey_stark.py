@@ -524,6 +524,7 @@ class RamseyStarkPowerExperiment(QickExperiment2DSimple):
         plt.show()
 
     def update(self, neg=False, verbose=True):
+        """Write the fitted quadratic Stark-shift coefficients (q/l/o) back to the config file."""
         qi = self.cfg.expt.qubit[0]
         if neg: 
             suffix='neg'

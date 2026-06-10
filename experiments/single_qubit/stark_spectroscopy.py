@@ -371,6 +371,7 @@ class StarkSpec(QickExperiment2DSweep):
         return self.data
 
     def update(self, verbose=True):
+        """Write the fitted Stark-shift power-law exponent (nstark) back to the config file."""
         qi = self.cfg.expt.qubit[0]
         cfg_file = self.config_file
         config.update_readout(cfg_file, "nstark", self.data["n"], qi, verbose=verbose)
@@ -434,6 +435,6 @@ class StarkSpec(QickExperiment2DSweep):
         ax[1].set_ylabel("Gamma (MHz)")
         
 
-# Define a quadratic function
 def quadratic(x, a, c):
+    """Quadratic with no linear term: a * x^2 + c."""
     return a * x**2 + c

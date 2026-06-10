@@ -1,3 +1,11 @@
+"""
+Allan variance analysis for qubit parameter stability.
+
+Computes overlapping Allan variance of tracked qubit parameters (T1, T2,
+frequency) and fits noise models (power law, Lorentzian, and combinations)
+to identify white noise, flicker noise, and telegraph-like fluctuators.
+"""
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -11,21 +19,26 @@ from .collections import get_parameter_config, _get_tracking_base
 
 
 def lorentzian(tau, A, tau0):
+        """Allan deviation of a Lorentzian (telegraph) noise process with correlation time tau0."""
         return (
             A * tau0  / tau
             * (4 * np.exp(-tau / tau0) - np.exp(-2 * tau / tau0) - 3 + 2 * tau / tau0) ** 0.5
         )
 def power_law(t, A, alpha):
+        """Allan deviation power law: A * t^-(alpha/2 + 1/2) (alpha = PSD exponent)."""
         return A * np.power(t, -(alpha / 2 + 0.5))
 
 
 def combined_model(tau, A, alpha, B, tau0):
+        """Power law plus one Lorentzian component."""
         return power_law(tau, A, alpha) + lorentzian(tau, B, tau0)
 
 def combined_model_two(tau, A, alpha, B, tau0, C, tau1):
+        """Power law plus two Lorentzian components."""
         return power_law(tau, A, alpha) + lorentzian(tau, B, tau0) + lorentzian(tau, C, tau1)
 
 def lorentz_model_two(tau, B, tau0, C, tau1):
+        """Sum of two Lorentzian components (no power law)."""
         return lorentzian(tau, B, tau0) + lorentzian(tau, C, tau1)
 
 def fit_power_law(tau, allan_dev):
@@ -150,6 +163,18 @@ def calculate_overlapping_allan_variance(data, tau_values):
 
 
 def perform_analysis(tt,fname='def', param='t1', qubit_list=None, save_path=None, tracking_id=None, normalize=False):
+    """
+    Plot the time trace and overlapping Allan deviation of a tracked parameter.
+
+    Args:
+        tt: Tracking data — list (per qubit) of dicts with 'time' and parameter arrays
+        fname: Base name for the saved figure
+        param: Parameter key to analyze (e.g. 't1', 't2r', 'f_ge')
+        qubit_list: Qubits to include (default: all)
+        save_path: Directory for the saved figure (default: tracking base path)
+        tracking_id: Optional tracking run identifier used in the file name
+        normalize: If True, normalize the time trace by its mean
+    """
 
     if qubit_list is None:
         qubit_list = range(len(tt))

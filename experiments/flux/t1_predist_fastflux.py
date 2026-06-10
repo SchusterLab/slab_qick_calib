@@ -95,6 +95,17 @@ class T1PredistFastFluxRepeated(T1PredistFastFlux):
             self.display()
 
     def acquire(self, progress=False, display=True):
+        """
+        Run repeated T1PredistFastFlux sweeps until n_repeats / duration_hours / interrupt.
+
+        Each iteration runs a fresh inner sweep, appends the fitted T1 row to
+        the heatmap data, live-plots it, writes a per-sweep CSV, and saves the
+        master HDF5.
+
+        Returns:
+            dict: Data with t1_list (2D: sweeps × gain points), timestamps
+            (hours elapsed), gain_pts, and freq_pts
+        """
         try:
             from IPython.display import display as ipy_display, clear_output
             _has_ipy = True
@@ -174,6 +185,7 @@ class T1PredistFastFluxRepeated(T1PredistFastFlux):
         return self.data
 
     def _update_heatmap(self, clear_output, ipy_display):
+        """Refresh the live Jupyter heatmap (frequency × elapsed time, color = T1) after a sweep."""
         import sys
         import io
         import matplotlib.pyplot as plt
@@ -214,6 +226,7 @@ class T1PredistFastFluxRepeated(T1PredistFastFlux):
             print(f"[LivePlot] Heatmap update failed: {e}")
 
     def display(self, data=None, **kwargs):
+        """Plot the accumulated T1(frequency, time) heatmap with robust color limits."""
         import matplotlib.pyplot as plt
 
         if data is None:

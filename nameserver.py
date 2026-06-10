@@ -1,3 +1,5 @@
+"""Start the Pyro4 nameserver (port 8888) that QICK boards and experiment PCs register with."""
+
 import Pyro4
 import Pyro4.naming
 

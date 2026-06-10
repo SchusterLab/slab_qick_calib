@@ -1,3 +1,20 @@
+"""
+T1 Experiment Module
+
+This module implements T1 relaxation time measurements for superconducting qubits.
+T1 (energy relaxation time) is measured by:
+1. Exciting the qubit to |1⟩ state with a π pulse
+2. Waiting for a variable delay time
+3. Measuring the qubit state
+4. Fitting the decay of the |1⟩ state population to an exponential function
+
+The module provides several experiment classes:
+- T1Program: Low-level pulse sequence implementation
+- T1Experiment: Standard T1 measurement
+- T1_2D: 2D T1 measurement for stability analysis
+- T1FastFlux / T1FastFluxRepeated: T1 vs fast flux gain sweeps
+"""
+
 import numpy as np
 import time
 from datetime import datetime
@@ -15,21 +32,6 @@ from ..general.qick_program import QickProgram
 FIT_FUNC = fitter.expfunc
 FITTER_FUNC = fitter.fitexp
 XLABEL = "Wait Time ($\mu$s)"
-"""
-T1 Experiment Module
-
-This module implements T1 relaxation time measurements for superconducting qubits.
-T1 (energy relaxation time) is measured by:
-1. Exciting the qubit to |1⟩ state with a π pulse
-2. Waiting for a variable delay time
-3. Measuring the qubit state
-4. Fitting the decay of the |1⟩ state population to an exponential function
-
-The module provides several experiment classes:
-- T1Program: Low-level pulse sequence implementation
-- T1Experiment: Standard T1 measurement
-- T1_2D: 2D T1 measurement for stability analysis
-"""
 
 
 class T1Program(QickProgram):
@@ -414,6 +416,7 @@ class T1Experiment(QickExperiment):
         )
 
     def update(self, rng_vals=[0.5, 500], first_time=False, no_final=False, verbose=True):
+        """Write the fitted T1 (and derived final_delay) back to the config file."""
         qi = self.cfg.expt.qubit[0]
         if self.status:
             config.update_qubit(
@@ -674,9 +677,16 @@ class T1FastFlux(QickFluxSweep):
     _inner_expt_class = T1Experiment
 
     def acquire(self, progress=True, display=True):
+        """Run a full T1 decay measurement at each flux gain point."""
         return self._t1_gain_acquire(progress=progress, display=display)
 
     def _t1_gain_acquire(self, progress=True, display=True):
+        """
+        Sweep flux gain, running the inner T1 experiment at each point.
+
+        Adapts the wait-time span between points from the previous fit, saves
+        interim HDF5 data, and writes an incremental CSV of fitted T1 values.
+        """
         from pathlib import Path
 
         data = {"time": []}
@@ -770,6 +780,7 @@ class T1FastFlux(QickFluxSweep):
         return data
 
     def display(self, data=None, **kwargs):
+        """Plot fitted T1 vs gain (with IQR outlier marking) and vs frequency when available."""
         import matplotlib.pyplot as plt
 
         if data is None:
@@ -935,6 +946,17 @@ class T1FastFluxRepeated(T1FastFlux):
             self.display()
 
     def acquire(self, progress=False, display=True):
+        """
+        Run repeated T1FastFlux sweeps until n_repeats / duration_hours / interrupt.
+
+        Each iteration runs a fresh inner sweep, appends the fitted T1 row to
+        the heatmap data, live-plots it, writes a per-sweep CSV, and saves the
+        master HDF5.
+
+        Returns:
+            dict: Data with t1_list (2D: sweeps × gain points), timestamps
+            (hours elapsed), gain_pts, and freq_pts
+        """
         from pathlib import Path
 
         try:
@@ -1025,6 +1047,7 @@ class T1FastFluxRepeated(T1FastFlux):
         return self.data
 
     def _update_heatmap(self, clear_output, ipy_display):
+        """Refresh the live Jupyter heatmap (frequency × elapsed time, color = T1) after a sweep."""
         import sys
         import io
         import matplotlib.pyplot as plt
@@ -1070,6 +1093,7 @@ class T1FastFluxRepeated(T1FastFlux):
             print(f"[LivePlot] Heatmap update failed: {e}")
 
     def display(self, data=None, **kwargs):
+        """Plot the accumulated T1(frequency, time) heatmap with robust color limits."""
         import matplotlib.pyplot as plt
 
         if data is None:

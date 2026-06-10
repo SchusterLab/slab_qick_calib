@@ -501,6 +501,7 @@ class T1StarkFreqExperiment(QickExperiment2DSimple):
             super().run(min_r2=min_r2, max_err=max_err)
 
     def acquire(self, progress=False):
+        """Sweep the Stark tone frequency in Python, running a T1 measurement per point."""
 
         freqpts = np.linspace(
             self.cfg.expt["start_f"],
@@ -514,6 +515,7 @@ class T1StarkFreqExperiment(QickExperiment2DSimple):
         return self.data
 
     def analyze(self, data=None, fit=True, **kwargs):
+        """Fit each row to an exponential and collect offset/amp/T1 vs Stark frequency."""
         if data is None:
             data = self.data
 
@@ -530,6 +532,7 @@ class T1StarkFreqExperiment(QickExperiment2DSimple):
         ]
 
     def display(self, data=None, fit=True, plot_both=False, **kwargs):
+        """Plot the 2D decay map and fitted T1 vs Stark frequency."""
         if data is None:
             data = self.data
         qubit = self.cfg.expt.qubit[0]
@@ -624,6 +627,7 @@ class T1StarkPowerSingle(QickExperiment):
             super().run(min_r2=min_r2, max_err=max_err)
 
     def acquire(self, progress=False):
+        """Sweep Stark gain on hardware, then take g/e reference scans and normalize to a T1 estimate."""
         qi = self.cfg.expt.qubit[0]
         self.param = {"label": "stark_pulse", "param": "gain", "param_type": "pulse"}
         self.cfg.expt.stark_gain = QickSweep1D(
@@ -654,9 +658,11 @@ class T1StarkPowerSingle(QickExperiment):
         return self.data
 
     def analyze(self, data=None, **kwargs):
+        """No-op: the T1 estimate is computed directly in acquire()."""
         pass
 
     def display(self, data=None, fit=True, plot_all=False, ax=None, show_hist=True):
+        """Plot the single-point T1 estimate vs normalized Stark gain."""
         if data is None:
             data = self.data
 
@@ -768,6 +774,17 @@ class T1StarkPowerQuadSingle(QickExperimentLoop):
             )
 
     def get_gain_pts(self, pos=True, neg=True): 
+        """
+        Build Stark gain points giving linearly spaced frequency shifts.
+
+        Inverts the quadratic shift-vs-gain calibration (quad_fit_pos/neg) so
+        positive and/or negative detuning branches are sampled uniformly in
+        frequency.
+
+        Returns:
+            (gain_pts, stark_freq, f_pts): Gain values, the Stark tone
+            frequency used for each point, and the target frequency shifts
+        """
         if pos:
             f_pts_pos = np.linspace(0, self.cfg.expt.stop_f_pos, int(self.cfg.expt.expts2 / 2))
             gain_pos = find_inverse_quad_fit(f_pts_pos, *self.cfg.expt.quad_fit_pos)
@@ -802,6 +819,7 @@ class T1StarkPowerQuadSingle(QickExperimentLoop):
         return gain_pts, stark_freq, f_pts
 
     def acquire(self, progress=False):
+        """Loop over the frequency-spaced Stark gain points, measuring a single T1 point at each."""
         self.param = {"label": "stark_pulse", "param": "gain", "param_type": "pulse"}
         gain_pts, stark_freq, f_pts = self.get_gain_pts(pos=self.cfg.expt.pos, neg=self.cfg.expt.neg)
 
@@ -816,9 +834,11 @@ class T1StarkPowerQuadSingle(QickExperimentLoop):
         return self.data
 
     def analyze(self, data=None, **kwargs):
+        """No-op: raw data is displayed directly without fitting."""
         pass
 
     def display(self, data=None, fit=True, plot_all=False, ax=None, show_hist=False):
+        """Plot the measured response vs Stark frequency shift."""
         
         if data is None:
             data = self.data
@@ -897,6 +917,7 @@ class T1StarkPowerQuad2D(QickExperiment2DSimple):
             super().run(min_r2=min_r2, max_err=max_err, progress=progress)
 
     def acquire(self, progress=False):
+        """Repeat the quad-spaced Stark T1 sweep sweep_pts times (y-axis = repetition count)."""
 
         sweep_pts = np.arange(self.cfg.expt["sweep_pts"])
         y_sweep = [{"pts": sweep_pts, "var": "count"}]
@@ -908,6 +929,7 @@ class T1StarkPowerQuad2D(QickExperiment2DSimple):
         return self.data
 
     def analyze(self, data=None, fit=False, **kwargs):
+        """Normalize the data with the stored g/e calibration and compute t1_norm per point."""
         #super().analyze(rescale=True, fit=fit)
         q = self.cfg.expt.qubit[0]
         if 'g_norm' in self.cfg.expt:
@@ -916,6 +938,7 @@ class T1StarkPowerQuad2D(QickExperiment2DSimple):
             self.data['t1_norm'] = -1/np.log((self.data['scale_data']-self.cfg.expt['g_norm'])/self.cfg.expt['e_norm'])*self.cfg.expt.wait_time/self.cfg.device.qubit.T1[q]
 
     def display(self, data=None, fit=False, plot_both=False, **kwargs):
+        """Plot the repeated sweep as a 2D map vs Stark frequency shift and repetition."""
         
         if data is None:
             data = self.data

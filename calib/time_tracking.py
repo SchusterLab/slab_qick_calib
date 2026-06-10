@@ -1,3 +1,11 @@
+"""
+Long-term qubit stability tracking.
+
+Repeatedly measures T1, T2, and qubit frequency over hours/days, saving
+per-iteration results to CSV, with optional automatic recentering of the
+qubit frequency and multi-qubit RF-board switching.
+"""
+
 import time
 from copy import deepcopy
 from datetime import datetime
@@ -322,6 +330,7 @@ def measure_cohere(qi, cfg_dict, update=True, display=False, max_t1=MAX_T1):
 
 
 def set_up_dict(t1, t2):
+    """Bundle fitted T1/T2/frequency values and their fit errors into one result dict."""
     err_dict = {
         "t2_err": np.sqrt(t2.data["fit_err_avgi"][3][3]),
         "fge_err": np.sqrt(t2.data["fit_err_avgi"][1][1]),
@@ -356,11 +365,27 @@ def set_up_dict(t1, t2):
 
 
 def measure_setup(qi, cfg_dict):
+    """Run one fast T1+T2 measurement pair without touching the config file (for testing)."""
     cfg_dict["cfg_file"] = None
     t1, t2r = measure_fast(qi, cfg_dict, i, t1, t2r)
 
 
 def measure_fast(qi, cfg_dict, i, tdir, t1_val, t2_val, display=False,t2_type='T2r'):
+    """
+    Run one fast T1 and T2 (Ramsey or echo) pair with spans scaled to the current estimates.
+
+    Args:
+        qi: Qubit index
+        cfg_dict: Standard experiment config dict
+        i: Iteration number, used in the data file names
+        tdir: Directory for the data files
+        t1_val, t2_val: Current T1/T2 estimates (µs) used to set the sweep spans
+        display: Show plots
+        t2_type: 'T2r' (Ramsey) or echo
+
+    Returns:
+        dict: Fitted values and errors from set_up_dict
+    """
     fname = str(Path(tdir) / f"t1_qubit{qi}_{i:05d}")
     
     t1 = meas.T1Experiment(
@@ -397,6 +422,7 @@ def measure_fast(qi, cfg_dict, i, tdir, t1_val, t2_val, display=False,t2_type='T
 
 
 def measure_fast2(qi, cfg_dict, i, t2e=None, t1=None, t1_val=30, t2_val=30):
+    """Variant of measure_fast that reuses existing experiment objects instead of recreating them."""
     if t1 is None:
         t1 = meas.T1Experiment(
             cfg_dict, qi=qi, display=False, progress=False, style="fast"
@@ -656,6 +682,7 @@ def load_tracking(csv_dir, tracking_id=None, qubit_list=None):
 
 
 def calc_stats(tracking_data):
+    """Add derived quantities (Q1, Q2, Tphi) per qubit and return mean/max/std stats for every key."""
 
     for qubit in tracking_data:
         t1_arr = np.array(qubit['t1'])
@@ -685,6 +712,7 @@ def calc_stats(tracking_data):
 
 
 def recenter(qi, cfg_dict, t2r, update=True, display=False, max_t1=MAX_T1):
+    """Recover from a failed T2 fit by re-finding the qubit frequency and updating the config."""
     # Try to recover from failed T2 measurement
     t2r.display(debug=True, refit=True)
     print(t2r.data["r2"])

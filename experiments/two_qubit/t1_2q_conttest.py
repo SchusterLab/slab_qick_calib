@@ -1,3 +1,10 @@
+"""
+Shot-resolved continuous two-qubit T1 measurement (test version).
+
+Each program repetition interleaves n_g ground, n_e excited, and n_t1
+T1-wait measurements on both qubits, giving per-shot calibration data.
+"""
+
 import numpy as np
 from pathlib import Path
 from qick import *
@@ -13,10 +20,13 @@ import matplotlib.pyplot as plt
 
 
 class T1Cont2QProgram(QickProgram2Q):
+    """Pulse sequence interleaving ground, excited, and T1-wait measurements on two qubits."""
+
     def __init__(self, soccfg, final_delay, cfg):
         super().__init__(soccfg, final_delay=final_delay, cfg=cfg)
 
     def _initialize(self, cfg):
+        """Set up readout and pi pulses for both qubits, looping over shots."""
         cfg = AttrDict(self.cfg)
         self.add_loop("shot_loop", cfg.expt.shots)
 
@@ -25,6 +35,7 @@ class T1Cont2QProgram(QickProgram2Q):
             super().make_cfg_pulse(cfg.expt.qubit[i], i, cfg.device.qubit.f_ge, "pi_ge")
 
     def _body(self, cfg):
+        """Play n_g ground, n_e excited, and n_t1 T1-wait measurement blocks."""
         cfg = AttrDict(self.cfg)
 
         # Configure readout for both qubits
@@ -85,6 +96,7 @@ class T1Cont2QProgram(QickProgram2Q):
                 )
 
     def measure(self, cfg):
+        """Play both readout pulses and trigger both ADCs."""
         for q in range(len(cfg.expt.qubit)):
             self.pulse(ch=self.res_ch[q], name=f"readout_pulse_{q}", t=0)
             if self.lo_ch[q] is not None:
@@ -93,6 +105,8 @@ class T1Cont2QProgram(QickProgram2Q):
 
 
 class T1Cont2QExperiment(QickExperiment2Q):
+    """Continuously measure T1 on two qubits with inline g/e calibration shots."""
+
     def __init__(
         self,
         cfg_dict,
@@ -153,6 +167,7 @@ class T1Cont2QExperiment(QickExperiment2Q):
             )
 
     def acquire(self, progress=False, get_hist=True):
+        """Acquire shot-resolved data for the interleaved measurement blocks."""
         self.param = {"label": "wait_0", "param": "t", "param_type": "time"}
 
         if "active_reset" in self.cfg.expt and self.cfg.expt.active_reset:
@@ -248,6 +263,7 @@ class T1Cont2QExperiment(QickExperiment2Q):
         return self.data
 
     def analyze(self, data=None, **kwargs):
+        """No-op: shot data is processed downstream."""
         if data is None:
             data = self.data
         return data
@@ -263,6 +279,7 @@ class T1Cont2QExperiment(QickExperiment2Q):
         savefig=True,
         **kwargs,
     ):
+        """Plot histograms of the interleaved ground/excited/T1 measurement blocks."""
         if data is None:
             data = self.data
 

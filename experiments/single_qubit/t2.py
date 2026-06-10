@@ -262,6 +262,7 @@ class T2ProgramASM(QickProgram):
         super().__init__(soccfg, final_delay=final_delay, cfg=cfg, final_wait=0)
 
     def _initialize(self, cfg):
+        """Set up readout, pi/2 prep/read pulses, and the CPMG pi pulse (phase 90)."""
         cfg = AttrDict(self.cfg)
 
         self.add_loop("wait_loop", cfg.expt.expts)
@@ -289,6 +290,7 @@ class T2ProgramASM(QickProgram):
         super().make_cfg_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
 
     def _body(self, cfg):
+        """Play pi/2, then num_pi CPMG pi pulses via a hardware loop, then the phase-advanced pi/2 and readout."""
         cfg = AttrDict(self.cfg)
         if self.adc_type == "dyn":
             self.send_readoutconfig(ch=self.adc_ch, name="readout", t=0)
@@ -826,6 +828,7 @@ class T2FastFlux(QickFluxSweep):
             self.display()
 
     def acquire(self, progress=False, display=True):
+        """Run the inner T2 experiment at each flux gain point, saving interim data and a CSV."""
         data = {"time": []}
         t2_list = []
         offset_list = []
@@ -887,6 +890,7 @@ class T2FastFlux(QickFluxSweep):
         return data
 
     def display(self, data=None, **kwargs):
+        """Plot fitted T2 vs flux gain (and vs frequency when a flux model is available)."""
         import matplotlib.pyplot as plt
 
         if data is None:
