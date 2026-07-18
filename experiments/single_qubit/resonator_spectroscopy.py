@@ -929,7 +929,7 @@ class ResSpecPower(QickExperiment2DSimple):
 
         return data
 
-    def display(self, data=None, fit=True, plot_phase=False, **kwargs):
+    def display(self, data=None, fit=True, plot_phase=True, **kwargs):
         """
         Display the results of the power sweep experiment.
 

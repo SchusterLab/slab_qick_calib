@@ -72,7 +72,11 @@ class QubitSpecShotProgram(QickProgram):
 
         # Initialize with standard readout
         super()._initialize(cfg, readout="standard")
-        self.declare_gen(ch = cfg.hw.soc.dacs.readout.ch[0])
+        buffer_ch = cfg.hw.soc.dacs.readout.ch[0]
+        buffer_gen_args = {"ch": buffer_ch}
+        if self.soccfg["gens"][buffer_ch].get("has_mixer", False):
+            buffer_gen_args["mixer_freq"] = cfg.expt.frequency_b - 400
+        self.declare_gen(**buffer_gen_args)
 
         # Define the probe pulse with variable frequency
         qubit_pulse = {

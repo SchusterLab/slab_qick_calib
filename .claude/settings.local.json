@@ -19,7 +19,12 @@
       "Bash(cmd /c \"where python 2>nul & where python3 2>nul & where py 2>nul\")",
       "Bash(cmd /c \"conda run -n base python -c \"\"import fridge.bluefors; print\\(fridge.bluefors.__file__\\)\"\"\")",
       "Bash(xargs grep:*)",
-      "Bash(ls /c/_Lib/python/qq/slab_qick_calib/notebooks/*.ipynb)"
+      "Bash(ls /c/_Lib/python/qq/slab_qick_calib/notebooks/*.ipynb)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('experiments/single_qubit/single_shot_opt.py'\\).read\\(\\)\\); print\\('OK: parses'\\)\")",
+      "PowerShell(python -c \"import ast; ast.parse\\(open\\('experiments/single_qubit/single_shot_opt.py'\\).read\\(\\)\\); print\\('OK: parses'\\)\")",
+      "PowerShell($py = \\(Get-Command python3, py, python -ErrorAction SilentlyContinue | Select-Object -First 1\\).Source; if \\($py\\) { Write-Output \"Using: $py\"; & $py -c \"import ast; ast.parse\\(open\\('experiments/single_qubit/single_shot_opt.py'\\).read\\(\\)\\); print\\('OK: parses'\\)\" } else { Write-Output \"no python found\" })",
+      "Bash(python \"C:/Users/slab/AppData/Local/Temp/claude/c---Lib-python-slab-qick-calib/ab8a8bec-1e3a-48a7-b789-429adecfc7e5/scratchpad/repro_display.py\")",
+      "PowerShell(python \"C:/Users/slab/AppData/Local/Temp/claude/c---Lib-python-slab-qick-calib/ab8a8bec-1e3a-48a7-b789-429adecfc7e5/scratchpad/repro_display.py\")"
     ]
   }
 }

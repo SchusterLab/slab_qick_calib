@@ -807,10 +807,27 @@ def analyze_single_shot_histograms(data: IQData, plot: bool = True, span: Option
             set_fig=True
 
             # Plot log histogram
-            bin_cent = (binsg[1:] + binsg[:-1]) / 2
-            axs[1,1].semilogy(bin_cent, ng, color=COLORS['ground'])
-            bin_cent = (binse[1:] + binse[:-1]) / 2
-            axs[1,1].semilogy(bin_cent, ne, color=COLORS['excited'])
+            bin_cent_g = (binsg[1:] + binsg[:-1]) / 2
+            axs[1,1].semilogy(bin_cent_g, ng, color=COLORS['ground'])
+            bin_cent_e = (binse[1:] + binse[:-1]) / 2
+            axs[1,1].semilogy(bin_cent_e, ne, color=COLORS['excited'])
+
+            # Overlay fitted curves, matching the linear-scale panel
+            if seq_mode == '4wm':
+                if all(k in data for k in ("mag1_g", "mu1_g", "sig1_g", "mag2_g", "mu2_g", "sig2_g")):
+                    axs[1,1].semilogy(bin_cent_g, double_gaussian_xnorm(bin_cent_g, data["mag1_g"], data["mu1_g"], data["sig1_g"], data["mag2_g"], data["mu2_g"], data["sig2_g"]), 'k', linewidth=1)
+                if all(k in data for k in ("mag1_e", "mu1_e", "sig1_e", "mag2_e", "mu2_e", "sig2_e")):
+                    axs[1,1].semilogy(bin_cent_e, double_gaussian_xnorm(bin_cent_e, data["mag1_e"], data["mu1_e"], data["sig1_e"], data["mag2_e"], data["mu2_e"], data["sig2_e"]), 'k', linewidth=1)
+            elif 'paramsg' in data and 'vg' in data and 've' in data and 'sigma' in data and 'tm' in data:
+                if 'paramsg2' in data and np.ndim(data['paramsg2']) > 0:
+                    axs[1,1].semilogy(bin_cent_g, double_gaussian(bin_cent_g, *data['paramsg2']), 'k', linewidth=1)
+                else:
+                    axs[1,1].semilogy(bin_cent_g, gaussian(bin_cent_g, 1, *data['paramsg']), 'k', linewidth=1)
+                if 'mag_ground_e' in data:
+                    axs[1,1].semilogy(bin_cent_e, combined_state_model(bin_cent_e, data['mag_ground_e'], data['vg'], data['ve'], data['sigma'], data['tm']), 'k', linewidth=1)
+                else:
+                    axs[1,1].semilogy(bin_cent_e, excited_state_model(bin_cent_e, data['vg'], data['ve'], data['sigma'], data['tm']), 'k', linewidth=1)
+
             axs[1,1].set_title('Log Histogram')
             axs[1, 1].set_xlabel("I (ADC levels)")
             axs[0, 0].set_xlabel("I (ADC levels)")
@@ -867,8 +884,14 @@ def analyze_single_shot_histograms(data: IQData, plot: bool = True, span: Option
                 ax[1].plot(data["vhe"], double_gaussian_xnorm(data["vhe"], data["mag1_e"], data["mu1_e"], data["sig1_e"], data["mag2_e"], data["mu2_e"],data["sig2_e"]), 'k', linewidth=1)
             else:
                 if 'paramsg' in data and 'vg' in data and 've' in data and 'sigma' in data and 'tm' in data:
-                    ax[1].plot(data["vhg"], gaussian(data["vhg"], 1, *data['paramsg']), 'k', linewidth=1)
-                    ax[1].plot(data["vhe"], excited_state_model(data["vhe"], data['vg'], data['ve'], data['sigma'], data['tm']), 'k', linewidth=1)
+                    if 'paramsg2' in data and np.ndim(data['paramsg2']) > 0:
+                        ax[1].plot(data["vhg"], double_gaussian(data["vhg"], *data['paramsg2']), 'k', linewidth=1)
+                    else:
+                        ax[1].plot(data["vhg"], gaussian(data["vhg"], 1, *data['paramsg']), 'k', linewidth=1)
+                    if 'mag_ground_e' in data:
+                        ax[1].plot(data["vhe"], combined_state_model(data["vhe"], data['mag_ground_e'], data['vg'], data['ve'], data['sigma'], data['tm']), 'k', linewidth=1)
+                    else:
+                        ax[1].plot(data["vhe"], excited_state_model(data["vhe"], data['vg'], data['ve'], data['sigma'], data['tm']), 'k', linewidth=1)
                     
                     # Add text annotation with fit parameters
                     sigma = data['sigma']
@@ -920,8 +943,10 @@ def fit_single_shot(data: IQData, plot: bool = True, rot: bool = True) -> Tuple[
     
     This function:
     1. Optionally rotates the IQ data
-    2. Fits Gaussians to ground state I and Q data
-    3. Fits excited state data including T1 decay effects
+    2. Jointly fits the ground and excited state I histograms -- a double gaussian
+       for ground (main peak plus leakage-to-excited) and a residual-ground gaussian
+       plus T1 decay tail for excited -- sharing one width across all four gaussians
+    3. Fits Gaussians to the Q data (for a rotation-angle cross-check)
     4. Returns processed data and fit parameters
     
     Parameters
@@ -951,52 +976,56 @@ def fit_single_shot(data: IQData, plot: bool = True, rot: bool = True) -> Tuple[
         data_rotated = d
         theta = 0
         
-    # Fit Gaussians to the ground state I and Q data
-    paramsg, vhg, histg = fit_gaussian_distribution(data_rotated["Ig"], n_bins=100, plot_result=False)
+    # Quick independent Gaussian fits, used only to seed the joint fit below
+    paramsg0, vhg, histg = fit_gaussian_distribution(data_rotated["Ig"], n_bins=100, plot_result=False)
     paramsqg, vhqg, histqg = fit_gaussian_distribution(data_rotated["Qg"], n_bins=100, plot_result=False)
-    
+
     # Fit Gaussian to excited state Q data
     paramsqe, vhqe, histqe = fit_gaussian_distribution(data_rotated["Qe"], n_bins=100, plot_result=False)
 
     # Extract parameters from fits
     vqg = paramsqg[0]  # Q center for ground state
     vqe = paramsqe[0]  # Q center for excited state
-    vg = paramsg[0]    # I center for ground state
-    sigma = paramsg[1] # Width of ground state distribution
+    vg0, sigma0 = paramsg0  # Initial guesses for ground state center and shared width
 
-    # Fit the excited state I data, including T1 decay effects
     vhe, histe = create_histogram(data_rotated["Ie"], n_bins=100)
-    
-    # Initial guess for excited state center and T1 decay parameter
-    p0 = [np.mean(vhe * histe) / np.mean(histe), 0.2]
-    
-    # Fit using the excited_state_model with fixed ground state parameters
+    ve0 = np.mean(vhe * histe) / np.mean(histe)  # Initial guess for excited state center
+
+    # Joint fit of the ground and excited state I histograms. The ground histogram is
+    # modeled as two gaussians (population that stays ground, and population that leaks
+    # to e), and the excited histogram as a residual-ground gaussian plus an
+    # undecayed-excited gaussian plus a T1 decay tail. All four gaussian components are
+    # constrained to share a single width (sigma) and the same vg/ve centers.
+    n_g = len(vhg)
+    x_joint = np.concatenate([vhg, vhe])
+    y_joint = np.concatenate([histg, histe])
+
+    def joint_state_model(x, mag_gg, vg, ve, sigma, mag_ground_e, tm):
+        fg = double_gaussian(x[:n_g], mag_gg, vg, sigma, 1 - mag_gg, ve)
+        fe = combined_state_model(x[n_g:], mag_ground_e, vg, ve, sigma, tm)
+        return np.concatenate([fg, fe])
+
+    p0 = [0.99, vg0, ve0, sigma0, 0.02, 0.2]
+    bounds = ([0, -np.inf, -np.inf, 1e-9, 0, 0], [1, np.inf, np.inf, np.inf, 1, np.inf])
     try:
-        paramse, params_err = curve_fit(
-            lambda x, ve, tm: excited_state_model(x, vg, ve, sigma, tm), vhe, histe, p0=p0
-        )
+        popt, params_err = curve_fit(joint_state_model, x_joint, y_joint, p0=p0, bounds=bounds, max_nfev=10000)
     except RuntimeError:
         # If fitting fails, use initial guess
-        paramse = p0
-    
-    # Extract excited state parameters
-    ve = paramse[0]  # I center for excited state
-    tm = paramse[1]  # T1 decay parameter (t_meas/T1)
-    paramse2 = [vg, ve, sigma, tm]
-    
+        popt = p0
+
+    mag_gg, vg, ve, sigma, mag_ground_e, tm = popt
+
+    # Reassemble in the shapes expected by the plotting code below
+    paramsg = [vg, sigma]                          # gaussian(x, 1, *paramsg)
+    paramsg2 = [mag_gg, vg, sigma, 1 - mag_gg, ve]  # double_gaussian(x, *paramsg2)
+    paramse2 = [mag_ground_e, vg, ve, sigma, tm]    # combined_state_model(x, *paramse2)
+
     # Calculate correction angle from Gaussian fits
     theta_corr = -np.arctan2((vqe - vqg), (ve - vg))
 
     # Rotate data for analysis (using zero angle here, actual rotation done earlier)
     g_rot = rotate_coordinates(data_rotated['Ig'], data_rotated['Qg'], 0)
     e_rot = rotate_coordinates(data_rotated['Ie'], data_rotated['Qe'], 0)
-
-    # Try to fit two Gaussians to ground state data (for potential leakage detection)
-    pg = [0.99, vg, sigma, 0.01, ve]  # Initial parameters
-    try: 
-        paramsg2, params_err = curve_fit(double_gaussian, vhg, histg, p0=pg)
-    except:
-        paramsg2 = np.nan
 
     # Store rotated data and histograms in the data dictionary
     data_rotated["Ie_rot"] = e_rot[0]
@@ -1016,18 +1045,23 @@ def fit_single_shot(data: IQData, plot: bool = True, rot: bool = True) -> Tuple[
     
     # Store fit parameters in the data dictionary
     data_rotated["paramsg"] = paramsg
+    data_rotated["paramsg2"] = paramsg2
     data_rotated["vg"] = vg
     data_rotated["ve"] = ve
     data_rotated["sigma"] = sigma
     data_rotated["tm"] = tm
+    data_rotated["mag_ground_e"] = mag_ground_e
 
     # Plot results if requested
     if plot:
         plt.figure(figsize=(8, 5))
         plt.plot(vhg, histg, "k.-", markersize=0.5, linewidth=0.3)
         plt.plot(vhe, histe, "k.-", markersize=0.5, linewidth=0.3)
-        plt.plot(vhg, gaussian(vhg, 1, *paramsg), label="g", linewidth=1)
-        plt.plot(vhe, excited_state_model(vhe, vg, ve, sigma, tm), label="e", linewidth=1)
+        if np.ndim(paramsg2) > 0:
+            plt.plot(vhg, double_gaussian(vhg, *paramsg2), label="g", linewidth=1)
+        else:
+            plt.plot(vhg, gaussian(vhg, 1, *paramsg), label="g", linewidth=1)
+        plt.plot(vhe, combined_state_model(vhe, mag_ground_e, vg, ve, sigma, tm), label="e", linewidth=1)
         plt.ylabel("Probability")
         plt.title("Single Shot Histograms")
         plt.xlabel("Voltage")
@@ -1042,6 +1076,8 @@ def fit_single_shot(data: IQData, plot: bool = True, rot: bool = True) -> Tuple[
         've': ve,                 # Excited state I center
         'sigma': sigma,           # Width of distributions
         'tm': tm,                 # T1 decay parameter
+        'mag_ground_e': mag_ground_e,  # Residual ground-state population in excited-state shots
+        'mag_excited_g': 1 - mag_gg,  # Population that leaked to excited in ground-state shots
         'vqg': vqg,               # Ground state Q center
         'vqe': vqe,               # Excited state Q center
         'theta_corr': theta_corr,  # Correction angle from Gaussian fits,

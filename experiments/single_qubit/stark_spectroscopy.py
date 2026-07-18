@@ -11,6 +11,8 @@ The module includes:
 - StarkSpec: Main experiment class for Stark spectroscopy
 """
 
+import builtins
+
 import numpy as np
 import matplotlib.pyplot as plt
 from qick.asm_v2 import QickSweep1D
@@ -58,7 +60,10 @@ class QubitStarkSpecProgram(QickProgram):
 
         # Initialize with standard readout
         super()._initialize(cfg, readout="standard")
-        self.declare_gen(ch = cfg.expt.stark_chan)
+        stark_gen_args = {"ch": cfg.expt.stark_chan}
+        if self.soccfg["gens"][cfg.expt.stark_chan].get("has_mixer", False):
+            stark_gen_args["mixer_freq"] = cfg.expt.stark_freq - 400
+        self.declare_gen(**stark_gen_args)
 
         # Define the qubit pulse with variable frequency
         pulse = {
@@ -219,6 +224,7 @@ class StarkSpec(QickExperiment2DSweep):
             "final_delay": 20,
             "length": 5,
             "stark_chan": self.cfg.hw.soc.dacs.readout.ch[qi],
+            "stark_qubit": qi,
             "stark_length":15,
             "stark_expts": 30,
             "df_stark": 0,
@@ -242,11 +248,22 @@ class StarkSpec(QickExperiment2DSweep):
         )
         params = {**params_def, **params}
 
-        # Set Stark pulse frequency
+        # Set Stark pulse frequency (readout resonator this Stark pulse drives,
+        # keyed by qubit index -- may differ from the physical stark_chan)
         params["stark_freq"] = (
-            self.cfg.device.readout.frequency[params["stark_chan"]] + params["df_stark"]
+            self.cfg.device.readout.frequency[params["stark_qubit"]] + params["df_stark"]
         )
 
+        # StarkSpec touches three independent channels -- print them so it's
+        # never ambiguous which physical line does what, especially since
+        # readout channel/frequency come from `qi`, not from stark_chan/stark_qubit.
+        builtins.print(
+            f"StarkSpec channels: readout ch {self.cfg.hw.soc.dacs.readout.ch[qi]} "
+            f"(qi={qi}, {self.cfg.device.readout.frequency[qi]:.3f} MHz), "
+            f"qubit drive ch {self.cfg.hw.soc.dacs.qubit.ch[qi]}, "
+            f"stark ch {params['stark_chan']} "
+            f"(stark_qubit={params['stark_qubit']}, {params['stark_freq']:.3f} MHz)"
+        )
 
         # Set experiment configuration
         self.cfg.expt = params
@@ -355,7 +372,7 @@ class StarkSpec(QickExperiment2DSweep):
             #     self.cfg.device.qubit.f_ge[self.cfg.expt.qubit[0]]
             #     - self.cfg.device.readout.frequency[self.cfg.expt.qubit[0]]
             # )
-            chi = self.cfg.device.readout.chi[self.cfg.expt.stark_chan]
+            chi = self.cfg.device.readout.chi[self.cfg.expt.stark_qubit]
             n = popt[0]  / chi
             self.data["n"] = n
             print(f"n photons/unit gain: {n}") # This is n photons/gain

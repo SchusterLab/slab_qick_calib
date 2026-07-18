@@ -15,6 +15,7 @@ from tqdm import tqdm_notebook as tqdm
 from ..general.qick_experiment import QickExperiment
 from .single_shot import HistogramExperiment
 from ...helpers import config
+from ...calib import readout_helpers as helpers
 
 blue = "#4053d3"
 red = "#b51d14"
@@ -418,113 +419,100 @@ class SingleShotOptExperiment(QickExperiment):
                 if dim == [1, 2]:
                     return data[:, i[0], i[1]].reshape(-1)
 
-        m = 0.5
+        def rotated_i(i_data, q_data, angle_deg):
+            """Rotate IQ data by angle_deg (as fit by HistogramExperiment.analyze) and return I."""
+            theta = np.pi * angle_deg / 180
+            i_rot, _ = helpers.rotate_coordinates(np.asarray(i_data), np.asarray(q_data), theta)
+            return i_rot
+
+        def plot_hist(axis, ig, qg, ie, qe, angle_deg):
+            """Plot rotated-I histograms of the g and e clouds on axis."""
+            axis.hist(rotated_i(ig, qg, angle_deg), bins=50, color=blue, alpha=0.5, label="g")
+            axis.hist(rotated_i(ie, qe, angle_deg), bins=50, color=red, alpha=0.5, label="e")
+
+        def plot_blob(axis, ig, qg, ie, qe):
+            """Scatter every g and e shot in the IQ plane on axis."""
+            axis.plot(ig, qg, ".", color=blue, alpha=0.2, markersize=0.5, rasterized=True)
+            axis.plot(ie, qe, ".", color=red, alpha=0.2, markersize=0.5, rasterized=True)
+
         imname = Path(self.fname).stem
         folder = Path(self.path)
 
         if ndims == 1:
-            row, col = smart_ax(npts[0])
-            fig, ax = plt.subplots(row, col, figsize=(col * 3, row * 3))
-            ax = ax.flatten()
-            for i in range(npts[0]):
-
-                ax[i].plot(
-                    return_dim(self.data["Ig"], inds, i),
-                    return_dim(self.data["Qg"], inds, i),
-                    ".",
-                    color=blue,
-                    alpha=0.2,
-                    markersize=m,
-                    rasterized=True,
-                )
-                ax[i].plot(
-                    return_dim(self.data["Ie"], inds, i),
-                    return_dim(self.data["Qe"], inds, i),
-                    ".",
-                    color=red,
-                    alpha=0.2,
-                    markersize=m,
-                    rasterized=True,
-                )
-
-                ax[i].set_title(f"{labs[inds[0]]} {data[sweep_var[0]][i]:.2f}")
-            fig.savefig(folder / "images" / f"{imname}_raw.png")
+            for mode in ("hist", "blob"):
+                row, col = smart_ax(npts[0])
+                fig, ax = plt.subplots(row, col, figsize=(col * 3, row * 3))
+                ax = ax.flatten()
+                for i in range(npts[0]):
+                    ig = return_dim(self.data["Ig"], inds, i)
+                    qg = return_dim(self.data["Qg"], inds, i)
+                    ie = return_dim(self.data["Ie"], inds, i)
+                    qe = return_dim(self.data["Qe"], inds, i)
+                    if mode == "hist":
+                        angle_i = return_dim(self.data["angle"], inds, i)[0]
+                        plot_hist(ax[i], ig, qg, ie, qe, angle_i)
+                    else:
+                        plot_blob(ax[i], ig, qg, ie, qe)
+                    ax[i].set_title(f"{labs[inds[0]]} {data[sweep_var[0]][i]:.2f}")
+                fig.savefig(folder / "images" / f"{imname}_raw_{mode}.png")
 
         elif ndims == 2:
-            fig, ax = plt.subplots(npts[0], npts[1], figsize=(npts[1] * 3, npts[0] * 3))
-
-            for i in range(npts[0]):
-                for j in range(npts[1]):
-                    ax[i, j].plot(
-                        return_dim(self.data["Ig"], inds, [i, j]),
-                        return_dim(self.data["Qg"], inds, [i, j]),
-                        ".",
-                        color=blue,
-                        alpha=0.2,
-                        markersize=m,
-                        rasterized=True,
-                    )
-                    ax[i, j].plot(
-                        return_dim(self.data["Ie"], inds, [i, j]),
-                        return_dim(self.data["Qe"], inds, [i, j]),
-                        ".",
-                        color=red,
-                        alpha=0.2,
-                        markersize=m,
-                        rasterized=True,
-                    )
-
-                    if i == npts[0] - 1:
-                        ax[i, j].set_xlabel(np.round(self.data[sweep_var[1]][j], 2))
-                    if j == 0:
-                        ax[i, j].set_ylabel(np.round(self.data[sweep_var[0]][i], 2))
-            plt.figtext(0.5, 0.0, labs[inds[1]], horizontalalignment="center")
-            plt.figtext(
-                0.0, 0.5, labs[inds[0]], verticalalignment="center", rotation="vertical"
-            )
-            fig.savefig(folder / "images" / f"{imname}_raw.png")
-        else:
-            for k in range(npts[2]):
-                fig, ax = plt.subplots(
-                    npts[0], npts[1], figsize=(npts[1] * 3, npts[0] * 3)
-                )
+            for mode in ("hist", "blob"):
+                fig, ax = plt.subplots(npts[0], npts[1], figsize=(npts[1] * 3, npts[0] * 3))
                 for i in range(npts[0]):
                     for j in range(npts[1]):
-                        ax[i, j].plot(
-                            self.data["Ig"][i, j, k, :],
-                            self.data["Qg"][i, j, k],
-                            ".",
-                            color=blue,
-                            alpha=0.2,
-                            markersize=m,
-                            rasterized=True,
-                        )
-                        ax[i, j].plot(
-                            self.data["Ie"][i, j, k, :],
-                            self.data["Qe"][i, j, k],
-                            ".",
-                            color=red,
-                            alpha=0.2,
-                            markersize=m,
-                            rasterized=True,
-                        )
+                        ig = return_dim(self.data["Ig"], inds, [i, j])
+                        qg = return_dim(self.data["Qg"], inds, [i, j])
+                        ie = return_dim(self.data["Ie"], inds, [i, j])
+                        qe = return_dim(self.data["Qe"], inds, [i, j])
+                        if mode == "hist":
+                            angle_ij = return_dim(self.data["angle"], inds, [i, j])[0]
+                            plot_hist(ax[i, j], ig, qg, ie, qe, angle_ij)
+                        else:
+                            plot_blob(ax[i, j], ig, qg, ie, qe)
                         if i == npts[0] - 1:
                             ax[i, j].set_xlabel(np.round(self.data[sweep_var[1]][j], 2))
                         if j == 0:
                             ax[i, j].set_ylabel(np.round(self.data[sweep_var[0]][i], 2))
-
-                # Add figure title with constant parameter value
-                const_param_value = data[sweep_var[2]][k]
-                fig.suptitle(f"{title}, {labs[inds[2]]} = {const_param_value:.2f}")
-
-                # Add figure-level axis labels
                 plt.figtext(0.5, 0.0, labs[inds[1]], horizontalalignment="center")
                 plt.figtext(
                     0.0, 0.5, labs[inds[0]], verticalalignment="center", rotation="vertical"
                 )
+                fig.savefig(folder / "images" / f"{imname}_raw_{mode}.png")
+        else:
+            for k in range(npts[2]):
+                for mode in ("hist", "blob"):
+                    fig, ax = plt.subplots(
+                        npts[0], npts[1], figsize=(npts[1] * 3, npts[0] * 3)
+                    )
+                    for i in range(npts[0]):
+                        for j in range(npts[1]):
+                            ig = self.data["Ig"][i, j, k, :]
+                            qg = self.data["Qg"][i, j, k, :]
+                            ie = self.data["Ie"][i, j, k, :]
+                            qe = self.data["Qe"][i, j, k, :]
+                            if mode == "hist":
+                                angle_ijk = self.data["angle"][i, j, k]
+                                plot_hist(ax[i, j], ig, qg, ie, qe, angle_ijk)
+                            else:
+                                plot_blob(ax[i, j], ig, qg, ie, qe)
+                            if i == npts[0] - 1:
+                                ax[i, j].set_xlabel(np.round(self.data[sweep_var[1]][j], 2))
+                            if j == 0:
+                                ax[i, j].set_ylabel(np.round(self.data[sweep_var[0]][i], 2))
 
-                fig.tight_layout()
-                fig.savefig(folder / "images" / f"{imname}_raw_{k}.png")
+                    # Add figure title with constant parameter value
+                    const_param_value = data[sweep_var[2]][k]
+                    fig.suptitle(f"{title}, {labs[inds[2]]} = {const_param_value:.2f}")
+
+                    # Add figure-level axis labels
+                    plt.figtext(0.5, 0.0, labs[inds[1]], horizontalalignment="center")
+                    plt.figtext(
+                        0.0, 0.5, labs[inds[0]], verticalalignment="center", rotation="vertical"
+                    )
+
+                    fig.tight_layout()
+                    fig.savefig(folder / "images" / f"{imname}_raw_{mode}_{k}.png")
 
         title = f"Single Shot Optimization Q{self.cfg.expt.qubit[0]}"
 

@@ -571,6 +571,7 @@ class HistogramExperiment(QickExperiment):
             data["vhe"] = data2["vhe"]
             data["histe"] = data2["histe"]
             data["paramsg"] = paramsg
+            data["paramsg2"] = data2["paramsg2"]
             data["shots"] = self.cfg.expt.shots
             data['e_mean'] = p['e_mean']
             data['g_mean'] = p['g_mean']
