@@ -339,7 +339,7 @@ class RabiExperiment(QickExperiment):
             # Length sweep: set max length to cover desired oscillations
             if params["pulse_type"] == "gauss":
                 # For Gaussian pulses, we sweep sigma
-                params_def["start"] = self.soccfg.cycles2us(1)  
+                params_def["start"] = self.soccfg.cycles2us(1)
                 params_def["max_length"] = 2 * params["num_osc"] * params["sigma"]
             else:
                 # For const and flat_top pulses, sweep length directly
@@ -348,6 +348,24 @@ class RabiExperiment(QickExperiment):
                 params_def["max_length"] = 2 * params["num_osc"] * params["length"]
 
             params = {**params_def, **params}
+
+            # Ensure the length step is larger than the DAC time resolution,
+            # otherwise the QICK sweep step rounds to zero and compilation fails
+            qubit_ch = self.cfg.hw.soc.dacs.qubit.ch[params["qubit"][0]]
+            min_step = max(
+                self.soccfg.cycles2us(1, gen_ch=qubit_ch), self.soccfg.cycles2us(1)
+            )
+            nsteps = params["expts"] - 1
+            if nsteps > 0:
+                step = (params["max_length"] - params["start"]) / nsteps
+                if step < min_step:
+                    new_max = params["start"] + min_step * nsteps
+                    print(
+                        f"Warning: length step {step*1e3:.2f} ns < DAC resolution "
+                        f"{min_step*1e3:.2f} ns. Increasing max_length from "
+                        f"{params['max_length']:.4f} to {new_max:.4f} us."
+                    )
+                    params["max_length"] = new_max
         return params
 
     def acquire(self, progress=False, debug=False):
@@ -1030,6 +1048,192 @@ class Rabi2D(QickExperiment2DSimple):
             plot_both=plot_both,
             **kwargs,
         )
+
+
+class RabiGainLength2D(QickExperiment2DSimple):
+    """
+    2D Rabi experiment: pulse gain on the x axis, pulse length on the y axis.
+
+    The x axis is swept in hardware by a nested RabiExperiment (`sweep='amp'`),
+    so each row of the map is a single fast QICK sweep. The y axis steps the
+    pulse length in software. For Gaussian pulses the y value is the *total*
+    pulse length and sigma is scaled to match via `sigma_inc`; for const and
+    flat_top pulses the y value is the pulse length directly.
+
+    Fitting each row against gain gives the pi gain as a function of pulse
+    length, which is overlaid on the map.
+
+    Default `params` values:
+    - 'expts_y': Number of pulse lengths on the y axis (default: 20)
+    - 'start_y': Shortest pulse length in us (default: shortest realizable pulse)
+    - 'span_y': Span of pulse lengths in us (default: 4x the nominal pi length)
+    - 'expts': Number of gain points on the x axis (default: 60, from RabiExperiment)
+    - 'start': Lowest gain (default: 0.003, from RabiExperiment)
+    - 'max_gain': Highest gain (default: gain * num_osc * 2, from RabiExperiment)
+    - 'checkEF': Drive the e-f transition instead of g-e (default: False)
+    """
+
+    def __init__(
+        self,
+        cfg_dict,
+        qi=0,
+        go=True,
+        params={},
+        style="",
+        prefix=None,
+        progress=True,
+        live_plot=False,
+        display=True,
+        min_r2=None,
+        max_err=None,
+    ):
+        """Initialize the 2D gain vs. length Rabi experiment."""
+
+        if prefix is None:
+            ef = "ef_" if params.get("checkEF", False) else ""
+            prefix = f"rabi_gain_length_{ef}qubit{qi}"
+
+        super().__init__(
+            cfg_dict=cfg_dict, prefix=prefix, progress=progress, qi=qi, live_plot=live_plot
+        )
+
+        # The nested experiment always sweeps gain on the x axis. Build it first
+        # (without running) so the nominal pulse length is available for the
+        # y-axis defaults.
+        params = {**params, "sweep": "amp", "loop": False}
+        self.expt = RabiExperiment(
+            cfg_dict, qi=qi, go=False, params=params, style=style, check_params=False
+        )
+        inner = dict(self.expt.cfg.expt)
+
+        # Shortest pulse the DAC can produce, matching RabiExperiment's length sweep
+        if inner["pulse_type"] == "gauss":
+            min_length = self.soccfg.cycles2us(1) * inner["sigma_inc"]
+        else:
+            min_length = 3 * self.soccfg.cycles2us(1)
+
+        # Pulse area is roughly constant, so the pi gain diverges as the length
+        # goes to zero. Start at half the nominal length to keep every row
+        # within the gain sweep.
+        params_def = {
+            "expts_y": 20,
+            "start_y": max(min_length, 0.5 * inner["length"]),
+            "span_y": 3 * inner["length"],
+        }
+
+        self.cfg.expt = {**params_def, **inner, **params}
+
+        if go:
+            super().run(
+                progress=progress, display=display, min_r2=min_r2, max_err=max_err
+            )
+
+    def acquire(self, progress=False, debug=False):
+        """Acquire the 2D map by stepping pulse length over hardware gain sweeps."""
+        len_pts = np.linspace(
+            self.cfg.expt.start_y,
+            self.cfg.expt.start_y + self.cfg.expt.span_y,
+            self.cfg.expt.expts_y,
+        )
+
+        # "length" comes first so that ypts is the total pulse length
+        ysweep = [{"pts": len_pts, "var": "length"}]
+        if self.cfg.expt.pulse_type == "gauss":
+            ysweep.append({"pts": len_pts / self.cfg.expt.sigma_inc, "var": "sigma"})
+
+        self._get_labels()
+        super().acquire(ysweep, progress=progress)
+        return self.data
+
+    def analyze(self, data=None, fit=True, **kwargs):
+        """Fit each pulse length against gain and extract the pi gain."""
+        if data is None:
+            data = self.data
+
+        if not fit:
+            return data
+
+        data = super().analyze(
+            fitfunc=FIT_FUNC, fitterfunc=FITTER_FUNC, data=data, fit=fit, **kwargs
+        )
+
+        # Pi gain for each pulse length; drop fits that land outside the swept range
+        max_gain = np.max(data["xpts"])
+        pi_gains = []
+        for p in data["fit_avgi"]:
+            try:
+                pi_gain = fitter.fix_phase(list(p))
+            except (TypeError, IndexError, ValueError, ZeroDivisionError):
+                pi_gain = np.nan
+            if not np.isfinite(pi_gain) or pi_gain <= 0 or pi_gain > max_gain:
+                pi_gain = np.nan
+            pi_gains.append(pi_gain)
+
+        data["pi_gains"] = np.array(pi_gains, dtype=float)
+        # Constant pulse area is flat in length; a slope means the drive is
+        # nonlinear or the pulse is being distorted
+        data["pi_area"] = data["pi_gains"] * data["ypts"]
+
+        return data
+
+    def display(
+        self,
+        data=None,
+        fit=True,
+        plot_both=False,
+        plot_amps=False,
+        ax=None,
+        **kwargs,
+    ):
+        """Display the 2D map with the fitted pi gain overlaid."""
+        if data is None:
+            data = self.data
+
+        self._get_labels()
+
+        # Own the figure for the single-panel case so the pi gain line can be
+        # drawn on top of the heatmap before saving
+        own_fig = ax is None and not plot_both and not plot_amps
+        fig = None
+        if own_fig:
+            fig, ax = plt.subplots(1, 1, figsize=(6, 6))
+
+        super().display(
+            data=data,
+            ax=ax,
+            plot_both=plot_both,
+            plot_amps=plot_amps,
+            title=self.title,
+            xlabel=self.xlabel,
+            ylabel=self.ylabel,
+            **kwargs,
+        )
+
+        if own_fig:
+            if fit and "pi_gains" in data:
+                valid = np.isfinite(data["pi_gains"])
+                if np.any(valid):
+                    ax.plot(
+                        data["pi_gains"][valid],
+                        data["ypts"][valid],
+                        "r.-",
+                        label="$\pi$ gain",
+                    )
+                    ax.set_xlim(np.min(data["xpts"]), np.max(data["xpts"]))
+                    ax.legend()
+            self.save_fig(fig)
+            self.save_config()
+            plt.show()
+
+    def _get_labels(self):
+        """Set the plot title and axis labels, also used by the live plotter."""
+        q = self.cfg.expt.qubit[0]
+        ef = ", EF" if self.cfg.expt.checkEF else ""
+        self.title = (
+            f"Gain vs Length Rabi Q{q} ({self.cfg.expt.pulse_type} pulse{ef})"
+        )
+        self.xlabel = "Gain / Max Gain"
+        self.ylabel = "Pulse Length ($\mu$s)"
 
 
 # Helper functions for fitting the chevron pattern

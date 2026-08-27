@@ -361,6 +361,13 @@ def measure_setup(qi, cfg_dict):
 
 
 def measure_fast(qi, cfg_dict, i, tdir, t1_val, t2_val, display=False,t2_type='T2r'):
+    """Run one T1 and one T2 sweep on a qubit and return the fitted values.
+
+    ``display=True`` makes each experiment write its own plot (and the config
+    that produced it) to ``<expt_path>/images/``. Every figure is closed once
+    it is on disk -- over a long tracking run the open figures would otherwise
+    accumulate to thousands and exhaust memory.
+    """
     fname = str(Path(tdir) / f"t1_qubit{qi}_{i:05d}")
     
     t1 = meas.T1Experiment(
@@ -372,8 +379,8 @@ def measure_fast(qi, cfg_dict, i, tdir, t1_val, t2_val, display=False,t2_type='T
         style="fast",
         params={"span": 3.7 * t1_val},
     )
-
-
+    if display:
+        plt.close("all")
 
     fname = str(Path(tdir) / f"{t2_type}_qubit{qi}_{i:05d}")
     ramsey_freq = 1.5 / t2_val
@@ -391,7 +398,9 @@ def measure_fast(qi, cfg_dict, i, tdir, t1_val, t2_val, display=False,t2_type='T
         style="fast",
         params=params,
     )
-   
+    if display:
+        plt.close("all")
+
     qubit_dict = set_up_dict(t1, t2)
     return qubit_dict
 
@@ -464,6 +473,17 @@ def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True,
     start_time = time.time()
     elapsed = 0
     i = 0
+    tracking_data = None
+
+    # Seed each qubit's sweep spans from the config. After a successful round a
+    # qubit's spans follow its own last good fit; the seed is the fallback when
+    # a fit fails or comes back NaN, so one bad round cannot take the run down.
+    seed_cfg = config.load(cfg_dict["cfg_file"])
+    span_vals = [
+        (seed_cfg["device"]["qubit"]["T1"][qi],
+         seed_cfg["device"]["qubit"]["T2r"][qi])
+        for qi in qubit_list
+    ]
 
     # Run measurements until total_time is reached
     while elapsed < total_time:
@@ -496,22 +516,13 @@ def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True,
 
             # Measure qubit parameters
             if fast:
-                if i == 0:
-                    t2 = 'T2r'
-                    if soc is None:
-                        auto_cfg = config.load(cfg_dict["cfg_file"])
-                    t1_val = auto_cfg["device"]["qubit"]["T1"][qi]
-                    t2_val = auto_cfg["device"]["qubit"][t2][qi]
-                else:
-                    t1_val = tracking_data[j]["t1"][-1]
-                    t2_val = tracking_data[j]["t2"][-1]
+                t2 = 'T2r'
+                t1_val, t2_val = span_vals[j]
 
                 try:
                     d = measure_fast(qi, cfg_dict, i, tracking_path, t1_val, t2_val, display=display, t2_type=t2)
                     if not d:
                         raise RuntimeError("Measurement returned empty result")
-                    t1_val = d["t1"]
-                    t2_val = d["t2"]
                 except Exception as e:
                     print(f"Measurement failed for qubit {qi} on run {i}: {e}")
                     print("Using previous t1/t2 values for next iteration")
@@ -533,15 +544,22 @@ def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True,
             if t2_max is not None and d["t2"] > t2_max:
                 d["t2"] = t2_max
 
+            # Next round's spans track this fit, but only if it is usable --
+            # a NaN or non-positive value would make the sweep span invalid.
+            if fast and np.isfinite(d["t1"]) and np.isfinite(d["t2"]) \
+                    and d["t1"] > 0 and d["t2"] > 0:
+                span_vals[j] = (d["t1"], d["t2"])
+
             d["time"] = tm
             d["elapsed"] = elapsed
             if bf_client is not None:
                 d["mxc_temp"] = mxc_temp
                 d["pulsetube_on"] = pulsetube_on
 
-            # Store data for this iteration
-            if i == 0 and j == 0:
-                # Initialize storage dictionary for each qubit on first iteration
+            # Store data for this iteration. Keyed off the first result that
+            # actually arrives, not (i, j) == (0, 0) -- qubit 0 failing on the
+            # first round must not leave the storage uninitialized.
+            if tracking_data is None:
                 tracking_data = [
                     {key: [] for key in d.keys()} for _ in range(len(qubit_list))
                 ]
@@ -555,6 +573,8 @@ def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True,
         # Save tracking data to CSV files (only for qubits that succeeded)
         for j, qi in enumerate(qubit_list):
             if not iter_success[j]:
+                continue
+            if tracking_data is None or not tracking_data[j]["t1"]:
                 continue
 
             csv_dir = base_path / "csv"
@@ -574,6 +594,10 @@ def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True,
             # Future change to only add a new row
             # Save to CSV
             np.savetxt(csv_path, rows, delimiter=",", header=header, comments="", fmt="%.5f")
+
+    if tracking_data is None:
+        print("No successful measurements -- nothing to summarize")
+        return [], tracking_path, {}, tracking_id
 
     tt_stats = calc_stats(tracking_data)
 
@@ -658,6 +682,8 @@ def load_tracking(csv_dir, tracking_id=None, qubit_list=None):
 def calc_stats(tracking_data):
 
     for qubit in tracking_data:
+        if len(qubit['t1']) == 0:
+            continue
         t1_arr = np.array(qubit['t1'])
         t2_arr = np.array(qubit['t2'])
         f_ge_arr = np.array(qubit['f_ge'])
@@ -673,11 +699,14 @@ def calc_stats(tracking_data):
     for idx, qubit_data in enumerate(tracking_data):
         stats = {}
         for key, values in qubit_data.items():
-            arr = np.array(values)
+            arr = np.array(values, dtype=float)
+            if arr.size == 0:
+                stats[key] = {'mean': np.nan, 'max': np.nan, 'std': np.nan}
+                continue
             stats[key] = {
-                'mean': np.mean(arr),
-                'max': np.max(arr),
-                'std': np.std(arr)
+                'mean': np.nanmean(arr),
+                'max': np.nanmax(arr),
+                'std': np.nanstd(arr)
             }
         tt_stats[idx] = stats
 

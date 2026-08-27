@@ -12,6 +12,7 @@ The module includes:
 - ResSpec: Main experiment class for resonator spectroscopy
 - ResSpecPower: 2D version that sweeps both frequency and power
 - ResSpec2D: 2D version for repeated measurements
+- ResSpecTime: 2D version that stacks repeated sweeps against lab time
 
 Note that harmonics of the clock frequency (6144 MHz) will show up as "infinitely" narrow peaks!
 """
@@ -19,7 +20,9 @@ Note that harmonics of the clock frequency (6144 MHz) will show up as "infinitel
 import numpy as np
 import matplotlib.pyplot as plt
 import copy
+import time
 from datetime import datetime
+from tqdm import tqdm_notebook as tqdm
 
 from qick import *
 from qick.asm_v2 import QickSweep1D
@@ -31,7 +34,8 @@ XLABEL = "Readout Frequency (MHz)"
 from ...exp_handling.datamanagement import AttrDict
 from ..general.qick_experiment import (
     QickExperiment,
-    QickExperiment2DSimple
+    QickExperiment2DSimple,
+    LivePlotter,
 )
 from ..general.qick_program import QickProgram
 
@@ -1186,6 +1190,315 @@ class ResSpec2D(QickExperiment2DSimple):
         
         # Save figure
         self.save_fig(fig)
+
+
+class ResSpecTime(QickExperiment2DSimple):
+    """
+    Resonator spectroscopy monitored against lab time.
+
+    Repeatedly runs a 1D ResSpec frequency sweep at the configured readout gain
+    and stacks the traces against wall-clock time, producing a map of
+
+        x = elapsed lab time,  y = readout frequency,  z = |S21| (ADC units).
+
+    Useful for watching the resonator drift, jump, or respond to something
+    changing in the fridge over minutes to hours.
+
+    Parameters
+    ----------
+    - 'expts_count': maximum number of frequency sweeps to take
+    - 'row_delay': wall-clock seconds to idle between sweeps (0 = back to back)
+    - 'max_time': stop once this many hours have elapsed (None = take all rows)
+    Plus every ResSpec parameter ('span', 'expts', 'gain', 'length', 'reps', ...).
+
+    Acquisition stops cleanly on KeyboardInterrupt, keeping the rows taken so far,
+    so a long monitor can be ended early without losing data.
+    """
+
+    def __init__(
+        self,
+        cfg_dict,
+        prefix="",
+        progress=True,
+        qi=0,
+        go=True,
+        live_plot=False,
+        save=True,
+        display=True,
+        analyze=True,
+        params={},
+        style="fine",
+        check_params=True,
+    ):
+        """
+        Initialize the resonator-vs-time experiment.
+
+        Args:
+            cfg_dict: Configuration dictionary
+            prefix: Prefix for data files
+            progress: Whether to show progress bar
+            qi: Qubit index
+            go: Whether to run the experiment immediately
+            live_plot: Whether to update the heatmap during acquisition
+            params: Additional parameters to override defaults
+            style: Inner sweep style ('coarse' or 'fine')
+        """
+        if not prefix:
+            prefix = generate_filename('2d', qi, style=style, extra='time')
+
+        super().__init__(cfg_dict=cfg_dict, prefix=prefix, progress=progress, qi=qi, live_plot=live_plot)
+
+        # Outer (time) sweep defaults; inner frequency sweep defaults come from ResSpec
+        params_def = {
+            "expts_count": 100,   # Maximum number of frequency sweeps
+            "row_delay": 0.0,     # Seconds to idle between sweeps
+            "max_time": None,     # Hours; None means run all expts_count rows
+            "count": 0,           # Row index, set per row during acquisition
+        }
+        params = {**params_def, **params}
+
+        # Build the inner 1D experiment but don't run it
+        self.expt = ResSpec(cfg_dict, qi=qi, go=False, style=style, params=params,
+                            check_params=check_params)
+        self.cfg.expt = {**self.expt.cfg.expt, **params}
+
+        self.xlabel = "Lab Time (hr)"
+        self.ylabel = XLABEL
+
+        if go:
+            self.run(progress=progress, save=save, display=display, analyze=analyze)
+
+    @classmethod
+    def from_h5file(cls, fname):
+        """Load from h5 and restore axis labels."""
+        self = super().from_h5file(fname)
+        if self.data["xpts"].ndim == 2:
+            self.data["xpts"] = self.data["xpts"][0]
+        self.xlabel = "Lab Time (hr)"
+        self.ylabel = XLABEL
+        return self
+
+    @staticmethod
+    def _time_axis(t_abs):
+        """Convert absolute timestamps to elapsed time in the most readable unit."""
+        t = np.asarray(t_abs, dtype=float)
+        t = t - t[0]
+        span = t[-1] if len(t) > 1 else 0.0
+        if span < 120:
+            return t, "Lab Time (s)"
+        if span < 3 * 3600:
+            return t / 60, "Lab Time (min)"
+        return t / 3600, "Lab Time (hr)"
+
+    def acquire(self, progress=True):
+        """
+        Repeatedly acquire the inner frequency sweep, stacking rows against lab time.
+
+        Args:
+            progress: Whether to show progress bar
+
+        Returns:
+            Acquired data with 'xpts' (MHz), 'ypts' (elapsed hours) and 2D 'amps'
+        """
+        pts = np.arange(self.cfg.expt.expts_count)
+        y_sweep = [{"var": "count", "pts": pts}]
+
+        # Create live plotter now that config/labels are fully populated.
+        # LivePlotter draws frequency on x and the outer sweep on y, i.e. the
+        # transpose of display(), so it gets its own labels.
+        if self.live_plot and self.live_plotter is None:
+            self.live_plotter = LivePlotter(
+                display_mode=self._display,
+                xlabel=XLABEL,
+                ylabel="Lab Time (min)",
+                logy=False,
+            )
+            if not self.live_plotter._active:
+                self.live_plot = False
+
+        data = {}
+        data["time"] = []
+        self._store_sweep_parameters(data, y_sweep)
+
+        n_done = 0
+        try:
+            for i in tqdm(pts, disable=not progress):
+                # Record the row index in the inner config so it lands in the h5
+                self.expt.cfg.expt["count"] = int(i)
+
+                row = self.expt.acquire(progress=False)
+                for key in row:
+                    if n_done == 0:
+                        data[key] = []
+                    data[key].append(row[key])
+                data["time"].append(time.time())
+                n_done += 1
+
+                if self.live_plot and n_done > 1:
+                    # Feed elapsed minutes as the y axis rather than the row index
+                    elapsed_min = (np.array(data["time"]) - data["time"][0]) / 60
+                    self.live_plotter.update(
+                        data, [{"var": "count", "pts": elapsed_min}],
+                        step=n_done, total=len(pts),
+                    )
+                if self.save_interim:
+                    self.save_data(data=data)
+
+                # Stop early if the requested monitoring window has elapsed
+                elapsed_hr = (data["time"][-1] - data["time"][0]) / 3600
+                if self.cfg.expt.max_time is not None and elapsed_hr >= self.cfg.expt.max_time:
+                    print(f"Reached max_time ({self.cfg.expt.max_time} hr) after {n_done} sweeps.")
+                    break
+
+                if self.cfg.expt.row_delay > 0 and i < len(pts) - 1:
+                    time.sleep(self.cfg.expt.row_delay)
+        except KeyboardInterrupt:
+            print(f"Interrupted after {n_done} sweeps; keeping data collected so far.")
+
+        if n_done == 0:
+            raise RuntimeError("No frequency sweeps completed; nothing to store.")
+
+        # Trim the row-index record to what was actually taken
+        data["count_pts"] = pts[:n_done]
+
+        # x-axis is the frequency axis of the first row; y-axis is elapsed hours
+        data["xpts"] = data["xpts"][0]
+        data["ypts"] = (np.array(data["time"]) - np.min(data["time"])) / 3600
+
+        for k, a in data.items():
+            data[k] = np.array(a)
+        self.data = data
+
+        if self.live_plot and self.live_plotter is not None:
+            self.live_plotter.close()
+
+        return data
+
+    def analyze(self, data=None, fit=True, hanger=True, verbose=False, **kwargs):
+        """
+        Fit each time slice to track the resonator frequency and linewidth vs time.
+
+        Args:
+            data: Data to analyze (if None, use self.data)
+            fit: Whether to fit each row (False just records the amplitude minimum)
+            hanger: Whether to use the hanger model (True) or Lorentzian (False)
+            verbose: Whether to print per-row fit failures
+
+        Returns:
+            Analyzed data with 'f0', 'kappa', 'r2', 'fit_ok' and 'fmin' vs time
+        """
+        if data is None:
+            data = self.data
+
+        # LO-corrected frequency axis
+        super().get_freq(fit=False)
+        data["freq"] = self.data["freq"]
+        data["freq_offset"] = self.data["freq_offset"]
+
+        x = data["freq"][1:-1]
+        Y = data["amps"]
+        N = Y.shape[0]
+
+        f0 = np.full(N, np.nan)
+        kappa = np.full(N, np.nan)
+        r2 = np.full(N, np.nan)
+        fmin = np.full(N, np.nan)
+        ok = np.zeros(N, dtype=bool)
+
+        fitfunc = fitter.hangerS21func_sloped if hanger else fitter.lorfunc
+        do_fit = fitter.fithanger if hanger else fitter.fitlor
+
+        for j in range(N):
+            ys = Y[j][1:-1]
+            fmin[j] = x[np.argmin(ys)]
+
+            if not fit:
+                continue
+
+            try:
+                p, pcov, pinit = do_fit(x, ys)
+                if hanger:
+                    f0[j], Qi, Qe, phi, scale, slope = p
+                    kappa[j] = f0[j] * (1.0 / Qi + 1.0 / Qe) * 1e-4
+                else:
+                    A0, A1, f0[j], kappa[j] = p
+                r2[j] = fitter.get_r2(x, ys, fitfunc, p)
+                ok[j] = True
+            except Exception as e:
+                if verbose:
+                    print(f"[fit row {j}] failed: {e}")
+
+        data["f0"] = f0
+        data["kappa"] = kappa
+        data["r2"] = r2
+        data["fit_ok"] = ok
+        data["fmin"] = fmin
+
+        # Drift summary over the run
+        track = f0 if np.any(ok) else fmin
+        good = np.isfinite(track)
+        if np.any(good):
+            data["drift"] = np.nanmax(track[good]) - np.nanmin(track[good])
+            data["f0_mean"] = np.nanmean(track[good])
+            data["f0_std"] = np.nanstd(track[good])
+            if verbose:
+                print(f"Mean f0: {data['f0_mean']:.4f} MHz")
+                print(f"Std f0:  {1e3*data['f0_std']:.1f} kHz")
+                print(f"Drift:   {1e3*data['drift']:.1f} kHz peak-to-peak")
+
+        self.data = data
+        return data
+
+    def display(self, data=None, fit=True, normalize=False, track="fit", ax=None, **kwargs):
+        """
+        Show the amplitude map with lab time on x and readout frequency on y.
+
+        Args:
+            data: Data to display (if None, use self.data)
+            fit: Whether to overlay the tracked resonator frequency
+            normalize: Whether to divide each time slice by its median amplitude
+            track: Which trace to overlay, 'fit' (fitted f0) or 'min' (amplitude minimum)
+            ax: Matplotlib axis to plot on
+        """
+        data = self.data if data is None else data
+
+        t, tlabel = self._time_axis(data["time"])
+        f = data["freq"] if "freq" in data else data["xpts"]
+
+        amps = copy.deepcopy(data["amps"])
+        if normalize:
+            for i in range(len(amps)):
+                amps[i, :] = amps[i, :] / np.median(amps[i, :])
+        clabel = "Normalized |S21|" if normalize else "|S21| (ADC units)"
+
+        created_fig = ax is None
+        if created_fig:
+            fig, ax = plt.subplots(1, 1, figsize=(10, 7))
+
+        # amps is (n_time, n_freq); transpose so frequency runs up the y axis
+        pcm = ax.pcolormesh(t, f, amps.T, shading="auto", cmap="viridis", rasterized=True)
+        plt.colorbar(pcm, ax=ax, label=clabel)
+        ax.set_xlabel(tlabel)
+        ax.set_ylabel(XLABEL)
+
+        if fit:
+            trace = data.get("f0") if track == "fit" else data.get("fmin")
+            if trace is not None:
+                mask = np.isfinite(trace)
+                if track == "fit":
+                    mask &= np.asarray(data.get("fit_ok", np.isfinite(trace)))
+                if np.any(mask):
+                    ax.plot(t[mask], trace[mask], "r.-", lw=1, ms=3, zorder=5,
+                            label="Fitted $f_0$" if track == "fit" else "Amplitude min")
+                    ax.legend()
+
+        ax.tick_params(top=True, bottom=True, right=True)
+
+        if created_fig:
+            plt.tight_layout()
+            plt.show()
+            super().save_fig(fig)
+            super().save_config()
 
 
 def get_homophase(params):

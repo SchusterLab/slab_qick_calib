@@ -1077,6 +1077,192 @@ def fitdecayslopesin(
     return pOpt, pCov, fitparams
 
 
+def twofreq_sum_decaysin(x: np.ndarray, *p) -> np.ndarray:
+    """
+    Sum of two decaying sinusoids sharing a single decay envelope.
+
+    Use this when the FFT of a Ramsey trace shows two distinct peaks -- a beat from
+    a coupled TLS, charge-parity splitting, or a second nearby transition. Fitting
+    such a trace with a single decaying sine both lands the frequency somewhere
+    between the two components and absorbs the beat node into an artificially short
+    T2.
+
+    The two components share one decay constant: with a typical Ramsey record the
+    beat node and the envelope are already close to degenerate, and giving each
+    component its own T2 makes the fit unstable. Use `twofreq_decaysin` instead if
+    the physical picture is amplitude modulation rather than two independent tones.
+
+    Args:
+        x: X-axis data points
+        p: Parameters [yscale0, freq0, phase_deg0, decay, y0, yscale1, freq1, phase_deg1]
+           The first five entries keep the same meaning and position as `decaysin`,
+           so index 1 is still the (dominant) frequency and index 3 is still T2.
+
+    Returns:
+        y = y0 + exp(-x/decay)*(yscale0*sin(2π*freq0*x + φ0) + yscale1*sin(2π*freq1*x + φ1))
+    """
+    yscale0, freq0, phase_deg0, decay, y0, yscale1, freq1, phase_deg1 = p
+    return y0 + np.exp(-x / decay) * (
+        yscale0 * np.sin(2 * np.pi * freq0 * x + phase_deg0 * np.pi / 180)
+        + yscale1 * np.sin(2 * np.pi * freq1 * x + phase_deg1 * np.pi / 180)
+    )
+
+
+def fourier_peaks(
+    xdata: np.ndarray, ydata: np.ndarray, n_peaks: int = 4, pad: int = 16
+) -> List[Tuple[float, float, float]]:
+    """
+    Locate the strongest spectral peaks of a trace.
+
+    Zero-pads before the FFT so that a marginally resolved doublet is interpolated
+    into two findable lobes instead of collapsing into one bin. Padding adds no
+    real resolution -- two tones closer than 1/(x span) still cannot be separated --
+    it only makes the lobes that are there locatable.
+
+    Args:
+        xdata: X-axis data points (uniformly spaced)
+        ydata: Y-axis data points
+        n_peaks: Maximum number of peaks to return
+        pad: Zero-padding factor
+
+    Returns:
+        List of (frequency, phase_rad, magnitude), strongest first
+    """
+    n = len(ydata)
+    dt = xdata[1] - xdata[0]
+    nfft = pad * n
+
+    fourier = np.fft.rfft(ydata - np.mean(ydata), n=nfft)
+    freqs = np.fft.rfftfreq(nfft, d=dt)
+    mag = np.abs(fourier)
+
+    # Anything below one resolution element is leftover offset/drift, not a fringe
+    valid = freqs > 1 / (xdata[-1] - xdata[0])
+
+    is_peak = np.zeros(len(mag), dtype=bool)
+    is_peak[1:-1] = (mag[1:-1] > mag[:-2]) & (mag[1:-1] > mag[2:])
+    inds = np.flatnonzero(is_peak & valid)
+
+    if len(inds) == 0:
+        # No local maximum (e.g. a monotonic spectrum): fall back to the largest bin
+        inds = np.array([np.flatnonzero(valid)[np.argmax(mag[valid])]])
+
+    inds = inds[np.argsort(mag[inds])[::-1][:n_peaks]]
+    return [(freqs[i], np.angle(fourier[i]), mag[i]) for i in inds]
+
+
+def fittwofreq_sum_decaysin(
+    xdata: np.ndarray,
+    ydata: np.ndarray,
+    fitparams: Optional[List[float]] = None,
+    debug: bool = False,
+) -> Tuple[List[float], np.ndarray, List[float]]:
+    """
+    Fit data to a sum of two decaying sinusoids sharing one decay envelope.
+
+    Seeds the fit from every pair of resolvable FFT peaks and keeps the pair that
+    gives the smallest residual. A single seed is not enough here: which of the two
+    lobes comes out largest depends on the relative phase of the components, so
+    starting from the tallest peak alone regularly converges onto a single tone
+    sitting between the two.
+
+    The returned parameters are ordered so the larger-amplitude component is first,
+    making index 1 the dominant fringe frequency (and index 6 the weaker one).
+
+    Args:
+        xdata: X-axis data points
+        ydata: Y-axis data points
+        fitparams: Optional initial parameters
+            [yscale0, freq0, phase_deg0, decay, y0, yscale1, freq1, phase_deg1];
+            entries left as None are initialized from the FFT
+        debug: If True, prints the seeds that were tried and their residuals
+
+    Returns:
+        Tuple of (optimized_parameters, covariance_matrix, initial_parameters)
+    """
+    n_par = 8
+    if fitparams is None:
+        fitparams = [None] * n_par
+
+    span = xdata[-1] - xdata[0]
+    rayleigh = 1 / span  # smallest frequency splitting this record can resolve
+    nyquist = 0.5 / (xdata[1] - xdata[0])
+    amp = max(ydata) - min(ydata)
+
+    bounds = (
+        [-2 * amp, 1e-3, -720, 0.05, np.min(ydata), -2 * amp, 1e-3, -720],
+        [2 * amp, nyquist, 720, np.inf, np.max(ydata), 2 * amp, nyquist, 720],
+    )
+
+    peaks = fourier_peaks(xdata, ydata, n_peaks=4)
+
+    # Pair up peaks that are actually resolvable from each other
+    seeds = [
+        (peaks[i], peaks[j])
+        for i in range(len(peaks))
+        for j in range(i + 1, len(peaks))
+        if abs(peaks[i][0] - peaks[j][0]) > 0.5 * rayleigh
+    ]
+    if not seeds:
+        # Only one lobe in the spectrum: straddle it by one resolution element and
+        # let the fit decide whether the splitting survives
+        f0, ph0, m0 = peaks[0]
+        seeds = [
+            (
+                (max(f0 - 0.5 * rayleigh, 1e-3), ph0, m0),
+                (f0 + 0.5 * rayleigh, ph0, m0),
+            )
+        ]
+
+    best_p0 = None
+    pOpt = [np.nan] * n_par
+    pCov = np.full((n_par, n_par), np.inf)
+    best_res = np.inf
+
+    for pk0, pk1 in seeds:
+        m_max = max(pk0[2], pk1[2])
+        p0 = [
+            0.5 * amp * pk0[2] / m_max,  # yscale0
+            pk0[0],  # freq0
+            pk0[1] * 180 / np.pi + 90,  # phase_deg0
+            span / 2,  # decay
+            np.mean(ydata),  # y0
+            0.5 * amp * pk1[2] / m_max,  # yscale1
+            pk1[0],  # freq1
+            pk1[1] * 180 / np.pi + 90,  # phase_deg1
+        ]
+        # Caller-supplied values win over the FFT guesses
+        p0 = [g if g is not None else v for g, v in zip(fitparams, p0)]
+        p0 = validate_bounds(p0, bounds)
+
+        try:
+            p, c = sp.optimize.curve_fit(
+                twofreq_sum_decaysin, xdata, ydata, p0=p0, bounds=bounds
+            )
+        except RuntimeError:
+            continue
+
+        res = np.sum((twofreq_sum_decaysin(xdata, *p) - ydata) ** 2)
+        if debug:
+            print(f"  seed f = {p0[1]:.4f}, {p0[6]:.4f} MHz -> "
+                  f"fit f = {p[1]:.4f}, {p[6]:.4f} MHz, residual {res:.4g}")
+        if res < best_res:
+            best_res, pOpt, pCov, best_p0 = res, p, c, p0
+
+    if best_p0 is None:
+        print("Warning: Fit two-frequency (sum) decaying sine failed!")
+        return pOpt, pCov, list(fitparams)
+
+    # Put the dominant component first so index 1 is the main fringe frequency
+    if abs(pOpt[5]) > abs(pOpt[0]):
+        order = [5, 6, 7, 3, 4, 0, 1, 2]
+        pOpt = pOpt[order]
+        pCov = pCov[np.ix_(order, order)]
+        best_p0 = [best_p0[i] for i in order]
+
+    return pOpt, pCov, best_p0
+
+
 def twofreq_decaysin(x: np.ndarray, *p) -> np.ndarray:
     """
     Two-frequency decaying sinusoidal function.
@@ -1096,7 +1282,7 @@ def twofreq_decaysin(x: np.ndarray, *p) -> np.ndarray:
 
 def fittwofreq_decaysin(
     xdata: np.ndarray, ydata: np.ndarray, fitparams: Optional[List[float]] = None
-) -> Tuple[List[float], np.ndarray]:
+) -> Tuple[List[float], np.ndarray, List[float]]:
     """
     Fit data to a two-frequency decaying sinusoidal function.
 
@@ -1106,7 +1292,7 @@ def fittwofreq_decaysin(
         fitparams: Optional initial parameters
 
     Returns:
-        Tuple of (optimized_parameters, covariance_matrix)
+        Tuple of (optimized_parameters, covariance_matrix, initial_parameters)
     """
     if fitparams is None:
         fitparams = [None] * 10
@@ -1180,9 +1366,7 @@ def fittwofreq_decaysin(
         fitparams,
         bounds=bounds,
         error_message="Warning: Fit two-frequency decaying sine failed!",
-    )[
-        :2
-    ]  # Return only pOpt and pCov
+    )
 
 
 # ====================================================== #

@@ -554,7 +554,10 @@ class T2Experiment(QickExperiment):
         Args:
             data: Data dictionary to analyze (uses self.data if None)
             fit: Whether to perform fitting
-            fit_twofreq: Whether to fit to a two-frequency model
+            fit_twofreq: Fit two frequencies instead of one, for traces whose FFT
+                shows a doublet (coupled TLS, charge-parity splitting, a second
+                nearby transition). True selects the sum-of-two-decaying-sines
+                model; "product" selects the older amplitude-modulation model.
             refit: Whether to refit without slope
             verbose: Whether to print detailed information
             **kwargs: Additional arguments passed to the analyzer
@@ -570,10 +573,14 @@ class T2Experiment(QickExperiment):
 
         if fit:
             # Select appropriate fitting function based on parameters
-            if fit_twofreq:
-                # Two-frequency model for more complex oscillations
+            if fit_twofreq == "product":
+                # Amplitude-modulated single tone
                 self.fitterfunc = fitter.fittwofreq_decaysin
                 self.fitfunc = fitter.twofreq_decaysin
+            elif fit_twofreq:
+                # Two independent tones under a shared decay envelope
+                self.fitterfunc = fitter.fittwofreq_sum_decaysin
+                self.fitfunc = fitter.twofreq_sum_decaysin
             elif refit:
                 # Simple decaying sine without slope
                 self.fitfunc = fitter.decaysin
@@ -591,8 +598,12 @@ class T2Experiment(QickExperiment):
                 **kwargs,
             )
 
-            # If the fit fails, try again without slope
-            if not self.status and not refit:
+            # If the fit fails, try again without slope. This fallback always uses
+            # the strict default thresholds, independent of the user's max_err.
+            # It is skipped for two-frequency fits, which the single-tone model
+            # would silently undo.
+            self.get_status(max_err=1, min_r2=0.1)
+            if not self.status and not refit and not fit_twofreq:
                 self.fitfunc = fitter.decaysin
                 self.fitterfunc = fitter.fitdecaysin
                 super().analyze(
@@ -619,12 +630,30 @@ class T2Experiment(QickExperiment):
                         key=abs,  # Sort by absolute value to get the smallest error first
                     )
 
-                    # For two-frequency model, calculate additional adjustments
+                    # For two-frequency models, do the same for the second tone.
+                    # The two models put freq1 in different slots: index 6 for the
+                    # sum model, index 7 for the product model.
                     if fit_twofreq and self.cfg.expt.experiment_type == "ramsey":
+                        i_f2 = 7 if fit_twofreq == "product" else 6
+                        f2 = data["fit_" + ydata][i_f2]
                         data["f_adjust_ramsey_" + ydata + "2"] = sorted(
                             (
-                                self.cfg.expt.ramsey_freq - data["fit_" + ydata][7],
-                                self.cfg.expt.ramsey_freq - data["fit_" + ydata][6],
+                                self.cfg.expt.ramsey_freq - f2,
+                                self.cfg.expt.ramsey_freq + f2,
+                            ),
+                            key=abs,
+                        )
+                        data["f_split_" + ydata] = abs(f2 - data["fit_" + ydata][1])
+
+                        # Which tone comes out dominant varies between quadratures,
+                        # so the centre of the doublet is the order-independent
+                        # detuning -- and the one to correct to when the splitting
+                        # is symmetric (TLS avoided crossing, charge parity).
+                        f_c = (f2 + data["fit_" + ydata][1]) / 2
+                        data["f_adjust_ramsey_" + ydata + "_center"] = sorted(
+                            (
+                                self.cfg.expt.ramsey_freq - f_c,
+                                self.cfg.expt.ramsey_freq + f_c,
                             ),
                             key=abs,
                         )
@@ -648,18 +677,44 @@ class T2Experiment(QickExperiment):
             else:
                 f_pi_test = self.cfg.device.qubit.f_ge[self.cfg.expt.qubit[0]]
 
+            # Carry the splitting of the best quadrature up to the top level
+            if fit_twofreq:
+                best = data["i_best"]
+                if isinstance(best, bytes):
+                    best = best.decode()
+                data["f_split"] = data["f_split_" + best]
+                data["t2r_adjust2"] = data["f_adjust_ramsey_" + best + "2"]
+                data["t2r_adjust_center"] = data[
+                    "f_adjust_ramsey_" + best + "_center"
+                ]
+                data["new_freq_center"] = f_pi_test + data["t2r_adjust_center"][0]
+
             # Print possible frequency errors if verbose
             if self.cfg.expt.experiment_type == "ramsey" and verbose:
                 print(
                     f"Possible errors are {t2r_adjust[0]:.3f} and {t2r_adjust[1]:.3f} MHz "
                     f"for Ramsey frequency {self.cfg.expt.ramsey_freq:.3f} MHz"
                 )
+                if fit_twofreq:
+                    print(
+                        f"Second tone splits off by {data['f_split']:.3f} MHz; its "
+                        f"errors are {data['t2r_adjust2'][0]:.3f} and "
+                        f"{data['t2r_adjust2'][1]:.3f} MHz"
+                    )
+                    print(
+                        f"Doublet centre gives {data['t2r_adjust_center'][0]:.3f} MHz "
+                        f"-> {data['new_freq_center']:.4f} MHz"
+                    )
 
             # Store the frequency error and corrected frequency
             data["f_err"] = t2r_adjust[0]  # Use the smallest error
             data["new_freq"] = (
                 f_pi_test + t2r_adjust[0]
             )  # Calculate corrected frequency
+
+            # Final status against the thresholds the caller asked for, using the
+            # fit_err recomputed above
+            self.get_status()
 
         return data
 
@@ -728,6 +783,14 @@ class T2Experiment(QickExperiment):
                 },
                 {"index": 1, "format": "Freq. : {val:.3} $\pm$ {err:.1} MHz"},
             ]
+
+        # Two-frequency fits carry a second tone; the product model puts its
+        # frequency at index 7, the sum model at index 6
+        if fit_twofreq:
+            i_f2 = 7 if fit_twofreq == "product" else 6
+            caption_params.append(
+                {"index": i_f2, "format": "Freq. 2 : {val:.3} $\pm$ {err:.1} MHz"}
+            )
 
         # Call parent class display method
         super().display(

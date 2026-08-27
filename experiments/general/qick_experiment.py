@@ -667,6 +667,7 @@ class QickExperiment(Experiment):
         caption_params=[],
         debug=False,
         display=None,
+        savefig=True,
         **kwargs,
     ):
         """
@@ -693,6 +694,9 @@ class QickExperiment(Experiment):
             debug: Whether to show debug information (initial guess)
             display: Display mode for plots (e.g. 'talk' for presentation-sized text).
                 Can also be set via disp_kwargs or self.display.
+            savefig: Whether to write the figure and config to the data folder. Only
+                applies when this method creates the figure (ax is None); pass False
+                to re-plot saved data without overwriting what is on disk.
             **kwargs: Additional arguments for plotting
         """
         if data is None:
@@ -727,8 +731,9 @@ class QickExperiment(Experiment):
 
         # Save figure if created in this method
         if save_fig and fig:
-            self.save_fig(fig)
-            self.save_config()
+            if savefig:
+                self.save_fig(fig)
+                self.save_config()
             plt.show()
 
     def _show_histogram(self, data, display=None):
@@ -897,6 +902,10 @@ class QickExperiment(Experiment):
         if disp_kwargs is None:
             disp_kwargs = {}
 
+        # Store thresholds so get_status (called from analyze) uses them
+        self.max_err = max_err
+        self.min_r2 = min_r2
+
         # Execute experiment workflow
         data = self.acquire(progress)
         if analyze:
@@ -921,14 +930,21 @@ class QickExperiment(Experiment):
         for key, value in self.cfg.expt.items():
             print(f"{key}: {value}")
 
-    def get_status(self, max_err=1, min_r2=0.1):
+    def get_status(self, max_err=None, min_r2=None):
         """
         Determine if experiment was successful based on fit quality metrics.
 
         Args:
-            max_err: Maximum acceptable fit error threshold
-            min_r2: Minimum acceptable R² value threshold
+            max_err: Maximum acceptable fit error threshold. Defaults to the
+                value passed to run(), or 1 if run() was not used.
+            min_r2: Minimum acceptable R² value threshold. Defaults to the
+                value passed to run(), or 0.1 if run() was not used.
         """
+        if max_err is None:
+            max_err = getattr(self, "max_err", 1)
+        if min_r2 is None:
+            min_r2 = getattr(self, "min_r2", 0.1)
+
         if (
             "fit_err" in self.data
             and "r2" in self.data

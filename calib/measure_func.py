@@ -13,7 +13,8 @@ from ..experiments.single_qubit.rabi import RabiExperiment
 colors = ["#0869c8", "#b51d14"]
 
 
-def check_chi(cfg_dict, qi=0, span=7, df=-0.5, npts=301, plot=False, check_f=False):
+def check_chi(cfg_dict, qi=0, span=7, df=-0.5, expts=301, plot=False, check_f=False,
+              params=None):
     """
     Measures the chi shift of a qubit.
     This is done by measuring the resonator frequency with and without a pi pulse on the qubit.
@@ -26,13 +27,19 @@ def check_chi(cfg_dict, qi=0, span=7, df=-0.5, npts=301, plot=False, check_f=Fal
     qi : int
         The qubit index.
     span : float
-        The frequency span of the resonator spectroscopy.
-    npts : int
+        The frequency span of the resonator spectroscopy. 'kappa' uses 7 linewidths.
+    expts : int
         The number of points in the resonator spectroscopy.
     plot : bool
         Whether to plot the results.
     check_f : bool
         Whether to also measure the resonator frequency with a pi pulse on the f state.
+    params : dict, optional
+        Extra ResSpec params applied to every scan (g, e and optional f), overriding
+        the defaults set here. Use this to match a standalone ResSpec call, e.g.
+        params={'span':5, 'reps':10, 'expts':501, 'final_delay':1}.
+        Averaging defaults to rounds=2 with reps from the config; pass 'rounds' or
+        'reps' here to change it.
 
     Returns
     -------
@@ -44,19 +51,29 @@ def check_chi(cfg_dict, qi=0, span=7, df=-0.5, npts=301, plot=False, check_f=Fal
     kappa = auto_cfg["device"]["readout"]["kappa"][qi]
     t1 = auto_cfg["device"]["qubit"]["T1"][qi]
     final_delay = t1*5
+
+    params = {} if params is None else dict(params)
+    span = params.pop("span", span)
+    if span == "kappa":
+        span = float(7 * kappa)
     start = freq - span/2 + df
-    center = start + span / 2 + df/2
+    center = params.pop("center", start + span / 2 + df/2)
+
+    # Shared by every scan so g, e (and f) are directly comparable.
+    # Override any of these by passing them in `params`.
+    base_params = {
+        "span": span,
+        "center": center,
+        "expts": expts,
+        "rounds": 2,
+        "final_delay": final_delay,
+    }
+    base_params.update(params)
+
     chi = ResSpec(
         cfg_dict,
         qi=qi,
-        params={
-            "span": span,
-            "center": center,
-            "npts": npts,
-            "rounds": 2,
-            "final_delay": final_delay,
-            "pulse_e": True,
-        },
+        params={**base_params, "pulse_e": True},
         go=False,
     )
     chi.go(analyze=True, display=False, progress=True, save=True)
@@ -65,15 +82,7 @@ def check_chi(cfg_dict, qi=0, span=7, df=-0.5, npts=301, plot=False, check_f=Fal
         chif =ResSpec(
             cfg_dict,
             qi=qi,
-            params={
-                "span": span,
-                "center": center,
-                "npts": npts,
-                "rounds": 3,
-                "final_delay": final_delay,
-                "pulse_e": True,
-                "pulse_f": True,
-            },
+            params={**base_params, "pulse_e": True, "pulse_f": True},
             go=False,
         )
         chif.go(analyze=True, display=False, progress=True, save=True)
@@ -81,13 +90,7 @@ def check_chi(cfg_dict, qi=0, span=7, df=-0.5, npts=301, plot=False, check_f=Fal
     rspec = ResSpec(
         cfg_dict,
         qi=qi,
-        params={
-            "span": span,
-            "center": center,
-            "npts": npts,
-            "rounds": 2,
-            "final_delay": 15,
-        },
+        params=dict(base_params),
         go=False,
     )
     rspec.go(analyze=True, display=False, progress=True, save=True)
@@ -161,7 +164,8 @@ def check_chi(cfg_dict, qi=0, span=7, df=-0.5, npts=301, plot=False, check_f=Fal
     )
 
 
-def measure_temp(cfg_dict, qi, temp=40, expts=32, chan=None, bf_client=None, no_fit=True):
+def measure_temp(cfg_dict, qi, temp=40, expts=32, chan=None, bf_client=None, no_fit=True,
+                 sweep="amp"):
     """
     Measures the temperature of a qubit.
     This is done by measuring the population of the excited state with and without a pi pulse.
@@ -183,6 +187,10 @@ def measure_temp(cfg_dict, qi, temp=40, expts=32, chan=None, bf_client=None, no_
         The channel to use for the measurement.
     bf_client : object, optional
         Bluefors client for reading mixing chamber temperature.
+    sweep : str
+        'amp' to sweep the EF pulse gain, 'length' to sweep the EF pulse length.
+        Both traces always use the same sweep axis. A length sweep with a gauss
+        pi_ef falls back to loop mode and is very slow; use a const pi_ef.
 
     Returns
     -------
@@ -191,7 +199,12 @@ def measure_temp(cfg_dict, qi, temp=40, expts=32, chan=None, bf_client=None, no_
     """
     # Read MXC temperature at the beginning if bf_client is provided
     auto_cfg = config.load(cfg_dict["cfg_file"])
-    max_gain = auto_cfg["device"]["qubit"]["pulses"]["pi_ef"]["gain"][qi]*5.2
+    pi_ef = auto_cfg["device"]["qubit"]["pulses"]["pi_ef"]
+    if sweep == "length":
+        # for const pulses sigma is the pi length, for gauss it is the pi sigma
+        sweep_params = {"sweep": "length", "max_length": pi_ef["sigma"][qi] * 5.2}
+    else:
+        sweep_params = {"sweep": "amp", "max_gain": pi_ef["gain"][qi] * 5.2}
     mxc_temp = np.nan
     if bf_client is not None:
         try:
@@ -199,7 +212,8 @@ def measure_temp(cfg_dict, qi, temp=40, expts=32, chan=None, bf_client=None, no_
         except Exception as e:
             print(f"Warning: failed to read MXC temperature: {e}")
     rabief = RabiExperiment(
-        cfg_dict, qi=qi, params={"pulse_ge": True, "checkEF": True, "max_gain": max_gain, "expts": expts}
+        cfg_dict, qi=qi, params={"pulse_ge": True, "checkEF": True, "expts": expts,
+                                 **sweep_params}
     )
     rabief_nopulse = RabiExperiment(
         cfg_dict,
@@ -209,7 +223,7 @@ def measure_temp(cfg_dict, qi, temp=40, expts=32, chan=None, bf_client=None, no_
             "pulse_ge": False,
             "checkEF": True,
             "temp": temp,
-            "max_gain": max_gain,
+            **sweep_params,
         },
         style="temp",
     )
@@ -253,7 +267,10 @@ def measure_temp(cfg_dict, qi, temp=40, expts=32, chan=None, bf_client=None, no_
     ax.tick_params(axis="y", colors=colors[0])
     ax.yaxis.label.set_color(colors[0])
     axt.yaxis.label.set_color(colors[1])
-    axt.set_xlabel("Gain (DAC units)")
+    if sweep == "length":
+        axt.set_xlabel("Pulse Length ($\mu$s)")
+    else:
+        axt.set_xlabel("Gain (DAC units)")
     axt.set_ylabel("No ge Pulse")
 
     # Add MXC temperature to title if available

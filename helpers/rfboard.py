@@ -37,7 +37,7 @@ def _update_active_state(cfg, channel_type, ch, filter_fc, filter_bw, filter_typ
         "filter_fc": filter_fc,
         "filter_bw": filter_bw,
         "filter_type": filter_type,
-        "qubit": qubit,
+        "qubit": int(qubit) if qubit is not None else None,
     }
     entry.update(attn_kwargs)
     hw["rfboard_active"][channel_type][str(ch)] = entry
@@ -125,12 +125,13 @@ def setup_qubit_drive_chain(
     atten1_dac=None,
     atten2_dac=None,
     center_freq=None,
+    ftype="bandpass",
     cfg_file=None,
 ):
     """
     Configure the qubit drive RF path for a given qubit.
 
-    Sets bandpass filter on the qubit DAC channel centered on f_ge from
+    Sets a filter on the qubit DAC channel centered on f_ge from
     the config (or a custom center frequency) and sets attenuator values.
 
     When attenuation or bandwidth parameters are ``None`` (the default),
@@ -145,6 +146,10 @@ def setup_qubit_drive_chain(
         atten1_dac: DAC attenuator 1 in dB (default: from config)
         atten2_dac: DAC attenuator 2 in dB (default: from config)
         center_freq: Override center frequency in MHz (default: use f_ge from config)
+        ftype: Filter type — ``"bandpass"``, ``"lowpass"``, ``"highpass"`` or
+            ``"bypass"`` (default: ``"bandpass"``).  With ``"bypass"`` the
+            ``bw``/``center_freq`` arguments are ignored and the filter is
+            disabled; attenuators are still applied.
         cfg_file: Optional path to persist active state to disk (default: None)
 
     Returns:
@@ -164,15 +169,19 @@ def setup_qubit_drive_chain(
 
     fc = center_freq if center_freq is not None else drive_freq
 
-    # Set bandpass filter (MHz -> GHz)
-    soc.rfb_set_gen_filter(dac_ch, fc=fc / 1000, ftype="bandpass", bw=bw / 1000)
+    # Set filter (MHz -> GHz); bypass takes no fc/bw
+    if ftype == "bypass":
+        fc, bw = 0, 0
+        soc.rfb_set_gen_filter(dac_ch, fc=0, ftype="bypass")
+    else:
+        soc.rfb_set_gen_filter(dac_ch, fc=fc / 1000, ftype=ftype, bw=bw / 1000)
 
     # Set attenuators
     soc.rfb_set_gen_rf(dac_ch, atten1_dac, atten2_dac)
 
     if cfg_file is not None:
         from . import config
-        _update_active_state(cfg, "dac_qubit", dac_ch, fc, bw, "bandpass",
+        _update_active_state(cfg, "dac_qubit", dac_ch, fc, bw, ftype,
                              qubit=qubit, attn1=atten1_dac, attn2=atten2_dac)
         config.update_rfboard_active(cfg_file, "dac_qubit", dac_ch,
                                      cfg.hw.soc.rfboard_active["dac_qubit"][str(dac_ch)])
