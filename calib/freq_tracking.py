@@ -77,7 +77,7 @@ TRUST_SIGMA_F = 0.1
 # Coherence fits below this R^2 are never written back to the config.
 COH_MIN_R2 = 0.5
 # Clamps for config write-back, matching the notebook's conventions.
-MAX_T1 = 500.0
+MAX_T1 = 1100.0
 T1_RNG = [0.5, MAX_T1]
 T2R_RNG = [0.025, MAX_T1]
 T2E_RNG = [0.04, 2 * MAX_T1]

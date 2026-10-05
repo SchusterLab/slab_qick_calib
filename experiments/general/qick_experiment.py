@@ -20,6 +20,7 @@ from ...exp_handling.experiment import Experiment
 from ...exp_handling.experiment import NpEncoder, YamlNpEncoder
 from ...analysis import fitting as fitter
 from ...calib import readout_helpers as helpers
+from ...helpers.tproc import enable_wfifo_pause
 
 
 def get_current_time_string():
@@ -506,9 +507,14 @@ class QickExperiment(Experiment):
 
         # Create program instance
         kwargs = {'final_delay':final_delay, 'cfg':self.cfg}
-        # if self.cfg.expt.active_reset: 
+        # if self.cfg.expt.active_reset:
         #     kwargs['final_wait']=None
         prog = prog_name(soccfg=self.soccfg,**kwargs)
+
+        # Without this, a program that plays a long pulse train from a hardware
+        # loop overruns the tProc wave FIFO and the dropped writes silently kill
+        # the readout pulse. See helpers/tproc.py.
+        enable_wfifo_pause(self.im[self.cfg.aliases.soc])
 
         # Record start time
         current_time = get_current_time_string()

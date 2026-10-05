@@ -403,7 +403,7 @@ class T1Experiment(QickExperiment):
             **kwargs,
         )
 
-    def update(self, rng_vals=[0.5, 500], first_time=False, no_final=False, verbose=True):
+    def update(self, rng_vals=[0.5, 1200], first_time=False, no_final=False, verbose=True):
         qi = self.cfg.expt.qubit[0]
         if self.status:
             config.update_qubit(
@@ -422,7 +422,7 @@ class T1Experiment(QickExperiment):
                     6 * self.data["new_t1_i"],
                     qi,
                     sig=2,
-                    rng_vals=[rng_vals[0] * 10, rng_vals[1] * 3],
+                    rng_vals=[rng_vals[0] * 10, rng_vals[1] * 5],
                     verbose=verbose,
                 )
             if first_time:

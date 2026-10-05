@@ -25,7 +25,7 @@ from .. import experiments as meas
 plt.rcParams["legend.handlelength"] = 0.5
 
 # Default parameters
-MAX_T1 = 500  # Maximum T1 time in microseconds
+MAX_T1 = 1100  # Maximum T1 time in microseconds
 DEFAULT_MIN_T1 = 1.5  # Default minimum T1 time in microseconds
 DEFAULT_MIN_T2 = 1.5  # Default minimum T2 time in microseconds
 MAX_ERR = 1  # Maximum acceptable error in fits

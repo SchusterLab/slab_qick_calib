@@ -216,21 +216,26 @@ class T2Program(QickProgram):
                 self.delay_auto(t=0.05, tag="wait")
         else:
             # Standard Ramsey or Echo sequence
-            # For Echo, divide wait time by (num_pi + 1) to get segments between pulses
+            # For Echo/CPMG the wait is split into 2*num_pi half-segments:
+            # tau - pi - 2tau - pi - ... - pi - tau
             if cfg.expt.num_pi > 0:
-                self.delay_auto(t=cfg.expt.wait_time / cfg.expt.num_pi / 2, tag="wait")
+                tau = cfg.expt.wait_time / cfg.expt.num_pi / 2
 
-                # Apply π pulses for Echo protocol (or multiple-pulse Echo)
+                # Leading half-segment. delay_auto stores (end of last pulse + t)
+                # as its time parameter, so a tagged delay_auto would put a pulse
+                # length into xpts. Advance past the pulse first, then delay by
+                # tau alone, so the "wait" tag reads back exactly tau.
+                self.delay_auto(t=0, tag="pulse_time")
+                self.delay(t=tau, tag="wait")
+
+                # Apply π pulses for Echo/CPMG, separated by full segments
                 for i in range(cfg.expt.num_pi):
                     self.pulse(ch=self.qubit_ch, name="pi_ge", t=0)  # π pulse
                     if i < cfg.expt.num_pi - 1:
-                        self.delay_auto(
-                            t=cfg.expt.wait_time / cfg.expt.num_pi + 0.01,
-                            tag=f"wait{i}",
-                        )  # Wait time
-                self.delay_auto(
-                    t=cfg.expt.wait_time / cfg.expt.num_pi / 2 + 0.01, tag=f"wait{i+1}"
-                )
+                        self.delay_auto(t=2 * tau, tag=f"wait{i}")
+
+                # Trailing half-segment
+                self.delay_auto(t=tau + 0.01, tag=f"wait{i+1}")
             else:
                 self.delay_auto(t=cfg.expt.wait_time, tag="wait")
 
@@ -303,7 +308,8 @@ class T2ProgramASM(QickProgram):
             # N-1 pi pulses in hardware loop
             self.open_loop(cfg.expt.num_pi - 1, "cpmg_loop")
             self.pulse(ch=self.qubit_ch, name="pi_ge", t=0)
-            self.delay_auto(t=2 * tau + 0.01, tag="wait_cpmg")
+            self.delay_auto(t=0, tag='pulse_time')
+            self.delay(t=2 * tau, tag="wait")
             self.close_loop()
 
         # Last pi pulse + final half-wait
@@ -389,10 +395,13 @@ class T2Experiment(QickExperiment):
             display (bool): Whether to display results.
             print (bool): If True, prints the experiment config and exits.
         """
-        # Determine experiment type and parameter name based on protocol
-        if "experiment_type" in params and params["experiment_type"] == "echo":
-            par = "T2e"  # Echo uses T2e parameter
-            name = "echo"
+        # Determine experiment type and parameter name based on protocol.
+        # Echo and CPMG are both dynamically decoupled, so their span and
+        # ramsey_freq defaults scale off T2e, not the much shorter T2r.
+        exp_type = params.get("experiment_type", "ramsey")
+        if exp_type in ("echo", "cpmg"):
+            par = "T2e"  # Echo/CPMG use T2e parameter
+            name = exp_type
         else:
             par = "T2r"  # Ramsey uses T2r parameter
             name = "ramsey"
@@ -508,8 +517,13 @@ class T2Experiment(QickExperiment):
         # Define parameter metadata for plotting
         self.param = {"label": "wait", "param": "t", "param_type": "time"}
 
-        # Ensure sweep step size is above DAC minimum resolution
-        self.check_dac_timing(num_segments=self.cfg.expt.num_pi + 1)
+        # Ensure sweep step size is above DAC minimum resolution. The finest
+        # swept delay is the half-segment tau = wait_time/(2*num_pi), so the
+        # span has to clear one DAC tick per step at that granularity, not at
+        # num_pi+1 segments -- otherwise qick raises "requested sweep step is
+        # smaller than the available resolution" for large num_pi.
+        num_pi = self.cfg.expt.num_pi
+        self.check_dac_timing(num_segments=2 * num_pi if num_pi > 0 else 1)
 
         # Create a 1D sweep for the wait time from start to start+span
         self.cfg.expt.wait_time = QickSweep1D(
@@ -524,12 +538,17 @@ class T2Experiment(QickExperiment):
 
         super().acquire(prog_cls, progress=progress)
 
-        # Adjust x-axis values to account for echo protocol
-        # For echo, the effective wait time is longer due to the π pulses
+        # Rescale the x-axis to the total wait time. The tagged "wait" delay holds
+        # one segment of the sequence, so the multiplier depends on which segment
+        # each program tags: T2ProgramASM tags a full inter-pulse segment
+        # (wait_time/num_pi), T2Program tags a leading half-segment
+        # (wait_time/2/num_pi).
         if self.cfg.expt.num_pi == 0:
             coef = 1
+        elif prog_cls is T2ProgramASM:
+            coef = self.cfg.expt.num_pi
         else:
-            coef = 2*self.cfg.expt.num_pi  # For echo, we have num_pi + 1 segments
+            coef = 2 * self.cfg.expt.num_pi
         self.data["xpts"] = coef * self.data["xpts"]
 
         return self.data
@@ -756,7 +775,9 @@ class T2Experiment(QickExperiment):
         q = self.cfg.expt.qubit[0]
 
         # Set experiment name based on type
-        name = "Echo " if self.cfg.expt.experiment_type == "echo" else ""
+        name = {"echo": "Echo ", "cpmg": "CPMG "}.get(
+            self.cfg.expt.experiment_type, ""
+        )
         if self.cfg.expt.num_pi > 1:
             name += f"{self.cfg.expt.num_pi} π pulses "
 

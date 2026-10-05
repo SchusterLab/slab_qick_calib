@@ -13,7 +13,11 @@ from . import qubit_tuning
 plt.rcParams["legend.handlelength"] = 0.5
 
 # Default parameters
-MAX_T1 = 500  # Maximum T1 time in microseconds
+MAX_T1 = 1100  # Maximum T1 time in microseconds
+MAX_T2 = 500  # Maximum T2 time in microseconds
+# Fallbacks for when a config seed is unusable (NaN or non-positive).
+SEED_T1 = 50.0  # microseconds
+SEED_T2 = 20.0  # microseconds
 DEFAULT_MIN_T1 = 1.0  # Default minimum T1 time in microseconds
 DEFAULT_MIN_T2 = 1.0  # Default minimum T2 time in microseconds
 MAX_ERR = 1  # Maximum acceptable error in fits
@@ -46,6 +50,7 @@ def measure_params(
     check_fid=True,
     display=False,
     max_t1=MAX_T1,
+    max_t2=MAX_T2,
 ):
     """
     Measure and return key parameters for a qubit.
@@ -66,7 +71,10 @@ def measure_params(
     display : bool, optional
         Whether to display plots during measurements
     max_t1 : float, optional
-        Maximum T1 time in microseconds
+        Maximum T1 time in microseconds. Fits above this are rejected by the
+        config update rather than written to the config file.
+    max_t2 : float, optional
+        Maximum T2 time in microseconds, applied the same way to T2r and T2e.
 
     Returns
     -------
@@ -137,13 +145,13 @@ def measure_params(
             "T2r",
             t2r.data["best_fit"][3],
             qi,
-            rng_vals=[min_t2, max_t1],
+            rng_vals=[min_t2, max_t2],
             sig=2,
             verbose=False,
         )
 
     if not t2r.status:
-        recenter(qi, cfg_dict, t2r, update=update, display=display, max_t1=max_t1)
+        recenter(qi, cfg_dict, t2r, update=update, display=display, max_t2=max_t2)
 
     err_dict["t2r_err"] = np.sqrt(t2r.data["fit_err_avgi"][3][3])
     err_dict["fge_err"] = np.sqrt(t2r.data["fit_err_avgi"][1][1])
@@ -179,7 +187,7 @@ def measure_params(
                 "T2e",
                 t2e.data["best_fit"][3],
                 qi,
-                rng_vals=[min_t2, max_t1],
+                rng_vals=[min_t2, max_t2],
                 sig=2,
                 verbose=False,
             )
@@ -250,7 +258,7 @@ def measure_params(
     return qubit_dict
 
 
-def measure_cohere(qi, cfg_dict, update=True, display=False, max_t1=MAX_T1):
+def measure_cohere(qi, cfg_dict, update=True, display=False, max_t1=MAX_T1, max_t2=MAX_T2):
     """
     Measure and return key parameters for a qubit.
 
@@ -268,7 +276,10 @@ def measure_cohere(qi, cfg_dict, update=True, display=False, max_t1=MAX_T1):
     display : bool, optional
         Whether to display plots during measurements
     max_t1 : float, optional
-        Maximum T1 time in microseconds
+        Maximum T1 time in microseconds. Fits above this are rejected by the
+        config update rather than written to the config file.
+    max_t2 : float, optional
+        Maximum T2 time in microseconds, applied the same way to T2r.
 
     Returns
     -------
@@ -292,13 +303,13 @@ def measure_cohere(qi, cfg_dict, update=True, display=False, max_t1=MAX_T1):
             "T2r",
             t2r.data["best_fit"][3],
             qi,
-            rng_vals=[min_t2, max_t1],
+            rng_vals=[min_t2, max_t2],
             sig=2,
             verbose=False,
         )
 
     if not t2r.status:
-        recenter(qi, cfg_dict, t2r, update=update, display=display, max_t1=max_t1)
+        recenter(qi, cfg_dict, t2r, update=update, display=display, max_t2=max_t2)
 
     # Step 2: T1 measurement
     t1 = meas.T1Experiment(
@@ -424,7 +435,7 @@ def measure_fast2(qi, cfg_dict, i, t2e=None, t1=None, t1_val=30, t2_val=30):
     return t1, t2e
 
 
-def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True, bf_client=None, soc=None, t1_max=None, t2_max=None, csv_subdir=None):
+def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True, bf_client=None, soc=None, t1_max=MAX_T1, t2_max=MAX_T2, csv_subdir=None, max_rounds=None):
     """
     Track qubit parameters over time.
 
@@ -445,12 +456,22 @@ def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True,
         QICK SoC object. If provided, calls rfboard.activate_qubit_rf()
         before each qubit's measurements to switch RF filters/attenuators.
     t1_max : float, optional
-        Maximum allowed T1 value (µs). Measured values exceeding this are clamped.
+        Maximum allowed T1 value (µs), defaulting to the module constant
+        ``MAX_T1``. Measured values exceeding this are clamped, which also caps
+        the sweep span the next round is seeded with. In the ``fast=False``
+        path it is additionally the ceiling above which a T1 fit is rejected
+        instead of written to the config file. Pass ``None`` for no limit.
     t2_max : float, optional
-        Maximum allowed T2 value (µs). Measured values exceeding this are clamped.
+        Maximum allowed T2 value (µs), defaulting to ``MAX_T2``. Applied to T2r
+        and T2e exactly as ``t1_max`` is applied to T1. Pass ``None`` for no
+        limit.
     csv_subdir : str, optional
         Subdirectory within Tracking/csv/ to save CSVs into (e.g. for grouping
         a temperature sweep). If None, saves directly in Tracking/csv/.
+    max_rounds : int, optional
+        Stop after this many rounds even if ``total_time`` has not elapsed.
+        Useful for a short shakedown run: ``max_rounds=2`` measures every qubit
+        twice and exits. If None, only ``total_time`` ends the run.
 
     Returns
     -------
@@ -478,15 +499,31 @@ def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True,
     # Seed each qubit's sweep spans from the config. After a successful round a
     # qubit's spans follow its own last good fit; the seed is the fallback when
     # a fit fails or comes back NaN, so one bad round cannot take the run down.
+    #
+    # Seeds are sanitized because they feed round 0's sweep span directly, well
+    # before the measured-value clamp below can apply. A config left holding a
+    # runaway fit from an earlier run (T2r of 7.5e5 us has been seen) would
+    # otherwise ask for a multi-second sweep and stall the run indefinitely.
     seed_cfg = config.load(cfg_dict["cfg_file"])
-    span_vals = [
-        (seed_cfg["device"]["qubit"]["T1"][qi],
-         seed_cfg["device"]["qubit"]["T2r"][qi])
-        for qi in qubit_list
-    ]
+    span_vals = []
+    for qi in qubit_list:
+        seeds = []
+        for key, ceiling, fallback in (("T1", t1_max, SEED_T1),
+                                       ("T2r", t2_max, SEED_T2)):
+            raw = float(seed_cfg["device"]["qubit"][key][qi])
+            if not np.isfinite(raw) or raw <= 0:
+                print(f"Q{qi}: config {key} seed is {raw}, using {fallback} us")
+                seeds.append(fallback)
+            elif ceiling is not None and raw > ceiling:
+                print(f"Q{qi}: config {key} seed {raw:.6g} us exceeds max "
+                      f"{ceiling} us, clamping")
+                seeds.append(ceiling)
+            else:
+                seeds.append(raw)
+        span_vals.append(tuple(seeds))
 
-    # Run measurements until total_time is reached
-    while elapsed < total_time:
+    # Run measurements until total_time is reached, or max_rounds if it is set
+    while elapsed < total_time and (max_rounds is None or i < max_rounds):
         # Read MXC temperature and pulsetube status at start of each iteration
         mxc_temp = np.nan
         pulsetube_on = np.nan
@@ -531,24 +568,44 @@ def time_tracking(qubit_list, cfg_dict, total_time=12, display=False, fast=True,
             else:
                 try:
                     d = measure_params(
-                        qi, cfg_dict, display=display, fast=False, check_fid=False
+                        qi, cfg_dict, display=display, fast=False, check_fid=False,
+                        max_t1=MAX_T1 if t1_max is None else t1_max,
+                        max_t2=MAX_T2 if t2_max is None else t2_max,
                     )
                 except Exception as e:
                     print(f"Measurement failed for qubit {qi} on run {i}: {e}")
                     iter_success[j] = False
                     continue
 
-            # Clamp t1/t2 to max values if specified
-            if t1_max is not None and d["t1"] > t1_max:
-                d["t1"] = t1_max
-            if t2_max is not None and d["t2"] > t2_max:
-                d["t2"] = t2_max
+            # Clamp t1/t2 to max values if specified. The fast path reports a
+            # single "t2"; the slow path reports "t2r" and "t2e" separately.
+            for key, ceiling in (("t1", t1_max), ("t2", t2_max),
+                                 ("t2r", t2_max), ("t2e", t2_max)):
+                if ceiling is not None and key in d and d[key] > ceiling:
+                    d[key] = ceiling
 
-            # Next round's spans track this fit, but only if it is usable --
-            # a NaN or non-positive value would make the sweep span invalid.
-            if fast and np.isfinite(d["t1"]) and np.isfinite(d["t2"]) \
-                    and d["t1"] > 0 and d["t2"] > 0:
-                span_vals[j] = (d["t1"], d["t2"])
+            # Next round's spans track this fit, but only if it is usable. A
+            # NaN or non-positive value would make the sweep span invalid, and
+            # a low-R2 fit is actively harmful: feeding one back shrinks the
+            # next span, which degrades the next fit, which shrinks it again.
+            # A rejected fit leaves that span at its last good value instead.
+            # T1 and T2 are gated separately so one bad fit does not strand
+            # the other.
+            if fast:
+                t1_span, t2_span = span_vals[j]
+                if np.isfinite(d["t1"]) and d["t1"] > 0 and d["t1_r2"] > MIN_R2:
+                    t1_span = d["t1"]
+                else:
+                    print(f"Q{qi}: T1 fit rejected for span feedback "
+                          f"(t1={d['t1']:.3g} us, r2={d['t1_r2']:.2f}); "
+                          f"keeping span {t1_span:.3g} us")
+                if np.isfinite(d["t2"]) and d["t2"] > 0 and d["t2_r2"] > MIN_R2:
+                    t2_span = d["t2"]
+                else:
+                    print(f"Q{qi}: T2 fit rejected for span feedback "
+                          f"(t2={d['t2']:.3g} us, r2={d['t2_r2']:.2f}); "
+                          f"keeping span {t2_span:.3g} us")
+                span_vals[j] = (t1_span, t2_span)
 
             d["time"] = tm
             d["elapsed"] = elapsed
@@ -713,7 +770,11 @@ def calc_stats(tracking_data):
     return tt_stats
 
 
-def recenter(qi, cfg_dict, t2r, update=True, display=False, max_t1=MAX_T1):
+def recenter(qi, cfg_dict, t2r, update=True, display=False, max_t2=MAX_T2):
+    """Re-find the qubit frequency after a failed T2 Ramsey and retry the fit.
+
+    Only T2r is written back here, so ``max_t2`` is the sole ceiling needed.
+    """
     # Try to recover from failed T2 measurement
     t2r.display(debug=True, refit=True)
     print(t2r.data["r2"])
@@ -733,7 +794,7 @@ def recenter(qi, cfg_dict, t2r, update=True, display=False, max_t1=MAX_T1):
                 "T2r",
                 t2r.data["best_fit"][3],
                 qi,
-                rng_vals=[min_t2, max_t1],
+                rng_vals=[min_t2, max_t2],
                 sig=2,
                 verbose=False,
             )

@@ -1,5 +1,5 @@
 """
-Time-track T1, T2 Ramsey and f_ge on all 6 qubits of S127 Quad4 chip7.
+Time-track T1, T2 Ramsey and f_ge on all 6 qubits of S127 Quad4 (BF4 cooldown).
 
 Wraps calib.time_tracking.time_tracking in fast mode: each round switches the
 RF board to a qubit and runs a T1 sweep and a Ramsey sweep, then moves to the
@@ -11,7 +11,11 @@ fit, seeded from the config on the first round.
 
 Usage:
     python scripts/run_time_tracking_S127_Quad4.py 0.01    # short test, 1 round
+    python scripts/run_time_tracking_S127_Quad4.py 12 2    # shakedown, 2 rounds
     python scripts/run_time_tracking_S127_Quad4.py 30      # the real run
+
+The optional second argument caps the number of rounds; the run ends at
+whichever of the two limits is reached first.
 
 Output (all under <EXPT_PATH>/Tracking/):
     <run_id>/            per-sweep h5 files
@@ -32,17 +36,18 @@ from slab_qick_calib.helpers import config
 from slab_qick_calib.calib.time_tracking import time_tracking
 
 # ---------------------------------------------------------------- settings
-CFG_FILE = "coherence_qubit_S127_Quad4_chip7_rfboard.yml"
-EXPT_PATH = r"C:\_Data\coherence_qubit_S127_Quad4_chip7"
+CFG_FILE = "coherence_qubit_S127_Quad4_BF4_rfboard.yml"
+EXPT_PATH = r"C:\_Data\coherence_qubit_S127_Quad4_BF4"
 
 QUBIT_LIST = [0, 1, 2, 3, 4, 5]
-NS_PORT = 9090          # bf1_soc registers on 9090, not the default
+NS_PORT = 9090          # the soc registers on 9090, not the default
 
 # fast=True measures only T1 and T2 Ramsey per qubit per round.
 FAST = True
-# Ceilings on the recorded T1/T2. A runaway fit would otherwise become the
-# next round's sweep span and stall the run; config T1 tops out near 470 us.
-T1_MAX = 700
+# Ceilings on the recorded T1/T2, overriding time_tracking.MAX_T1 / MAX_T2.
+# A runaway fit would otherwise become the next round's sweep span and stall
+# the run. Set either to None to leave that quantity unclamped.
+T1_MAX = 1100
 T2_MAX = 250
 # Write a PNG of every individual T1/Ramsey sweep with its fit overlaid, into
 # <run_id>/images/, alongside the config that produced it. Figures are closed
@@ -51,6 +56,7 @@ SAVE_IMAGES = True
 BF_CLIENT = None        # set to a fridge client for mxc_temp / pulsetube_on
 
 TOTAL_TIME = float(sys.argv[1]) if len(sys.argv) > 1 else 30.0
+MAX_ROUNDS = int(sys.argv[2]) if len(sys.argv) > 2 else None
 
 # ---------------------------------------------------------------- connect
 cfg_path = os.path.abspath(
@@ -67,8 +73,10 @@ cfg_dict = {"soc": soccfg, "expt_path": EXPT_PATH, "cfg_file": cfg_path,
 print(f"Connected to {auto_cfg['aliases']['soc']} at {auto_cfg['aliases']['ip']}:{NS_PORT}")
 print(f"Config: {cfg_path}")
 print(f"Data:   {EXPT_PATH}")
-print(f"Tracking qubits {QUBIT_LIST} for {TOTAL_TIME} hr "
-      f"(fast={FAST}, save_images={SAVE_IMAGES})\n")
+rounds_note = "" if MAX_ROUNDS is None else f", max {MAX_ROUNDS} rounds"
+print(f"Tracking qubits {QUBIT_LIST} for {TOTAL_TIME} hr{rounds_note} "
+      f"(fast={FAST}, save_images={SAVE_IMAGES})")
+print(f"Ceilings: T1_MAX={T1_MAX} us, T2_MAX={T2_MAX} us\n")
 print("Seed values from config:")
 for qi in QUBIT_LIST:
     print(f"  Q{qi}: f_ge {auto_cfg['device']['qubit']['f_ge'][qi]:9.4f} MHz  "
@@ -86,6 +94,7 @@ tt, tracking_path, tt_stats, tracking_id = time_tracking(
     bf_client=BF_CLIENT,
     t1_max=T1_MAX,
     t2_max=T2_MAX,
+    max_rounds=MAX_ROUNDS,
 )
 
 # ---------------------------------------------------------------- summary
