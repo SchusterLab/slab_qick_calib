@@ -466,7 +466,8 @@ def apply_config_rf_settings(soc, cfg, qubit=None, cfg_file=None):
 
 
 def activate_qubit_rf(qubit, soc, cfg, cfg_file=None,
-                      channels=("adc", "dac_readout", "dac_qubit", "dc_bias"), verbose=True):
+                      channels=("adc", "dac_readout", "dac_qubit", "dac_pump",
+                                "dac_f0g1", "dc_bias"), verbose=True):
     """
     Switch shared RF channels to a specific qubit's ideal settings.
 
@@ -481,9 +482,12 @@ def activate_qubit_rf(qubit, soc, cfg, cfg_file=None,
         cfg: Configuration AttrDict
         cfg_file: Optional path to persist active state to disk
         channels: Tuple of channel types to activate. Any subset of
-                  ``"adc"``, ``"dac_readout"``, ``"dac_qubit"``, ``"dc_bias"``
-                  (default: all four). Types whose config sections are missing
-                  are skipped silently.
+                  ``"adc"``, ``"dac_readout"``, ``"dac_qubit"``,
+                  ``"dac_pump"``, ``"dac_f0g1"``, ``"dc_bias"`` (default: all
+                  six). Types whose config sections are missing are skipped
+                  silently, so ``"dac_pump"`` is a no-op unless
+                  ``hw.soc.dacs.pump`` exists, and likewise ``"dac_f0g1"``
+                  and ``hw.soc.dacs.f0g1``.
         verbose: Print summary of what was activated (default: True)
 
     Returns:
@@ -552,6 +556,46 @@ def activate_qubit_rf(qubit, soc, cfg, cfg_file=None,
         _update_active_state(cfg, "dac_qubit", dac_q_ch, dac_q_fc, dac_q_bw,
                              dac_q_ftype, qubit=qubit, attn1=dac_q_attn1, attn2=dac_q_attn2)
         parts.append(f"DAC-qb ch {dac_q_ch} (fc={dac_q_fc}, bw={dac_q_bw}, {dac_q_ftype})")
+
+    if "dac_pump" in channels and hasattr(hw.dacs, "pump"):
+        dac_p_ch = hw.dacs.pump.ch[qubit]
+        dac_p_fc = hw.dacs.pump.filter_fc[qubit]
+        dac_p_bw = hw.dacs.pump.filter_bw[qubit]
+        dac_p_ftype = hw.dacs.pump.filter_type[qubit]
+        dac_p_attn1 = hw.dacs.pump.attn1[qubit]
+        dac_p_attn2 = hw.dacs.pump.attn2[qubit]
+
+        if dac_p_ftype != "bypass":
+            soc.rfb_set_gen_filter(dac_p_ch, fc=dac_p_fc / 1000, ftype=dac_p_ftype,
+                                   bw=dac_p_bw / 1000)
+        else:
+            soc.rfb_set_gen_filter(dac_p_ch, fc=0, ftype="bypass")
+        soc.rfb_set_gen_rf(dac_p_ch, dac_p_attn1, dac_p_attn2)
+
+        _update_active_state(cfg, "dac_pump", dac_p_ch, dac_p_fc, dac_p_bw,
+                             dac_p_ftype, qubit=qubit, attn1=dac_p_attn1,
+                             attn2=dac_p_attn2)
+        parts.append(f"DAC-pump ch {dac_p_ch} (fc={dac_p_fc}, bw={dac_p_bw}, {dac_p_ftype})")
+
+    if "dac_f0g1" in channels and hasattr(hw.dacs, "f0g1"):
+        dac_f_ch = hw.dacs.f0g1.ch[qubit]
+        dac_f_fc = hw.dacs.f0g1.filter_fc[qubit]
+        dac_f_bw = hw.dacs.f0g1.filter_bw[qubit]
+        dac_f_ftype = hw.dacs.f0g1.filter_type[qubit]
+        dac_f_attn1 = hw.dacs.f0g1.attn1[qubit]
+        dac_f_attn2 = hw.dacs.f0g1.attn2[qubit]
+
+        if dac_f_ftype != "bypass":
+            soc.rfb_set_gen_filter(dac_f_ch, fc=dac_f_fc / 1000, ftype=dac_f_ftype,
+                                   bw=dac_f_bw / 1000)
+        else:
+            soc.rfb_set_gen_filter(dac_f_ch, fc=0, ftype="bypass")
+        soc.rfb_set_gen_rf(dac_f_ch, dac_f_attn1, dac_f_attn2)
+
+        _update_active_state(cfg, "dac_f0g1", dac_f_ch, dac_f_fc, dac_f_bw,
+                             dac_f_ftype, qubit=qubit, attn1=dac_f_attn1,
+                             attn2=dac_f_attn2)
+        parts.append(f"DAC-f0g1 ch {dac_f_ch} (fc={dac_f_fc}, bw={dac_f_bw}, {dac_f_ftype})")
 
     if "dc_bias" in channels and hasattr(hw.dacs, "flux") and hasattr(hw.dacs.flux, "dc_ch"):
         dc_ch = hw.dacs.flux.dc_ch[qubit]

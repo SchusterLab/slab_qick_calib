@@ -3,6 +3,10 @@
 User-facing guides: [README_rfboard.md](README_rfboard.md) (RF board filters/attenuators/DC bias)
 and [README_fast_flux.md](README_fast_flux.md) (fast flux sweeps and predistortion).
 
+For work in `scripts/SMPD/`, see [scripts/SMPD/CLAUDE.md](scripts/SMPD/CLAUDE.md) —
+how the numbered runner scripts, `common.py`, experiment classes, configs, and the
+`Data/run<N>_<Device>/` layout fit together, plus the FWM parameter conventions.
+
 ## Running experiments from scripts
 
 ### Connecting to hardware

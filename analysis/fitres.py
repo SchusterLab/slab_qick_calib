@@ -230,15 +230,19 @@ def fitphase(f, z, f0g, Qg):
 
     return fresult[0][0],fresult[0][1],fresult[0][2]
 
-def roughfit(f, z, fr_0):
+def roughfit(f, z, fr_0, tau=None):
+    """If tau is given, the (real) cable delay is taken as known instead of estimated from the edges."""
 
     edge_data_f = np.hstack((f[:int(len(f)/100)],f[-int(len(f)/100):]))
     edge_data_z = np.hstack((z[:int(len(f)/100)],z[-int(len(f)/100):]))
 
     id_f0 = np.argmin(abs(f-fr_0))
 
-    tau_fit = np.polyfit(edge_data_f-f[id_f0],np.angle(edge_data_z/z[id_f0]),1)
-    tau_1 = tau_fit[0]/(-2*np.pi)
+    if tau is not None:
+        tau_1 = tau
+    else:
+        tau_fit = np.polyfit(edge_data_f-f[id_f0],np.angle(edge_data_z/z[id_f0]),1)
+        tau_1 = tau_fit[0]/(-2*np.pi)
 
     if False:
         plt.plot(edge_data_f-f[id_f0],np.angle(edge_data_z/z[id_f0]),'.')
@@ -332,7 +336,7 @@ def resfunc8(f_proj, fr, Qr,  Qc_hat_mag, a_real, a_imag, phi, tau, Imtau):
     imag_S21[f_proj<0] = 0
     return real_S21 + imag_S21
 
-def finefit(f, z, fr_0,p0=None):
+def finefit(f, z, fr_0, p0=None, kappa_0=None, tau_0=None, fix_tau=False):
     """
     finefit fits f and z to the resonator model described in Jiansong's thesis
 
@@ -340,20 +344,37 @@ def finefit(f, z, fr_0,p0=None):
                   f: frequencys
                   z: complex impedence
                fr_0: initially predicted fr [GHz]
+            fix_tau: hold the real tau at tau_0 (0 if None) instead of fitting it, e.g.
+                     when the cable delay has already been removed from the phase.
+                     Imtau (background amplitude slope) is still fit.
 
     Returns:
         fr_fine, Qr_fine, Qc_hat_mag_fine, a_fine, phi_fine, tau_fine, Qc_fine
     """
 
-
+    if fix_tau and tau_0 is None:
+        tau_0 = 0.0
 
     # find starting parameters using a rough fit
-    fr_1, Qr_1, phi_1, a_1, Qc_hat_mag_1, tau_1, Imtau_1 = roughfit(f, z, fr_0)
+    fr_1, Qr_1, phi_1, a_1, Qc_hat_mag_1, tau_1, Imtau_1 = roughfit(
+        f, z, fr_0, tau=tau_0 if fix_tau else None
+    )
+    # keep the rough-fit seed inside the fine-fit bounds
+    if not min(f) <= fr_1 <= max(f):
+        fr_1 = fr_0
+    Qr_1, Qc_hat_mag_1 = abs(Qr_1), abs(Qc_hat_mag_1)
+    phi_1 = np.angle(np.exp(1j * phi_1))
+    if kappa_0 is not None:
+        Qr_1 = fr_1 / kappa_0
 
     if p0 is None:
         p0 =[fr_1, Qr_1, Qc_hat_mag_1, a_1.real, a_1.imag, phi_1, tau_1, Imtau_1]
     else:
         p0 = np.concatenate(([fr_1,Qr_1,Qc_hat_mag_1,a_1.real,a_1.imag], p0))
+    if tau_0 is not None:
+        p0[6] = tau_0
+        if not fix_tau:
+            p0[7] = 0.0
 
     # trim data?
     #if False:
@@ -381,7 +402,28 @@ def finefit(f, z, fr_0,p0=None):
         plt.plot(z.real,z.imag,'.')
         plt.plot(resfunc3(f,fr_1,Qr_1,Qc_hat_mag_1,a_1,phi_1,tau_1).real,resfunc3(f,fr_1,Qr_1,Qc_hat_mag_1,a_1,phi_1,tau_1).imag,label='roughfit')
 
-    fparams, fcov = opt.curve_fit(resfunc8, xdata, ydata, p0=p0, bounds=([min(f), 0, 0, -np.inf, -np.inf,-1*np.pi, -np.inf, -np.inf], [max(f), np.inf, np.inf, np.inf, np.inf, np.pi, np.inf, np.inf]))
+    lower = [min(f), 0, 0, -np.inf, -np.inf, -1 * np.pi, -np.inf, -np.inf]
+    upper = [max(f), np.inf, np.inf, np.inf, np.inf, np.pi, np.inf, np.inf]
+    if fix_tau:
+        # Imtau (amplitude slope of the background) stays free
+        keep = [0, 1, 2, 3, 4, 5, 7]
+        fparams, fcov = opt.curve_fit(
+            lambda f_proj, *p: resfunc8(f_proj, *p[:6], tau_0, p[6]),
+            xdata,
+            ydata,
+            p0=[p0[i] for i in keep],
+            bounds=([lower[i] for i in keep], [upper[i] for i in keep]),
+            max_nfev=20000,
+        )
+        fparams = np.insert(fparams, 6, tau_0)
+    else:
+        fparams, fcov = opt.curve_fit(
+            resfunc8,
+            xdata,
+            ydata,
+            p0=p0,
+            bounds=(lower, upper),
+        )
 
     if final_fit_plotting:
         plt.figure(1)

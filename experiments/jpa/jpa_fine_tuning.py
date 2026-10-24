@@ -12,7 +12,7 @@ from ...exp_handling.datamanagement import AttrDict
 from ..general.qick_experiment import QickExperiment
 from ..single_qubit.resonator_spectroscopy import ResSpec, ResSpecProgram
 from .config_update import should_update_yaml, update_jpa_config
-from .jpa_tone import set_periodic_tone
+from .jpa_tone import set_periodic_tone, turn_off_jpa
 
 
 class PumpedResSpecProgram(ResSpecProgram):
@@ -124,7 +124,7 @@ class JPAFineTuning(QickExperiment):
             "long_pulse": False,
             "loop": False,
             "phase_const": False,
-            "active_reset": False,
+            "reset_mode": "passive",
             "flux": False,
         }
         jpa_defaults = {
@@ -143,7 +143,9 @@ class JPAFineTuning(QickExperiment):
             "pump_settle_us": 0.2,
             "pump_gains": np.linspace(0.002, 0.03, 15),
             "dc_biases_v": np.linspace(112e-3, 122e-3, 21),
-            "bias_chan": self.cfg.hw.soc.dacs.flux.dc_ch[qi],
+            # The JPA has its own DC bias channel; it does not use the qubit
+            # flux line, which may not exist at all.
+            "bias_chan": self.cfg.hw.soc.dacs.jpa.jpa_dc_ch[qi],
             "dc_settle": 0.25,
             "off_bias": 0.0,
             "baseline_pump_gain": 0.0,
@@ -267,38 +269,68 @@ class JPAFineTuning(QickExperiment):
 
     def _plot_live_heatmap(self, freq, baseline_db, pump_gains, dc_biases, gain_at_waste_db,
                             current_db=None, current_pump_gain=None, current_dc_bias=None):
-        try:
-            from IPython.display import clear_output
-            clear_output(wait=True)
-        except Exception:
-            pass
+        if not hasattr(self, "_live_heatmap_fig"):
+            plt.ion()
+            self._live_heatmap_fig, self._live_heatmap_ax = plt.subplots(
+                2, 1, figsize=(7, 8), sharex=False
+            )
+            self._live_baseline_line, = self._live_heatmap_ax[0].plot(
+                freq, baseline_db, label="JPA off (baseline)"
+            )
+            self._live_baseline_plus_25_line, = self._live_heatmap_ax[0].plot(
+                freq, baseline_db + 25, "--", label="Baseline +25 dB"
+            )
+            self._live_current_line, = self._live_heatmap_ax[0].plot(
+                [], [], label="JPA on"
+            )
+            self._live_resonator_line = self._live_heatmap_ax[0].axvline(
+                float(self.cfg.expt.waste_freq_mhz), color="k", lw=1
+            )
+            self._live_heatmap_mesh = self._live_heatmap_ax[1].pcolormesh(
+                1e3 * dc_biases,
+                pump_gains,
+                gain_at_waste_db,
+                shading="auto",
+                vmin=-5,
+                vmax=25,
+            )
+            self._live_heatmap_fig.colorbar(
+                self._live_heatmap_mesh,
+                ax=self._live_heatmap_ax[1],
+                label="Gain vs baseline (dB)",
+            )
+            self._live_heatmap_fig.show()
+            window = getattr(self._live_heatmap_fig.canvas.manager, "window", None)
+            if window is not None:
+                window.show()
+                window.raise_()
+                window.activateWindow()
 
-        fig, ax = plt.subplots(2, 1, figsize=(7, 8), sharex=False)
-        ax[0].plot(freq, baseline_db, label="JPA off (baseline)")
+        fig = self._live_heatmap_fig
+        ax = self._live_heatmap_ax
+        self._live_baseline_line.set_data(freq, baseline_db)
+        self._live_baseline_plus_25_line.set_data(freq, baseline_db + 25)
+        self._live_current_line.set_data([], [])
         if current_db is not None:
             label = "JPA on"
             if current_pump_gain is not None and current_dc_bias is not None:
                 label = f"JPA on (gain {current_pump_gain:.5f}, bias {1e3*current_dc_bias:.3f} mV)"
-            ax[0].plot(freq, current_db, label=label)
-        ax[0].axvline(float(self.cfg.expt.waste_freq_mhz), color="k", lw=1)
+            self._live_current_line.set_data(freq, current_db)
+            self._live_current_line.set_label(label)
         ax[0].set_xlabel("Frequency (MHz)")
         ax[0].set_ylabel("Response (dB)")
         ax[0].set_title("Waste baseline vs current scan")
-        ax[0].legend()
+        ax[0].legend(loc="upper left", bbox_to_anchor=(0.02, 0.98), borderaxespad=0)
         ax[0].grid(True)
 
-        mesh = ax[1].pcolormesh(
-            1e3 * dc_biases,
-            pump_gains,
-            gain_at_waste_db,
-            shading="auto",
-        )
+        self._live_heatmap_mesh.set_array(gain_at_waste_db.ravel())
         ax[1].set_xlabel("JPA DC bias (mV)")
         ax[1].set_ylabel("Pump gain (DAC units)")
         ax[1].set_title(f"Gain near {float(self.cfg.expt.waste_freq_mhz):.3f} MHz")
-        fig.colorbar(mesh, ax=ax[1], label="Gain vs baseline (dB)")
         fig.tight_layout()
-        plt.show()
+        fig.canvas.draw_idle()
+        fig.canvas.flush_events()
+        plt.pause(0.01)
 
     def _run_pumped_res_spec(self, pump_gain, dc_bias):
         params = self._res_params(pump_gain)
@@ -327,6 +359,15 @@ class JPAFineTuning(QickExperiment):
         self._configure_pump_rf(soc)
 
         try:
+            # Ensure a previously parked JPA cannot contaminate the baseline.
+            turn_off_jpa(
+                soc,
+                self.soccfg,
+                self.cfg,
+                idx=self.qi,
+                off_bias_v=float(self.cfg.expt.off_bias),
+                verbose=False,
+            )
             soc.rfb_set_bias(bias_chan, float(self.cfg.expt.off_bias))
             if self.cfg.expt.dc_settle > 0:
                 time.sleep(float(self.cfg.expt.dc_settle))
@@ -353,6 +394,17 @@ class JPAFineTuning(QickExperiment):
             gain_at_waste_db = np.full((len(pump_gains), len(dc_biases)), np.nan)
             dc_readback_v = np.full_like(gain_at_waste_db, np.nan)
             times = np.full_like(gain_at_waste_db, np.nan)
+
+            if self.cfg.expt.live_heatmap:
+                # Open the live heatmap before the first scan point; subsequent
+                # points only update its existing artists.
+                self._plot_live_heatmap(
+                    freq,
+                    baseline_db,
+                    pump_gains,
+                    dc_biases,
+                    gain_at_waste_db,
+                )
 
             for i, pump_gain in enumerate(tqdm(pump_gains, disable=not progress)):
                 for j, dc_bias in enumerate(dc_biases):
@@ -459,6 +511,8 @@ class JPAFineTuning(QickExperiment):
             data["pump_gains"],
             data["gain_at_waste_db"],
             shading="auto",
+            vmin=-5,
+            vmax=25,
         )
         ax.set_xlabel("JPA DC Bias (mV)")
         ax.set_ylabel("Pump DAC Gain")

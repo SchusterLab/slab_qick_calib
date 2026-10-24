@@ -379,7 +379,7 @@ def find_spec(qi, cfg_dict, start="coarse", freq="ge", max_err=MAX_ERR, min_r2=M
     start : str, optional
         Starting scan resolution ('huge', 'coarse', 'medium', or 'fine')
     freq : str, optional
-        Frequency transition to find ('ge' or 'ef')
+        Frequency transition to find ('ge', 'ef', or 'fh')
     max_err : float, optional
         Maximum acceptable error in fits
     min_r2 : float, optional
@@ -395,6 +395,9 @@ def find_spec(qi, cfg_dict, start="coarse", freq="ge", max_err=MAX_ERR, min_r2=M
     if freq == "ef":
         f = "f_ef"
         params = {"checkEF": True}
+    elif freq == "fh":
+        f = "f_fh"
+        params = {"checkFH": True}
     else:
         f = "f_ge"
         params = {}

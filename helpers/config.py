@@ -324,6 +324,93 @@ def update_readout(
     )
 
 
+def update_fwm(file_name, field, value, verbose=True, sig=4, rng_vals=None):
+    """
+    Update a shared four-wave-mixing parameter in the configuration.
+
+    Unlike update_qubit/update_readout, device.fwm is not indexed per qubit --
+    there is a single FWM-capable device. `value` may be a scalar (formatted
+    like other config values), a list/tuple (e.g. band fit coefficients, each
+    element formatted individually), or a string tag stored verbatim.
+
+    Args:
+        file_name: Path to the configuration file
+        field: FWM parameter field name (e.g., "pump_power_fit")
+        value: New value (scalar or list/tuple)
+        verbose: Whether to print update information (default: True)
+        sig: Number of significant digits (default: 4)
+        rng_vals: Optional range limits (min, max)
+
+    Returns:
+        AttrDict: The updated configuration
+    """
+    cfg = load(file_name)
+    section = cfg["device"].setdefault("fwm", {})
+
+    if isinstance(value, (list, tuple)):
+        formatted = [format_value(v, sig, rng_vals) for v in value]
+    elif isinstance(value, str):
+        # Model tags such as pump_power_fit_type are stored verbatim.
+        formatted = value
+    else:
+        if value is None or np.isnan(value):
+            return cfg
+        formatted = format_value(value, sig, rng_vals)
+
+    old_value = section.get(field, None)
+    section[field] = formatted
+
+    if verbose:
+        print(f"*Set cfg device.fwm {field} to {formatted} from {old_value}*")
+
+    save(cfg, file_name)
+    return cfg
+
+
+def update_f0g1(file_name, field, value, verbose=True, sig=4, rng_vals=None):
+    """
+    Update a shared f0-g1 reset parameter in the configuration.
+
+    Like device.fwm, device.f0g1 is not indexed per qubit -- there is a single
+    reset drive line. `value` may be a scalar, a list/tuple (fit coefficients,
+    each element formatted individually), or a string tag stored verbatim.
+
+    update_config is not usable here: it calls np.isnan() on the raw value and
+    so raises TypeError on a string, which the *_type tags need.
+
+    Args:
+        file_name: Path to the configuration file
+        field: f0g1 parameter field name (e.g., "stark_fit")
+        value: New value (scalar, list/tuple, or string)
+        verbose: Whether to print update information (default: True)
+        sig: Number of significant digits (default: 4)
+        rng_vals: Optional range limits (min, max)
+
+    Returns:
+        AttrDict: The updated configuration
+    """
+    cfg = load(file_name)
+    section = cfg["device"].setdefault("f0g1", {})
+
+    if isinstance(value, (list, tuple)):
+        formatted = [format_value(v, sig, rng_vals) for v in value]
+    elif isinstance(value, str):
+        formatted = value
+    else:
+        if value is None or np.isnan(value):
+            return cfg
+        formatted = format_value(value, sig, rng_vals)
+
+    old_value = section.get(field, None)
+    section[field] = formatted
+
+    if verbose:
+        print(f"*Set cfg device.f0g1 {field} to {formatted} from {old_value}*")
+
+    save(cfg, file_name)
+    return cfg
+
+
 def update_stark(file_name, field, value, qubit_i, verbose=True, sig=4, rng_vals=None):
     """
     Update a Stark shift parameter in the configuration.
@@ -500,7 +587,15 @@ def init_config(file_name, num_qubits, type="full", t1=50, aliases="Qick001", ip
             "trig_offset": init_array(0.5),     # Trigger timing offset (μs)
             "final_delay": init_array(t1 * 6),  # Delay before next shot (μs)
             "active_reset": init_array(False),  # Active reset flag
-            "reset": init_array(3),             # Reset parameter
+            "reset": init_array(3),             # Reset rounds: up to this many
+                                                # conditional pi pulses
+            # Threshold the active-reset branch discriminates on. NaN means
+            # "fall back to `threshold`". It is deliberately separate: that
+            # one is chosen to maximise readout fidelity, which drags it down
+            # towards the g blob to catch the e blob's T1-decay tail, and a
+            # reset branching there pi-pulses genuine ground shots. See
+            # scripts/SMPD/CLAUDE.md, "Active reset".
+            "reset_threshold": init_array(float("nan")),
         }
     )
 

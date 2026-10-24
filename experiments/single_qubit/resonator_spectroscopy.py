@@ -33,9 +33,10 @@ from ..general.qick_experiment import (
     QickExperiment,
     QickExperiment2DSimple
 )
-from ..general.qick_program import QickProgram
+from ..general.qick_program import QickProgram, reset_mode_of, reset_plays_pi_pulses
 
 from ...analysis import fitting as fitter
+from ...analysis import fitres
 from ...helpers import config
 
 
@@ -92,6 +93,9 @@ class ResSpecProgram(QickProgram):
     2. Optional π pulse on |e>-|f> transition (if pulse_f is True)
     3. Readout pulse with variable frequency
     """
+
+    # Sweeps the readout frequency, so it needs the dynamic arm.
+    use_swept_readout = True
     def __init__(self, soccfg, final_delay, cfg):
         """
         Initialize the resonator spectroscopy program.
@@ -130,11 +134,13 @@ class ResSpecProgram(QickProgram):
 
         # Create pi pulse if needed for excited state measurement
         # Use f_ge_max when flux is enabled (qubit freq shifts at sweet spot)
-        if cfg.expt.pulse_e:
+        # pi_ge is also what QickProgram.reset() plays, so it has to be
+        # declared whenever a measurement-based reset is on.
+        if cfg.expt.pulse_e or reset_plays_pi_pulses(cfg.expt):
             f_ge = cfg.device.qubit.f_ge_max if cfg.expt.flux else cfg.device.qubit.f_ge
             super().make_cfg_pulse(q, f_ge, "pi_ge")
 
-        if cfg.expt.pulse_f:
+        if cfg.expt.pulse_f or cfg.expt.reset_f:
             super().make_cfg_pulse(q, cfg.device.qubit.f_ef, "pi_ef")
 
         # Set up flux pulse if enabled
@@ -228,7 +234,7 @@ class ResSpec(QickExperiment):
     - 'long_pulse': Whether to use a long readout pulse
     - 'loop': Whether to use loop mode for acquisition
     - 'phase_const': Whether to use constant phase spacing
-    - 'active_reset': Whether to use active reset
+    - 'reset_mode': "passive", "active" or "f0g1"
     - 'kappa': Resonator linewidth
     
     The style parameter can be:
@@ -294,7 +300,28 @@ class ResSpec(QickExperiment):
             'long_pulse': False,
             'loop': False,
             'phase_const': False,
-            "active_reset": False,
+            # reset_mode: "passive" | "active" | "f0g1". For "active",
+            # QickProgram.reset() then plays up to `reset` conditional pi
+            # pulses. setup_reset keeps the long passive inter-shot delay so
+            # a reset that is not working cannot quietly corrupt the data.
+            "reset_mode": "passive",
+            "reset": self.cfg.device.readout.reset[qi],
+            "setup_reset": False,
+            # Calibration only: re-measure after the final pi pulse so the
+            # last recorded round is the true post-reset state. Costs one
+            # readout per shot and nothing acts on it, so leave it off in use.
+            "reset_verify": False,
+            # Add a pi_ef ahead of each pi_ge, for sequences that can leave
+            # population in |f>. Needs reset >= 2: |f> clears in one round but
+            # |e> is driven to |f> first and clears on the next.
+            "reset_f": False,
+            # "while excited" semantics at a fixed trip count: once a round
+            # reads ground, a latch suppresses every later pi pulse. Measures
+            # every round, so the trigger count stays fixed.
+            "reset_latch": False,
+            # Mean rounds the while loop takes, for the cycle-time estimate
+            # only; `reset` is its hard cap. See CLAUDE.md.
+            "reset_while_typical": 1,
             'kappa': self.cfg.device.readout.kappa[qi],
             "flux": False,
 
@@ -334,6 +361,12 @@ class ResSpec(QickExperiment):
             
         # Set experiment configuration
         self.cfg.expt = params
+
+        # configure_reset() derives threshold / read_wait / extra_delay from
+        # device.readout, which QickProgram.reset() needs. Called here rather
+        # than in qubit_run() because the scripts use go=False.
+        if reset_mode_of(self.cfg.expt) != "passive":
+            super().configure_reset()
 
         if print: 
             super().print()
@@ -424,6 +457,8 @@ class ResSpec(QickExperiment):
         
         if data is None:
             data = self.data
+
+        qubit = self.cfg.expt.qubit[0]
         
         if fit:
             # Extract amplitude data for fitting
@@ -476,11 +511,44 @@ class ResSpec(QickExperiment):
             # Update experiment status
             self.get_status()
 
-        # Process phase data - remove linear phase slope
+        # Remove the linear background using the first 15% of the sweep.
+        phase_xpts = data["xpts"][1:-1]
         phs_data = np.unwrap(data["phases"][1:-1])
-        slope, intercept = np.polyfit(data["xpts"][1:-1], phs_data, 1)
-        phs_fix = phs_data - slope * data["xpts"][1:-1] - intercept
-        data["phase_fix"] = np.unwrap(phs_fix)
+        n_detrend = max(2, int(0.15 * len(phase_xpts)))
+        slope, intercept = np.polyfit(
+            phase_xpts[:n_detrend], phs_data[:n_detrend], 1
+        )
+        phs_fix = phs_data - slope * phase_xpts - intercept
+        data["phase_unwrapped"] = phs_data
+        data["phase_detrended"] = np.unwrap(phs_fix)
+        data["phase_fix"] = data["phase_detrended"]
+
+        if fit and len(phase_xpts) >= 3:
+            amplitude = data["amps"][1:-1]
+            complex_data = amplitude * np.exp(1j * data["phase_detrended"])
+            fit_center = data.get("center", self.cfg.expt.center)
+            fit_mask = np.abs(phase_xpts - fit_center) <= 4.0
+            fit_freq = phase_xpts[fit_mask]
+            fit_data = complex_data[fit_mask]
+            try:
+                complex_fit = fitres.finefit(
+                    fit_freq,
+                    fit_data,
+                    fit_center,
+                    kappa_0=2.0 if qubit == 1 else None,
+                    fix_tau=True,  # cable delay already removed by the detrend above
+                )
+                data["complex_fit"] = complex_fit
+                data["complex_fit_freq"] = fit_freq
+                data["complex_fit_data"] = fit_data
+                data["complex_fit_curve"] = fitres.resfunc3(
+                    fit_freq, *complex_fit[:6]
+                )
+                data["complex_fit_kappa"] = complex_fit[0] / complex_fit[1]
+                data["complex_fit_kappa_c"] = complex_fit[0] / (2 * complex_fit[6])
+            except Exception as error:
+                data["complex_fit_error"] = repr(error)
+                print(f"Complex resonator fit failed: {error}")
         
         if peaks:
             data=self.find_resonator(data, prom=prom, debug=debug)
@@ -579,51 +647,37 @@ class ResSpec(QickExperiment):
 
         # Set up plot title
         qubit = self.cfg.expt.qubit[0]
-        title = f"Resonator Spectroscopy Q{qubit}, Gain {self.cfg.expt.gain}"
+        adc_attn = self.cfg.hw.soc.adcs.readout.attn[qubit]
+        dac_attn1 = self.cfg.hw.soc.dacs.readout.attn1[qubit]
+        dac_attn2 = self.cfg.hw.soc.dacs.readout.attn2[qubit]
+        title = (
+            f"Resonator Spectroscopy Q{qubit}, Gain {self.cfg.expt.gain}\n"
+            f"Readout attenuation: ADC={adc_attn} dB, DAC={dac_attn1}/{dac_attn2} dB"
+        )
 
         # Create figure if needed
         if ax is None:
-            fig, ax = plt.subplots(2, 1, figsize=(8, 7))
+            fig = plt.figure(figsize=(12, 7))
+            grid = fig.add_gridspec(2, 2, width_ratios=(1, 1))
+            ax = [fig.add_subplot(grid[0, 0]), fig.add_subplot(grid[1, 0])]
+            complex_ax = fig.add_subplot(grid[:, 1])
             fig.suptitle(title)
         else:
             ax[0].set_title(title)
+            complex_ax = None
 
         # Plot amplitude data
         ax[0].set_ylabel("Amps (ADC units)")
         ax[0].plot(data["freq"][1:-1], data["amps"][1:-1], ".-")
         ax[0].set_xlim(data["freq"][1], data["freq"][-1])
         
-        # Plot fit if requested
-        if fit:
-            if hanger:
-                # Create label with fit parameters
-                label = f"$\kappa$: {data['kappa']:.2f} MHz"
-                label += f" \n$f$: {data['fit'][0]:.2f} MHz"
-                    
-            # Plot fit curve
-            ax[0].plot(
-                data["freq"],
-                self.fitfunc(data["freq"], *data["freq_fit"]),
-                label=label,
+        # Show current resonator frequency without plotting the scalar fit.
+        if plot_res:
+            ax[0].axvline(
+                self.cfg.device.readout.frequency[qubit] + self.data['freq_offset'],
+                color="k",
+                linewidth=1,
             )
-            
-            # Show initial fit for debugging
-            if debug:
-                ax[0].plot(
-                    data["freq"],
-                    self.fitfunc(data["freq"], *data["freq_init"]),
-                    label="Initial fit",
-                )
-                
-            ax[0].legend()
-            
-            # Show current resonator frequency
-            if plot_res: 
-                ax[0].axvline(
-                    self.cfg.device.readout.frequency[qubit] + self.data['freq_offset'], 
-                    color='k', 
-                    linewidth=1
-                )
 
         # Show peaks if requested
         if peaks:
@@ -640,7 +694,75 @@ class ResSpec(QickExperiment):
             # Plot phase data
             ax[1].set_xlabel(XLABEL)
             ax[1].set_ylabel("Phase (radians)")
-            ax[1].plot(data["freq"][1:-1], data["phase_fix"], ".-")
+            ax[1].plot(data["freq"][1:-1], data["phase_detrended"], ".-")
+
+            if "complex_fit_curve" in data:
+                fit_freq = data["complex_fit_freq"]
+                fit_data = data["complex_fit_data"]
+                fit_curve = data["complex_fit_curve"]
+                fit_params = data["complex_fit"]
+                fit_label = "fitres.finefit"
+                complex_fit_label = (
+                    "fitres.finefit\n"
+                    f"$f_r$ = {fit_params[0]:.3f} MHz\n"
+                    f"$Q_r$ = {fit_params[1]:.1f}\n"
+                    f"$\\kappa$ = {data['complex_fit_kappa']:.3f} MHz\n"
+                    f"$\\kappa_c$ = {data['complex_fit_kappa_c']:.3f} MHz"
+                )
+                ax[0].plot(
+                    fit_freq,
+                    np.abs(fit_data),
+                    "o",
+                    color="tab:orange",
+                    markersize=4,
+                    label="fit points",
+                )
+                ax[0].plot(
+                    fit_freq,
+                    np.abs(fit_curve),
+                    "r-",
+                    linewidth=2,
+                    label=fit_label,
+                )
+                ax[0].legend()
+                ax[1].plot(
+                    fit_freq,
+                    np.unwrap(np.angle(fit_data)),
+                    "o",
+                    color="tab:orange",
+                    markersize=4,
+                    label="fit points",
+                )
+                ax[1].plot(
+                    fit_freq,
+                    np.unwrap(np.angle(fit_curve)),
+                    "r-",
+                    linewidth=2,
+                    label=fit_label,
+                )
+                ax[1].legend()
+
+            theta = data["phase_detrended"]
+            amplitude = data["amps"][1:-1]
+            z = amplitude * np.exp(1j * theta)
+            complex_ax.plot(z.real, z.imag, ".-")
+            if "complex_fit_curve" in data:
+                fit_data = data["complex_fit_data"]
+                fit_curve = data["complex_fit_curve"]
+                complex_ax.plot(
+                    fit_data.real,
+                    fit_data.imag,
+                    "o",
+                    color="tab:orange",
+                    markersize=4,
+                    label="fit points",
+                )
+                complex_ax.plot(fit_curve.real, fit_curve.imag, "r-", label=complex_fit_label)
+                complex_ax.legend()
+            complex_ax.set_xlabel("Re(z)")
+            complex_ax.set_ylabel("Im(z)")
+            complex_ax.set_title("Complex Plane")
+            complex_ax.set_aspect("equal", adjustable="box")
             
             # Finalize and save
             fig.tight_layout()
@@ -660,23 +782,26 @@ class ResSpec(QickExperiment):
         """
         qi = self.cfg.expt.qubit[0]
         cfg_file=self.config_file
+        if "complex_fit" not in self.data:
+            error = self.data.get("complex_fit_error", "insufficient data")
+            print(f"Resonator config not updated because the complex fit failed: {error}")
+            return
+
         if freq: 
-            config.update_readout(cfg_file, 'frequency', self.data['freq_min'], qi, verbose=verbose)
+            frequency = self.data["complex_fit"][0]
+            config.update_readout(cfg_file, 'frequency', frequency, qi, verbose=verbose)
                 
         # Only update if experiment was successful
         if self.status: 
             # Update resonator frequency if requested
             
             # Update resonator linewidth if valid
-            if self.data['kappa'] > 0:
-                config.update_readout(cfg_file, 'kappa', self.data['kappa'], qi, verbose=verbose)
-                
-            # Update Q factors if not in fast mode
-            if not fast:
-                config.update_readout(cfg_file, 'qi', self.data['fit'][1], qi, verbose=verbose)
-                config.update_readout(cfg_file, 'qe', self.data['fit'][2], qi, verbose=verbose)
-
-
+            kappa = self.data["complex_fit_kappa"]
+            if kappa > 0:
+                config.update_readout(cfg_file, 'kappa', kappa, qi, verbose=verbose)
+                kappa_c = min(self.data["complex_fit_kappa_c"], kappa)
+                if kappa_c > 0:
+                    config.update_readout(cfg_file, 'kappa_c', kappa_c, qi, verbose=verbose)
 
 class ResSpecPower(QickExperiment2DSimple):
     """
@@ -730,10 +855,12 @@ class ResSpecPower(QickExperiment2DSimple):
         if not prefix:
             prefix = generate_filename('power', qi, state=state)
         super().__init__(cfg_dict=cfg_dict, prefix=prefix, progress=progress, qi=qi, live_plot=live_plot)
+        self.power_live_plot = live_plot
+        self.live_plot = False
 
         # Default parameters
         params_def = {
-            "reps": self.reps / 3000,  # Reduce repetitions for efficiency
+            "reps": self.reps,  # Reduce repetitions for efficiency
             "rng": 100,                # Dynamic range for logarithmic gain sweep
             "max_gain": self.cfg.device.qubit.max_gain, # Maximum gain used in log sweep
             "span": 15,                # Frequency span in MHz
@@ -745,6 +872,7 @@ class ResSpecPower(QickExperiment2DSimple):
             "min_reps": 100,           # Minimum repetitions for any gain value
             "pulse_e": False,        # Whether to apply pi pulse on |g>-|e> transition
             "log": True,               # Use logarithmic gain spacing
+            "rep_power": 2,            # Power law for scaling reps vs 1/gain (2 = constant SNR)
         }
         
         # Merge default and user-provided parameters
@@ -824,14 +952,17 @@ class ResSpecPower(QickExperiment2DSimple):
             # Calculate gain points with logarithmic spacing
             gain_pts = self.cfg.expt.max_gain * rat ** np.arange(self.cfg.expt.expts_gain)
 
-            # Scale repetitions inversely with gain squared for constant SNR
-            rep_list = np.round(self.cfg.expt.reps * (1 / rat ** np.arange(self.cfg.expt.expts_gain)) ** 2)
+            # Scale repetitions inversely with a power of gain (rep_power=2 -> constant SNR)
+            rep_list = np.round(self.cfg.expt.reps * (1 / rat ** np.arange(self.cfg.expt.expts_gain)) ** self.cfg.expt.rep_power)
             rep_list = np.maximum(rep_list, self.cfg.expt.min_reps)
             rep_list = [int(r) for r in rep_list]  # Ensure integer repetitions
         else:
             # Use linear gain spacing
             gain_pts = self.cfg.expt.start_gain + self.cfg.expt.step_gain * np.arange(self.cfg.expt.expts_gain)
             rep_list = self.cfg.expt.reps * np.ones(self.cfg.expt.expts_gain, dtype=int)
+
+        if self.power_live_plot:
+            self._init_power_live_plots(gain_pts)
             
         # Set up the y-sweep (gain sweep)
         y_sweep = [{"var": "gain", "pts": gain_pts}, {"var": "reps", "pts": rep_list}]
@@ -852,6 +983,74 @@ class ResSpecPower(QickExperiment2DSimple):
         super().acquire(y_sweep, progress=progress)
 
         return self.data
+
+    def _init_power_live_plots(self, gain_pts):
+        """Create the two stable live power-sweep heatmaps."""
+        if hasattr(self, "_power_live_fig"):
+            return
+        plt.ion()
+        self._power_live_fig, self._power_live_ax = plt.subplots(1, 2, figsize=(14, 5))
+        self._power_live_gain_pts = np.asarray(gain_pts, dtype=float)
+        shape = (self.cfg.expt.expts_gain, self.cfg.expt.expts)
+        extent = (
+            self.cfg.expt.start,
+            self.cfg.expt.start + self.cfg.expt.span,
+            float(self._power_live_gain_pts.min()),
+            float(self._power_live_gain_pts.max()),
+        )
+        self._power_live_amp = self._power_live_ax[0].imshow(
+            np.full(shape, np.nan), aspect="auto", origin="lower",
+            interpolation="none", extent=extent, vmin=0.5, vmax=1.5,
+        )
+        self._power_live_phase = self._power_live_ax[1].imshow(
+            np.full(shape, np.nan), aspect="auto", origin="lower",
+            interpolation="none", extent=extent, vmin=-np.pi, vmax=np.pi,
+        )
+        self._power_live_fig.colorbar(self._power_live_amp, ax=self._power_live_ax[0], label="Amplitude")
+        self._power_live_fig.colorbar(self._power_live_phase, ax=self._power_live_ax[1], label="Phase (rad)")
+        self._power_live_ax[0].set_title("Amplitude vs Power")
+        self._power_live_ax[1].set_title("Phase vs Power")
+        for axis in self._power_live_ax:
+            axis.set_xlabel("Readout frequency (MHz)")
+            axis.set_ylabel("Readout gain (DAC units)")
+            if self.cfg.expt.log:
+                axis.set_yscale("log")
+        self._power_live_fig.tight_layout()
+        self._power_live_fig.show()
+        window = getattr(self._power_live_fig.canvas.manager, "window", None)
+        if window is not None:
+            window.show()
+            window.raise_()
+            window.activateWindow()
+
+    def _update_power_live_plots(self, data):
+        if not hasattr(self, "_power_live_fig"):
+            return
+        amps = np.asarray(data.get("amps", []), dtype=float)
+        phases = np.asarray(data.get("phases", []), dtype=float)
+        sorted_gains = np.sort(self._power_live_gain_pts)
+        acquired_gains = self._power_live_gain_pts[:amps.shape[0]]
+        gain_rows = np.searchsorted(sorted_gains, acquired_gains)
+        if amps.size:
+            amps = amps / np.nanmedian(amps, axis=1, keepdims=True)
+            amp_matrix = np.full(self._power_live_amp.get_array().shape, np.nan)
+            amp_matrix[gain_rows, :amps.shape[1]] = amps
+            self._power_live_amp.set_data(amp_matrix)
+        if phases.size:
+            phases = np.unwrap(phases, axis=-1)
+            npts = min(25, phases.shape[1])
+            phase_x = np.arange(phases.shape[1])
+            for row in range(phases.shape[0]):
+                slope, intercept = np.polyfit(
+                    phase_x[:npts], phases[row, :npts], 1
+                )
+                phases[row] -= slope * phase_x + intercept
+            phase_matrix = np.full(self._power_live_phase.get_array().shape, np.nan)
+            phase_matrix[gain_rows, :phases.shape[1]] = phases
+            self._power_live_phase.set_data(phase_matrix)
+        self._power_live_fig.canvas.draw_idle()
+        self._power_live_fig.canvas.flush_events()
+        plt.pause(0.01)
 
     def analyze(self, data=None, fit=True, highgain=None, lowgain=None, **kwargs):
         """
@@ -944,10 +1143,12 @@ class ResSpecPower(QickExperiment2DSimple):
         
         # Get sweep parameters
         x_sweep = data["xpts"]      # Frequency sweep
-        y_sweep = data["gain_pts"]  # Gain sweep
+        gain_order = np.argsort(data["gain_pts"])
+        y_sweep = data["gain_pts"][gain_order]  # Gain sweep, low to high
 
         # Normalize amplitude data by median for each gain
         amps = copy.deepcopy(data["amps"])
+        amps = amps[gain_order]
         for i in range(len(amps)):
             amps[i, :] = amps[i, :] / np.median(amps[i, :])
 
@@ -995,7 +1196,7 @@ class ResSpecPower(QickExperiment2DSimple):
         if plot_phase and 'phases_corrected' in data:
             freqs = x_sweep
             gains = y_sweep
-            phases_corrected = data['phases_corrected']
+            phases_corrected = data['phases_corrected'][gain_order]
 
             # 2D corrected phase heatmap
             fig2, ax2 = plt.subplots(1, 1, figsize=(10, 8))
@@ -1037,6 +1238,22 @@ class ResSpecPower(QickExperiment2DSimple):
             plt.tight_layout()
             plt.show()
             super().save_fig(fig3, suffix='_phase_lines')
+
+            # Complex response at low, middle, and high gain.
+            fig4, ax4 = plt.subplots(1, 1, figsize=(8, 7))
+            trace_indices = [0, len(gains) // 2, len(gains) - 1]
+            for index in trace_indices:
+                z = amps[index] * np.exp(1j * phases_corrected[index])
+                ax4.plot(z.real, z.imag, ".-", label=f"Gain={gains[index]:.4f}")
+            ax4.set_xlabel("Re(z)")
+            ax4.set_ylabel("Im(z)")
+            ax4.set_title(f"Complex Response at Three Powers Q{qubit}")
+            ax4.set_aspect("equal", adjustable="box")
+            ax4.legend()
+            ax4.grid(True, alpha=0.3)
+            fig4.tight_layout()
+            plt.show()
+            super().save_fig(fig4, suffix='_complex')
 
 class ResSpec2D(QickExperiment2DSimple):
     """

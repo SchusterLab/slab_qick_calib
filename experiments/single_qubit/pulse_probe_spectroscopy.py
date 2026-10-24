@@ -21,7 +21,7 @@ from qick.asm_v2 import QickSweep1D
 
 from ...exp_handling.datamanagement import AttrDict
 from ..general.qick_experiment import QickExperiment, QickExperiment2DSimple
-from ..general.qick_program import QickProgram
+from ..general.qick_program import QickProgram, reset_mode_of, reset_plays_pi_pulses
 
 from ...analysis import fitting as fitter
 FIT_FUNC = fitter.lorfunc
@@ -146,11 +146,13 @@ class QubitSpecProgram(QickProgram):
         # Add frequency sweep loop
         self.add_loop("freq_loop", cfg.expt.expts)
 
-        # If checking EF transition, create a pi pulse for |g>-|e> transition
-        if cfg.expt.checkEF:
+        # If checking EF transition, create a pi pulse for |g>-|e> transition.
+        # pi_ge is also what QickProgram.reset() plays, so it has to be
+        # declared whenever a measurement-based reset is on.
+        if cfg.expt.checkEF or reset_plays_pi_pulses(cfg.expt):
             super().make_cfg_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
 
-        if cfg.expt.checkFG:
+        if cfg.expt.checkFG or cfg.expt.checkFH or cfg.expt.reset_f:
             super().make_cfg_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ef, "pi_ef")
 
     def _body(self, cfg):
@@ -166,12 +168,12 @@ class QubitSpecProgram(QickProgram):
         if self.adc_type == "dyn":
             self.send_readoutconfig(ch=self.adc_ch, name="readout", t=0)
 
-        # If checking EF transition, apply first pi pulse to excite |g> to |e>
-        if cfg.expt.checkEF:
+        # If checking EF or FH transition, apply first pi pulse to excite |g> to |e>
+        if cfg.expt.checkEF or cfg.expt.checkFH:
             self.pulse(ch=self.qubit_ch, name="pi_ge", t=0)
             self.delay_auto(t=0.01, tag="wait 1")
-        
-        if cfg.expt.checkFG:
+
+        if cfg.expt.checkFG or cfg.expt.checkFH:
             self.pulse(ch=self.qubit_ch, name="pi_ef", t=0)
             self.delay_auto(t=0.01, tag="wait ef")
 
@@ -192,15 +194,21 @@ class QubitSpecProgram(QickProgram):
 
 
 
-        # Apply the probe pulse with variable frequency
-        self.pulse(ch=self.qubit_ch, name="qubit_pulse", t=0)
+        # # Apply the probe pulse with variable frequency
+        # self.pulse(ch=self.qubit_ch, name="qubit_pulse", t=0)
 
         # Add delay if separate readout is enabled
         if cfg.expt.sep_readout:
             self.delay_auto(t=0.01, tag="wait")
 
-        # If checking EF transition, apply second pi pulse to return to |g> for readout
-        if cfg.expt.checkEF and not cfg.expt.checkFG:
+        # Shelve back toward g so the readout only ever needs to resolve g-vs-"not g",
+        # never needing to discriminate between adjacent excited levels directly.
+        if cfg.expt.checkFH:
+            self.pulse(ch=self.qubit_ch, name="pi_ef", t=0)  # anything still in f -> e
+            self.delay_auto(t=0.01, tag="wait fh shelve1")
+            self.pulse(ch=self.qubit_ch, name="pi_ge", t=0)  # anything now in e -> g
+            self.delay_auto(t=0.01, tag="wait fh shelve2")
+        elif cfg.expt.checkEF and not cfg.expt.checkFG:
             self.pulse(ch=self.qubit_ch, name="pi_ge", t=0)
             self.delay_auto(t=0.01, tag="wait 2")
 
@@ -235,7 +243,7 @@ class QubitSpec(QickExperiment):
     - 'sep_readout': Whether to separate the probe pulse and readout
     - 'readout_length': Length of the readout pulse
     - 'final_delay': Delay time between repetitions
-    - 'active_reset': Whether to use active reset
+    - 'reset_mode': "passive", "active" or "f0g1"
 
     The style parameter can be:
     - 'huge': Very wide frequency span with high power
@@ -255,7 +263,7 @@ class QubitSpec(QickExperiment):
     - 'qubit': [qi]
     - 'qubit_chan': from config
     - 'sep_readout': True
-    - 'active_reset': False
+    - 'reset_mode': "passive"
     The 'start' frequency is calculated from the qubit frequency in the config and the span.
     The 'length' can be set to 't1' to be calculated from the T1 time in the config.
     If 'checkEF' is True, 'gain' and 'reps' are increased.
@@ -294,8 +302,13 @@ class QubitSpec(QickExperiment):
         # Currently no control of readout time; may want to change for simultaneious readout
         user_params = params  # Save original user-provided params before merging defaults
 
-        # Set prefix based on whether we're checking EF transition
-        ef = "ef_" if "checkEF" in params and params["checkEF"] else ""
+        # Set prefix based on whether we're checking EF or FH transition
+        if "checkFH" in params and params["checkFH"]:
+            ef = "fh_"
+        elif "checkEF" in params and params["checkEF"]:
+            ef = "ef_"
+        else:
+            ef = ""
         prefix = f"qubit_spectroscopy_{ef}{style}_qubit{qi}"
         super().__init__(cfg_dict=cfg_dict, prefix=prefix, progress=progress, check_params=check_params, qi=qi)
 
@@ -338,14 +351,22 @@ class QubitSpec(QickExperiment):
                 "reps": 2 * self.reps,
             }
 
-        # Adjust parameters for EF transition
-        if "checkEF" in params and params["checkEF"]:
+        # Adjust parameters for EF transition (checkFH implies checkEF too, since it
+        # goes through the same g->e prep step)
+        if params.get("checkEF") or params.get("checkFH"):
             params_def["gain"] = (
                 3 * params_def["gain"]
             )  # Higher power for EF transition
             params_def["reps"] = (
                 5 * params_def["reps"]
             )  # More repetitions for better SNR
+
+        # FH goes one level deeper than EF (two prep pulses and two shelving pulses
+        # instead of one), so give it another comparable boost on top of the EF-level
+        # one above. This is a rough starting heuristic -- tune once you see real data.
+        if params.get("checkFH"):
+            params_def["gain"] = 3 * params_def["gain"]
+            params_def["reps"] = 5 * params_def["reps"]
 
         # Additional default parameters
         params_def2 = {
@@ -356,10 +377,32 @@ class QubitSpec(QickExperiment):
             "pulse_type": "const",
             "checkEF": False,
             "checkFG": False,
+            "checkFH": False,
             "qubit": [qi],
             "qubit_chan": self.cfg.hw.soc.adcs.readout.ch[qi],
             "sep_readout": True,
-            "active_reset": False,
+            # reset_mode: "passive" | "active" | "f0g1". For "active",
+            # QickProgram.reset() then plays up to `reset` conditional pi
+            # pulses. setup_reset keeps the long passive inter-shot delay so
+            # a reset that is not working cannot quietly corrupt the data.
+            "reset_mode": "passive",
+            "reset": self.cfg.device.readout.reset[qi],
+            "setup_reset": False,
+            # Calibration only: re-measure after the final pi pulse so the
+            # last recorded round is the true post-reset state. Costs one
+            # readout per shot and nothing acts on it, so leave it off in use.
+            "reset_verify": False,
+            # Add a pi_ef ahead of each pi_ge, for sequences that can leave
+            # population in |f>. Needs reset >= 2: |f> clears in one round but
+            # |e> is driven to |f> first and clears on the next.
+            "reset_f": False,
+            # "while excited" semantics at a fixed trip count: once a round
+            # reads ground, a latch suppresses every later pi pulse. Measures
+            # every round, so the trigger count stays fixed.
+            "reset_latch": False,
+            # Mean rounds the while loop takes, for the cycle-time estimate
+            # only; `reset` is its hard cap. See CLAUDE.md.
+            "reset_while_typical": 1,
             "flux": False, # Whether to apply flux while pulse
             "flux2": False, # Whether to apply second flux pulse after readout
 
@@ -387,8 +430,17 @@ class QubitSpec(QickExperiment):
         # Merge default and user-provided parameters
         params = {**params_def, **params}
 
+        # checkFH needs the g->e->f prep chain, so it implies checkEF
+        if params.get("checkFH") and not params.get("checkEF"):
+            params["checkEF"] = True
+
         # Set start frequency based on transition type
-        if params["checkEF"]:
+        if params.get("checkFH"):
+            # f_fh isn't calibrated yet -- that's what this scan is for -- so
+            # extrapolate a rough guess from the g-e/e-f anharmonicity step.
+            guess_fh = 2 * self.cfg.device.qubit.f_ef[qi] - self.cfg.device.qubit.f_ge[qi]
+            params_def["start"] = guess_fh - params["span"] / 2
+        elif params["checkEF"]:
             params_def["start"] = self.cfg.device.qubit.f_ef[qi] - params["span"] / 2
         else:
             center_freq = self.cfg.device.qubit.f_ge[qi]
@@ -430,6 +482,13 @@ class QubitSpec(QickExperiment):
 
         # Check for unexpected parameters
         super().check_params(params_def)
+
+        # configure_reset() derives threshold / read_wait / extra_delay from
+        # device.readout, which QickProgram.reset() needs. It runs after
+        # check_params so those derived keys are not reported as unexpected,
+        # and here rather than in qubit_run() because the scripts use go=False.
+        if reset_mode_of(self.cfg.expt) != "passive":
+            super().configure_reset()
 
         if print:
             super().print()
@@ -517,7 +576,9 @@ class QubitSpec(QickExperiment):
         title = f"Spectroscopy Q{self.cfg.expt.qubit[0]} (Gain {self.cfg.expt.gain})"
         if self.cfg.expt.flux:
             title += f" (Flux Gain {self.cfg.expt.flux_gain})"
-        if self.cfg.expt.checkEF:
+        if self.cfg.expt.checkFH:
+            title = "FH " + title
+        elif self.cfg.expt.checkEF:
             title = "EF " + title
 
         # Define which fit parameters to display in caption

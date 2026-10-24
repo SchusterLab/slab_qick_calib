@@ -27,7 +27,7 @@ import seaborn as sns
 
 from ...exp_handling.datamanagement import AttrDict
 from ..general.qick_experiment import QickExperiment
-from ..general.qick_program import QickProgram
+from ..general.qick_program import QickProgram, reset_mode_of
 
 from ...helpers import config
 from ...calib import readout_helpers as helpers
@@ -38,6 +38,53 @@ RED = "#b51d14"  # Color for excited state
 GREEN = "#2ca02c"  # Color for second excited (f) state
 
 # ====================================================== #
+
+
+# Dash patterns per reset round. Once the reset has converged the later
+# rounds overlap almost exactly (TVD ~0.04 on run 33), so colour alone
+# makes the last one look absent.
+_ROUND_STYLES = ["-", "--", ":", "-."]
+
+
+def check_hardware_axis(data, verbose=True):
+    """
+    Warn when the raw I axis does not separate |g> from |e>.
+
+    `analyze` re-rotates the shots in software, so it reports a healthy
+    fidelity whatever the hardware is doing. `QickProgram.reset`, though,
+    branches on the raw accumulated I that `read_input` returns, with no
+    rotation available. The two only agree when `device.readout.phase` is
+    applied exactly once, to the readout pulse.
+
+    On run 34 the static readout path applied it twice, leaving the raw axis
+    carrying `cos(phase)` of the separation -- inverted and about a third the
+    size -- while single-shot still reported fidelity 0.90 and the reset
+    quietly randomised the qubit instead of resetting it. This is the check
+    that distinguishes the two.
+
+    Returns a dict of the measured quantities, so they land in the saved data.
+    """
+    keys = ("Ig", "Qg", "Ie", "Qe")
+    if not all(k in data for k in keys):
+        return {}
+    Ig, Qg, Ie, Qe = (np.asarray(data[k]).ravel() for k in keys)
+    raw = float(np.median(Ie) - np.median(Ig))          # what the branch sees
+    full = float(np.hypot(np.median(Ie) - np.median(Ig),
+                          np.median(Qe) - np.median(Qg)))
+    raw_q = float(np.median(Qe) - np.median(Qg))
+    frac = raw / full if full else 0.0
+    q_frac = raw_q / full if full else 0.0
+    out = {"hw_axis_raw_sep": raw, "hw_axis_full_sep": full,
+           "hw_axis_fraction": frac, "hw_axis_q_fraction": q_frac}
+    if verbose and abs(frac) < 0.8:
+        # Recorded, not diagnosed. On run 34 the buffered raw I carried only
+        # -0.30 of the separation while the hardware branch worked fine on two
+        # different channels (#662, #665), so this does not predict what
+        # read_and_jump sees -- the accumulator it reads is normalised
+        # differently. Useful as a flag, not as a verdict.
+        print(f"  note: buffered raw I carries {frac:+.2f} of the g-e "
+              f"separation ({raw:+.1f} of {full:.1f}); Q carries {q_frac:+.2f}.")
+    return out
 
 
 class HistogramProgram(QickProgram):
@@ -66,7 +113,7 @@ class HistogramProgram(QickProgram):
         - `device.qubit.f_ge`: Qubit g-e transition frequency
         - `expt.pulse_f` (optional): Boolean to enable pulsing to the f-state
         - `device.qubit.f_ef` (optional): Qubit e-f transition frequency
-        - `expt.active_reset` (optional): Boolean to enable active reset
+        - `expt.reset_mode` (optional): "passive" | "active" | "f0g1"
     """
 
     def __init__(self, soccfg, final_delay, cfg, final_wait=0):
@@ -91,7 +138,8 @@ class HistogramProgram(QickProgram):
         self.frequency = cfg.expt.frequency
         self.gain = cfg.expt.gain
         # Set phase based on whether active reset is enabled
-        if cfg.expt.active_reset or cfg.expt.remeas or cfg.expt.calibrate:
+        if (reset_mode_of(cfg.expt) != "passive" or cfg.expt.remeas
+                or cfg.expt.calibrate):
             self.phase = cfg.device.readout.phase[cfg.expt.qubit[0]]
         else:
             self.phase = 0
@@ -102,7 +150,8 @@ class HistogramProgram(QickProgram):
 
         # Define pi pulses for state preparation
         super().make_cfg_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
-        if cfg.expt.pulse_f:
+        # reset_f plays pi_ef ahead of each pi_ge, so it needs the pulse too.
+        if cfg.expt.pulse_f or cfg.expt.reset_f:
             super().make_cfg_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ef, "pi_ef")
 
         # Add initial delay for tProc setup
@@ -149,9 +198,21 @@ class HistogramProgram(QickProgram):
             self.pulse(ch=self.lo_ch, name="mix_pulse", t=0.0)
         self.trigger(ros=[self.adc_ch], ddr4=True, pins=[0], t=self.trig_offset)
 
-        if cfg.expt.active_reset:
-            #self.reset2(cfg.expt.reset)
+        mode = reset_mode_of(cfg.expt)
+        if mode == "active":
             super().reset(cfg.expt.reset)
+        elif mode == "f0g1":
+            # The unconditional drive. Declared by QickProgram._initialize,
+            # which super()._initialize above reaches. Unlike reset() this
+            # appends no readouts, so the shot layout is unchanged and the
+            # histogram machinery below needs no adjustment.
+            super().reset_f0g1()
+        elif mode == "while":
+            # Loops on the feedback channel, which _initialize declares. That
+            # channel must be triggered: a declared readout that never fires
+            # leaves the averager waiting for reads that never arrive, which
+            # surfaces as "exception in readout loop" on the first poll.
+            super().reset_while(cfg.expt.reset)
         if cfg.expt.remeas:
             self.repeated_measurement(5)
 
@@ -324,7 +385,7 @@ class HistogramExperiment(QickExperiment):
         - `readout_length`: from device config for the specified qubit
         - `frequency`: from device config for the specified qubit
         - `gain`: from device config for the specified qubit
-        - `active_reset`: `False`
+        - `reset_mode`: `"passive"`
         - `check_e`: `True`
         - `check_f`: as passed to `__init__`
         - `qubit`: `[qi]`
@@ -363,8 +424,36 @@ class HistogramExperiment(QickExperiment):
             ],  # Readout pulse length
             frequency=self.cfg.device.readout.frequency[qi],  # Readout frequency
             gain=self.cfg.device.readout.gain[qi],  # Readout gain
-            active_reset=False,  # Whether to use active reset
-            reset=7,  # Reset index
+            # Which reset runs between shots: "passive" (the full T1 wait),
+            # "active" (up to `reset` conditional pi pulses), or "f0g1" (the
+            # unconditional all-microwave drive). setup_reset keeps the long
+            # passive inter-shot delay so a reset that is not working cannot
+            # quietly corrupt the calibration this class exists to produce.
+            #
+            # Running the calibration under the reset it will be used with is
+            # the point: the |g> blob this measures is what every threshold
+            # and fidelity downstream is built on, and on run 33 the f0-g1
+            # drive moved that blob by several percent. Calibrating passive
+            # and then running f0g1 measures one readout and uses another.
+            reset_mode="passive",
+            reset=self.cfg.device.readout.reset[qi],
+            setup_reset=False,
+            # Calibration only: re-measure after the final pi pulse so the
+            # last recorded round is the true post-reset state. Costs one
+            # readout per shot and nothing acts on it, so leave it off in use.
+            reset_verify=False,
+            # Add a pi_ef ahead of each pi_ge, for sequences that can
+            # leave population in |f>. Needs reset >= 2: |f> clears in
+            # one round but |e> is driven to |f> first and clears on
+            # the next.
+            reset_f=check_f,
+            # "while excited" semantics at a fixed trip count: once a
+            # round reads ground, a latch suppresses every later pi
+            # pulse. Measures every round, so the count stays fixed.
+            reset_latch=False,
+            # Mean rounds the while loop takes, for the cycle-time
+            # estimate only; `reset` is its hard cap.
+            reset_while_typical=1,
             check_e=True,  # Whether to measure excited state
             check_f=check_f,  # Whether to measure second excited state
             qubit=[qi],  # Qubit index list
@@ -373,13 +462,27 @@ class HistogramExperiment(QickExperiment):
             remeas=False,  # Whether to do repeated measurement
             calibrate=False,
             final_delay=self.cfg.device.readout.readout_length[qi],  # Final delay
+            # Constraints on the two-state (g/e) fit only. With check_f the
+            # three-state joint fit is used instead, which fits tm_e and tm_f
+            # separately and floats every residual population (see float_pf).
+            float_heights=False,  # Let the two residual-population heights fit independently
+            float_tm=False,  # Fit a separate Tm/T1 for the g and e shots
+            # Three-state (check_f) fit only: let the no-pi and pi_ge shots
+            # carry an |f> population. Neither has a pi_ef in front of it, so
+            # turn this on only when an imperfect reset can leave |f>
+            # populated going into the next shot.
+            float_pf=False,
+            # Three-state fit only: resolve the |e> left by an imperfect pi_ef
+            # in the f shot. Only identifiable once the e and f blobs separate
+            # by more than the readout width, i.e. chi < kappa.
+            float_pe_in_f=False,
         )
 
         # Merge default and user-provided parameters
         self.cfg.expt = {**params_def, **params}
 
-        # Configure reset if active reset is enabled
-        if self.cfg.expt.active_reset:
+        # Derive the reset parameters for whichever mode is selected.
+        if reset_mode_of(self.cfg.expt) != "passive":
             super().configure_reset()
 
         if print:
@@ -410,14 +513,9 @@ class HistogramExperiment(QickExperiment):
         """
         data = dict()
 
-        # Determine final delay based on configuration
-        if "setup_reset" in self.cfg.expt and self.cfg.expt.setup_reset:
-            final_delay = self.cfg.device.readout.final_delay[self.cfg.expt.qubit[0]]
-        elif self.cfg.expt.active_reset:
-            #final_delay = self.cfg.expt.final_delay
-            final_delay=1
-        else:
-            final_delay = self.cfg.device.readout.final_delay[self.cfg.expt.qubit[0]]
+        # Active reset shortens the inter-shot delay; setup_reset keeps the
+        # passive one so a non-working reset cannot corrupt the calibration.
+        final_delay = self._get_final_delay()
 
         # Configure DDR4 parameters if enabled
         if self.cfg.expt.ddr4:
@@ -470,11 +568,19 @@ class HistogramExperiment(QickExperiment):
             cfg = AttrDict(copy.deepcopy(dict(self.cfg)))
             cfg.expt.pulse_e = scan_config['pulse_e']
             cfg.expt.pulse_f = scan_config['pulse_f']
+            # The reset protocol follows this scan's own preparation, not the
+            # experiment-wide flag. Only the |f>-prepared scan needs the
+            # pi_ef leg; applying it to the |e> scan would drive e -> f and
+            # park it there for a round, making the |e> reset look far worse
+            # than it is (run 33: |e> reached 17.9% with pi_ge alone but only
+            # 25.7% with the pi_ef in front of it).
+            cfg.expt.reset_f = self.cfg.expt.reset_f and scan_config['pulse_f']
 
             # Create and configure histogram program
             kwargs = {"soccfg": self.soccfg, "final_delay": final_delay, "cfg": cfg}
             # if self.cfg.expt.active_reset: 
             #     kwargs["final_wait"] = None
+            # print(kwargs)
             histpro = HistogramProgram(**kwargs)
 
             # Configure DDR4 if enabled
@@ -514,7 +620,7 @@ class HistogramExperiment(QickExperiment):
             data[q_key] = iq_list[0][0][:, 1]
 
             # Store reset data if active reset is enabled
-            if self.cfg.expt.active_reset or self.cfg.expt.remeas:
+            if reset_mode_of(self.cfg.expt) == "active" or self.cfg.expt.remeas:
                 data[ir_key] = iq_list[0][1:, :, 0]
                 data[qr_key] = iq_list[0][1:, :, 1]
 
@@ -559,20 +665,51 @@ class HistogramExperiment(QickExperiment):
         params, _ = helpers.analyze_single_shot_histograms(data=data, plot=False, span=span, verbose=verbose)
         data.update(params)
 
+        # Always recorded, not just on reset runs: this run writes the
+        # threshold and phase a later reset will branch on, so the number has
+        # to be in the saved data even when this acquisition is passive.
+        data.update(check_hardware_axis(data, verbose=True))
+
         # Perform detailed single-shot analysis with fitting
         try:
-            # Fit single-shot data
-            data2, p, paramsg, paramse2 = helpers.fit_single_shot(data, plot=False)
+            if self.cfg.expt.check_f and "If" in data:
+                # All three shots are fit jointly, with Tm/T1 attached to the
+                # state rather than the shot so the no-pi shot's |e> residual
+                # decays at tm_e (same as the prepared |e>) while |f> gets its
+                # own tm_f. By default each shot is just |g> plus the state it
+                # was prepared in; float_pf / float_pe_in_f add the cross-state
+                # populations back.
+                data2, p = helpers.fit_single_shot_gef(
+                    data, plot=False,
+                    float_pf=self.cfg.expt.float_pf,
+                    float_pe_in_f=self.cfg.expt.float_pe_in_f,
+                )
+                data.update(p)
+                for key in ("vhg", "histg", "vhe", "histe", "vhf", "histf"):
+                    data[key] = data2[key]
+                data["shots"] = self.cfg.expt.shots
+                # g-f fidelity from the fitted |g> and |f> components
+                fit_fid, fit_thresh = helpers.fit_fidelity_gef(data)
+            else:
+                # Fit single-shot data
+                data2, p, paramsg, paramse2 = helpers.fit_single_shot(
+                    data, plot=False,
+                    float_heights=self.cfg.expt.float_heights,
+                    float_tm=self.cfg.expt.float_tm,
+                )
 
-            # Update data with fit results
-            data.update(p)
-            data["vhg"] = data2["vhg"]
-            data["histg"] = data2["histg"]
-            data["vhe"] = data2["vhe"]
-            data["histe"] = data2["histe"]
-            data["paramsg"] = paramsg
-            data["paramsg2"] = data2["paramsg2"]
-            data["shots"] = self.cfg.expt.shots
+                # Update data with fit results
+                data.update(p)
+                data["vhg"] = data2["vhg"]
+                data["histg"] = data2["histg"]
+                data["vhe"] = data2["vhe"]
+                data["histe"] = data2["histe"]
+                data["paramsg"] = paramsg
+                data["paramsg2"] = data2["paramsg2"]
+                data["shots"] = self.cfg.expt.shots
+                # Fidelity computed from the fitted g-shot and e-shot distributions
+                fit_fid, fit_thresh = helpers.fit_fidelity(data)
+
             data['e_mean'] = p['e_mean']
             data['g_mean'] = p['g_mean']
             data['g_peak'] = p['g_peak']
@@ -581,6 +718,9 @@ class HistogramExperiment(QickExperiment):
             data['e_norm'] = (self.data['e_mean']-self.data['vg'])/dv
 
             data['g_norm'] = (self.data['g_mean']-self.data['vg'])/dv
+
+            data['fit_fidelity'] = fit_fid
+            data['fit_threshold'] = fit_thresh
         except Exception as e:
             print(f"Fits failed: {str(e)}")
 
@@ -699,9 +839,16 @@ class HistogramExperiment(QickExperiment):
         qi = self.cfg.expt.qubit[0]
         cfg_file=self.config_file
 
+        # The angle is measured on top of whatever phase HistogramProgram put
+        # on the pulse, so add that phase back (it is 0 for passive reset).
+        expt = self.cfg.expt
+        phase = self.data["angle"]
+        if reset_mode_of(expt) != "passive" or expt.remeas or expt.calibrate:
+            phase = (self.cfg.device.readout.phase[qi] + phase + 180) % 360 - 180
+
         # Update readout parameters
         config.update_readout(
-            cfg_file, "phase", self.data["angle"], qi, verbose=verbose
+            cfg_file, "phase", phase, qi, verbose=verbose
         )
         config.update_readout(
             cfg_file, "threshold", self.data["thresholds"][0], qi, verbose=verbose
@@ -755,8 +902,10 @@ class HistogramExperiment(QickExperiment):
         # Create ground state histogram
         vg, histg = helpers.create_histogram(self.data["Ig"], n_bins=n_bins)
         max_g = np.max(histg)
-        ax[0].semilogy(vg, histg/max_g, color=BLUE, linewidth=2)
-        ax[1].semilogy(vg, histg/max_g, color=BLUE, linewidth=2)
+        ax[0].semilogy(vg, histg/max_g, color=BLUE, linewidth=2,
+                       label="|g> prep")
+        ax[1].semilogy(vg, histg/max_g, color=BLUE, linewidth=2,
+                       label="|g> prep (reference)")
 
         # Create color palette for reset histograms
         b = sns.color_palette("ch:s=-.2,r=.6", n_colors=len(self.data["Igr"]))
@@ -764,7 +913,17 @@ class HistogramExperiment(QickExperiment):
         # Create excited state histogram
         ve, histe = helpers.create_histogram(self.data["Ie"], n_bins=n_bins)
         max_e = np.max(histe)
-        ax[1].semilogy(ve, histe/max_e, color=RED, linewidth=2)
+        ax[1].semilogy(ve, histe/max_e, color=RED, linewidth=2, label="|e> prep")
+
+        # The f preparation, when there is one. Worth showing next to |e>:
+        # with chi >> kappa the e and f blobs overlap, so an |f> shot that
+        # decays to |e> still reads excited and the distribution is visibly
+        # cleaner than |e>'s. Its reset rounds go on the same panel.
+        has_f = "Ifr" in self.data and "If" in self.data
+        if has_f:
+            vf, histf = helpers.create_histogram(self.data["If"], n_bins=n_bins)
+            ax[1].semilogy(vf, histf/np.max(histf), color="darkgreen",
+                           linewidth=2, ls="--", label="|f> prep")
         fig2, ax2 = plt.subplots(2, len(self.data["Igr"])+1, figsize=(17, 7), sharex=True, sharey=True)
         # Plot reset histograms for ground state
         ax2[0,0].plot(self.data['Ig'], self.data['Qg'], '.', markersize=1, rasterized=True)
@@ -773,11 +932,21 @@ class HistogramExperiment(QickExperiment):
             ax2[0,i+1].plot(self.data['Igr'][i], self.data['Qgr'][i], '.', markersize=1, rasterized=True)
             ax2[1,i+1].plot(self.data['Ier'][i], self.data['Qer'][i], '.', markersize=1, rasterized=True)
             v, hist = helpers.create_histogram(self.data["Igr"][i], n_bins=n_bins)
-            ax[0].semilogy(v, hist/max_g, color=b[i], linewidth=1, label=f"{i+1}", rasterized=True)
+            ax[0].semilogy(v, hist/max_g, color=b[i], linewidth=1,
+                           ls=_ROUND_STYLES[i % len(_ROUND_STYLES)],
+                           label=f"after reset {i+1}", rasterized=True)
 
             # Plot reset histograms for excited state
             v, hist = helpers.create_histogram(self.data["Ier"][i], n_bins=n_bins)
-            ax[1].semilogy(v, hist/max_e, color=b[i], linewidth=1, label=f"{i+1}", rasterized=True)
+            ax[1].semilogy(v, hist/max_e, color=b[i], linewidth=1,
+                           ls=_ROUND_STYLES[i % len(_ROUND_STYLES)],
+                           label=f"|e> after reset {i+1}", rasterized=True)
+            if has_f:
+                v, hist = helpers.create_histogram(self.data["Ifr"][i], n_bins=n_bins)
+                ax[1].semilogy(v, hist/max_e, color="darkgreen", linewidth=1,
+                               ls=_ROUND_STYLES[i % len(_ROUND_STYLES)],
+                               alpha=0.6, label=f"|f> after reset {i+1}",
+                               rasterized=True)
 
         ax[0].axhline(0.5, color="gray", linestyle="--", linewidth=1)
         ax[1].axhline(0.5, color="gray", linestyle="--", linewidth=1)
@@ -806,7 +975,12 @@ class HistogramExperiment(QickExperiment):
         self.data["reset_g"] = reset_level / g_level
 
         # Add legend and titles
-        ax[0].legend()
+        # Every curve is labelled: with three preparations and three rounds
+        # the panel carries nine traces, and leaving any of them out of the
+        # legend makes the figure unreadable (colour alone does not say
+        # whether a green trace is the |f> prep or one of its reset rounds).
+        ax[0].legend(fontsize="x-small", ncol=2)
+        ax[1].legend(fontsize="x-small", ncol=2)
         ax[0].set_title("Ground state")
         ax[1].set_title("Excited state")
         plt.show()

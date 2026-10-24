@@ -15,6 +15,9 @@ This experiment is particularly useful for finding qubit frequencies and charact
 the qubit spectrum as a function of probe power.
 """
 
+import time
+
+import matplotlib.pyplot as plt
 import numpy as np
 from qick import *
 from qick.asm_v2 import QickSweep1D
@@ -23,7 +26,8 @@ from ...calib import readout_helpers as helpers
 
 from ...exp_handling.datamanagement import AttrDict
 from ..general.qick_experiment import QickExperiment, QickExperiment2DSimple
-from ..general.qick_program import QickProgram
+from ..general.qick_program import QickProgram, reset_mode_of, reset_plays_pi_pulses, pulse_type_from_config
+from .qubit_spec_shot import band_frequency_from_fit
 
 from ...analysis import fitting as fitter
 FIT_FUNC = fitter.lorfunc
@@ -75,12 +79,15 @@ class FWM_tb_sweep_Program(QickProgram):
         self.declare_gen(ch = cfg.hw.soc.dacs.readout.ch[0])
 
         # Define the probe pulse with variable frequency
+        # The pump goes on the pump line, which is the qubit channel unless
+        # hw.soc.dacs.pump says otherwise.
         qubit_pulse = {
             "freq": cfg.expt.frequency_p,
             "gain": cfg.expt.gain_p,
             "type": cfg.expt.pulse_type_p,
             "sigma": cfg.expt.length_p,
             "phase": 0,
+            "chan": self.pump_ch,
         }
         super().make_pulse(qubit_pulse, "qubit_pulse")
 
@@ -97,9 +104,14 @@ class FWM_tb_sweep_Program(QickProgram):
         # Add frequency sweep loop
         self.add_loop("length_b_loop", cfg.expt.expts)
 
-        # If checking EF transition, create a pi pulse for |g>-|e> transition
-        if cfg.expt.checkEF:
+        # If checking EF transition, create a pi pulse for |g>-|e> transition.
+        # pi_ge is also what QickProgram.reset() plays, so it has to be
+        # declared whenever a measurement-based reset is on.
+        if cfg.expt.checkEF or reset_plays_pi_pulses(cfg.expt):
             super().make_cfg_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
+        # reset_f plays pi_ef ahead of each pi_ge, so it needs the pulse too.
+        if cfg.expt.reset_f:
+            super().make_cfg_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ef, "pi_ef")
 
     def _body(self, cfg):
         """
@@ -121,7 +133,7 @@ class FWM_tb_sweep_Program(QickProgram):
 
         # Apply the probe pulse with variable frequency
         if cfg.expt.do_pump:
-            self.pulse(ch=self.qubit_ch, name="qubit_pulse", t=0)
+            self.pulse(ch=self.pump_ch, name="qubit_pulse", t=0)
         if cfg.expt.do_buffer:
             self.pulse(ch=cfg.hw.soc.dacs.readout.ch[0], name="buffer_pulse", t=cfg.expt.length_p-cfg.expt.length_b)
 
@@ -159,7 +171,7 @@ class FWM_tb_sweep(QickExperiment):
     - 'sep_readout': Whether to separate the probe pulse and readout
     - 'readout_length': Length of the readout pulse
     - 'final_delay': Delay time between repetitions
-    - 'active_reset': Whether to use active reset
+    - 'reset_mode': 'passive' | 'active' | 'f0g1'
 
     The style parameter can be:
     - 'huge': Very wide frequency span with high power
@@ -179,7 +191,7 @@ class FWM_tb_sweep(QickExperiment):
     - 'qubit': [qi]
     - 'qubit_chan': from config
     - 'sep_readout': True
-    - 'active_reset': False
+    - 'reset_mode': 'passive'
     The 'start' frequency is calculated from the qubit frequency in the config and the span.
     The 'length' can be set to 't1' to be calculated from the T1 time in the config.
     If 'checkEF' is True, 'gain' and 'reps' are increased.
@@ -276,16 +288,52 @@ class FWM_tb_sweep(QickExperiment):
             "final_delay": 10,
             "length_p": 10,
             "readout_length": self.cfg.device.readout.readout_length[qi],
-            "pulse_type_p": "const",
+            "pulse_type_p": pulse_type_from_config(self.cfg.device.get("fwm"), "pump_pulse_type"),
             "gain_b": params_def['gain_p'],
             "frequency_b": self.cfg.device.readout.frequency[0],
-            "pulse_type_b": "const",
+            "pulse_type_b": pulse_type_from_config(self.cfg.device.get("fwm"), "buffer_pulse_type"),
             'start':1,
             "checkEF": False,
             "qubit": [qi],
             "qubit_chan": self.cfg.hw.soc.adcs.readout.ch[qi],
             "sep_readout": True,
-            "active_reset": False,
+            # reset is the round count for reset_mode "active" only;
+            # QickProgram.reset() plays up to that many conditional pi pulses.
+            # setup_reset keeps the long passive inter-shot delay whatever the
+            # mode, so a reset that is not working cannot quietly corrupt the
+            # data.
+            # Which reset runs between shots: "passive" (the full T1
+            # wait), "active" (measurement-based conditional pi pulses)
+            # or "f0g1" (the unconditional all-microwave reset, which
+            # also clears |f> -- see QickProgram.reset_f0g1).
+            "reset_mode": "passive",
+            # "f0g1" only, and all optional -- everything else is
+            # derived from device.f0g1. residual sets the drive length
+            # as ln(1/residual)/(2*pi*Gamma), so it rescales on its own
+            # as Gamma improves; f0g1_reset_length pins the length
+            # instead. None means device.f0g1.reset_*, else derived.
+            "f0g1_reset_residual": None,
+            "f0g1_reset_gain": None,
+            "f0g1_reset_gain_ef": None,
+            "f0g1_reset_length": None,
+            "f0g1_reset_gap": None,
+            "reset": self.cfg.device.readout.reset[qi],
+            "setup_reset": False,
+            # Calibration only: re-measure after the final pi pulse so the
+            # last recorded round is the true post-reset state. Costs one
+            # readout per shot and nothing acts on it, so leave it off in use.
+            "reset_verify": False,
+            # Add a pi_ef ahead of each pi_ge, for sequences that can leave
+            # population in |f>. Needs reset >= 2: |f> clears in one round but
+            # |e> is driven to |f> first and clears on the next.
+            "reset_f": False,
+            # "while excited" semantics at a fixed trip count: once a round
+            # reads ground, a latch suppresses every later pi pulse. Measures
+            # every round, so the trigger count stays fixed.
+            "reset_latch": False,
+            # Mean rounds the while loop takes, for the cycle-time estimate
+            # only; `reset` is its hard cap. See CLAUDE.md.
+            "reset_while_typical": 1,
             "save_shots": False,
             "do_buffer": True,
             "do_pump": True
@@ -321,6 +369,13 @@ class FWM_tb_sweep(QickExperiment):
 
         # Check for unexpected parameters
         super().check_params(params_def)
+
+        # configure_reset() derives threshold / read_wait / extra_delay from
+        # device.readout, which QickProgram.reset() needs. It runs after
+        # check_params so those derived keys are not reported as unexpected,
+        # and here rather than in qubit_run() because the scripts use go=False.
+        if reset_mode_of(self.cfg.expt) != "passive":
+            super().configure_reset()
 
         if print:
             super().print()
@@ -375,10 +430,7 @@ class FWM_tb_sweep(QickExperiment):
         
         
         if 'shots' in data:
-            qi = self.cfg.expt.qubit[0]
-            threshold = self.cfg.device.readout.threshold[qi]
-            i_shots = data['shots'][0, 0, :, :, 0]  # (n_rounds, n_sweep_pts)
-            data['p_e'] = np.mean(i_shots > threshold, axis=0)
+            self.add_p_e(data)
             if not self.cfg.expt.save_shots:
                 data.pop("shots")  # Remove raw shots from data to save space
         
@@ -399,7 +451,7 @@ class FWM_tb_sweep(QickExperiment):
         xlabel = "Buffer Length (us)"
 
         # Set up plot title
-        title = f"4WM sweep Q{self.cfg.expt.qubit[0]} (Gain {self.cfg.expt.gain_p})"
+        title = f"FWM sweep Q{self.cfg.expt.qubit[0]} (Gain {self.cfg.expt.gain_p})"
         if self.cfg.expt.checkEF:
             title = "EF " + title
 
@@ -470,12 +522,15 @@ class FWM_gainb_sweep_Program(QickProgram):
         self.declare_gen(ch = cfg.hw.soc.dacs.readout.ch[0])
 
         # Define the probe pulse with variable frequency
+        # The pump goes on the pump line, which is the qubit channel unless
+        # hw.soc.dacs.pump says otherwise.
         qubit_pulse = {
             "freq": cfg.expt.frequency_p,
             "gain": cfg.expt.gain_p,
             "type": cfg.expt.pulse_type_p,
             "sigma": cfg.expt.length_p,
             "phase": 0,
+            "chan": self.pump_ch,
         }
         super().make_pulse(qubit_pulse, "qubit_pulse")
 
@@ -492,9 +547,14 @@ class FWM_gainb_sweep_Program(QickProgram):
         # Add frequency sweep loop
         self.add_loop("gain_b_loop", cfg.expt.expts)
 
-        # If checking EF transition, create a pi pulse for |g>-|e> transition
-        if cfg.expt.checkEF:
+        # If checking EF transition, create a pi pulse for |g>-|e> transition.
+        # pi_ge is also what QickProgram.reset() plays, so it has to be
+        # declared whenever a measurement-based reset is on.
+        if cfg.expt.checkEF or reset_plays_pi_pulses(cfg.expt):
             super().make_cfg_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
+        # reset_f plays pi_ef ahead of each pi_ge, so it needs the pulse too.
+        if cfg.expt.reset_f:
+            super().make_cfg_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ef, "pi_ef")
 
     def _body(self, cfg):
         """
@@ -516,7 +576,7 @@ class FWM_gainb_sweep_Program(QickProgram):
 
         # Apply the probe pulse with variable frequency
         if cfg.expt.do_pump:
-            self.pulse(ch=self.qubit_ch, name="qubit_pulse", t=0)
+            self.pulse(ch=self.pump_ch, name="qubit_pulse", t=0)
         if cfg.expt.do_buffer:
             self.pulse(ch=cfg.hw.soc.dacs.readout.ch[0], name="buffer_pulse", t=cfg.expt.length_p-cfg.expt.length_b)
 
@@ -554,7 +614,7 @@ class FWM_gainb_sweep(QickExperiment):
     - 'sep_readout': Whether to separate the probe pulse and readout
     - 'readout_length': Length of the readout pulse
     - 'final_delay': Delay time between repetitions
-    - 'active_reset': Whether to use active reset
+    - 'reset_mode': 'passive' | 'active' | 'f0g1'
 
     The style parameter can be:
     - 'huge': Very wide frequency span with high power
@@ -574,7 +634,7 @@ class FWM_gainb_sweep(QickExperiment):
     - 'qubit': [qi]
     - 'qubit_chan': from config
     - 'sep_readout': True
-    - 'active_reset': False
+    - 'reset_mode': 'passive'
     The 'start' frequency is calculated from the qubit frequency in the config and the span.
     The 'length' can be set to 't1' to be calculated from the T1 time in the config.
     If 'checkEF' is True, 'gain' and 'reps' are increased.
@@ -629,15 +689,51 @@ class FWM_gainb_sweep(QickExperiment):
             "final_delay": 10,
             "length_p": 10,
             "readout_length": self.cfg.device.readout.readout_length[qi],
-            "pulse_type_p": "const",
+            "pulse_type_p": pulse_type_from_config(self.cfg.device.get("fwm"), "pump_pulse_type"),
             "length_b": 2,
             "frequency_b": self.cfg.device.readout.frequency[0],
-            "pulse_type_b": "const",
+            "pulse_type_b": pulse_type_from_config(self.cfg.device.get("fwm"), "buffer_pulse_type"),
             "checkEF": False,
             "qubit": [qi],
             "qubit_chan": self.cfg.hw.soc.adcs.readout.ch[qi],
             "sep_readout": True,
-            "active_reset": False,
+            # reset is the round count for reset_mode "active" only;
+            # QickProgram.reset() plays up to that many conditional pi pulses.
+            # setup_reset keeps the long passive inter-shot delay whatever the
+            # mode, so a reset that is not working cannot quietly corrupt the
+            # data.
+            # Which reset runs between shots: "passive" (the full T1
+            # wait), "active" (measurement-based conditional pi pulses)
+            # or "f0g1" (the unconditional all-microwave reset, which
+            # also clears |f> -- see QickProgram.reset_f0g1).
+            "reset_mode": "passive",
+            # "f0g1" only, and all optional -- everything else is
+            # derived from device.f0g1. residual sets the drive length
+            # as ln(1/residual)/(2*pi*Gamma), so it rescales on its own
+            # as Gamma improves; f0g1_reset_length pins the length
+            # instead. None means device.f0g1.reset_*, else derived.
+            "f0g1_reset_residual": None,
+            "f0g1_reset_gain": None,
+            "f0g1_reset_gain_ef": None,
+            "f0g1_reset_length": None,
+            "f0g1_reset_gap": None,
+            "reset": self.cfg.device.readout.reset[qi],
+            "setup_reset": False,
+            # Calibration only: re-measure after the final pi pulse so the
+            # last recorded round is the true post-reset state. Costs one
+            # readout per shot and nothing acts on it, so leave it off in use.
+            "reset_verify": False,
+            # Add a pi_ef ahead of each pi_ge, for sequences that can leave
+            # population in |f>. Needs reset >= 2: |f> clears in one round but
+            # |e> is driven to |f> first and clears on the next.
+            "reset_f": False,
+            # "while excited" semantics at a fixed trip count: once a round
+            # reads ground, a latch suppresses every later pi pulse. Measures
+            # every round, so the trigger count stays fixed.
+            "reset_latch": False,
+            # Mean rounds the while loop takes, for the cycle-time estimate
+            # only; `reset` is its hard cap. See CLAUDE.md.
+            "reset_while_typical": 1,
             "save_shots": False,
             "do_buffer": True,
             "do_pump": True
@@ -672,6 +768,13 @@ class FWM_gainb_sweep(QickExperiment):
 
         # Check for unexpected parameters
         super().check_params(params_def2)
+
+        # configure_reset() derives threshold / read_wait / extra_delay from
+        # device.readout, which QickProgram.reset() needs. It runs after
+        # check_params so those derived keys are not reported as unexpected,
+        # and here rather than in qubit_run() because the scripts use go=False.
+        if reset_mode_of(self.cfg.expt) != "passive":
+            super().configure_reset()
 
         if print:
             super().print()
@@ -726,10 +829,7 @@ class FWM_gainb_sweep(QickExperiment):
         
         
         if 'shots' in data:
-            qi = self.cfg.expt.qubit[0]
-            threshold = self.cfg.device.readout.threshold[qi]
-            i_shots = data['shots'][0, 0, :, :, 0]  # (n_rounds, n_sweep_pts)
-            data['p_e'] = np.mean(i_shots > threshold, axis=0)
+            self.add_p_e(data)
             if not self.cfg.expt.save_shots:
                 data.pop("shots")  # Remove raw shots from data to save space
         
@@ -750,7 +850,7 @@ class FWM_gainb_sweep(QickExperiment):
         xlabel = "buffer gain (ADC units)"
 
         # Set up plot title
-        title = f"4WM sweep Q{self.cfg.expt.qubit[0]} (Gain {self.cfg.expt.gain_p})"
+        title = f"FWM sweep Q{self.cfg.expt.qubit[0]} (Gain {self.cfg.expt.gain_p})"
         if self.cfg.expt.checkEF:
             title = "EF " + title
 
@@ -778,7 +878,7 @@ class FWM_gainb_sweep(QickExperiment):
 
 class FWM_gainb_tb_sweep(QickExperiment2DSimple):
     """
-    4WM sweep over buffer gain and length
+    FWM sweep over buffer gain and length
 
     This experiment performs a 2D sweep of both buffer gain and length
     to map out how the efficiency changes with these parameters
@@ -839,7 +939,7 @@ class FWM_gainb_tb_sweep(QickExperiment2DSimple):
         """
         # Set prefix based on whether we're checking EF transition
         ef = "ef_" if "checkEF" in params and params["checkEF"] else ""
-        prefix = f"4WM_sweep_lengthb_gainb_{ef}{style}_qubit{qi}"
+        prefix = f"FWM_sweep_lengthb_gainb_{ef}{style}_qubit{qi}"
         super().__init__(cfg_dict=cfg_dict, prefix=prefix, progress=progress, live_plot=live_plot)
 
         # Set style-specific parameters
@@ -854,11 +954,19 @@ class FWM_gainb_tb_sweep(QickExperiment2DSimple):
             params_def = {"span": 120, "expts": 200}
 
         # Additional default parameters
+        nstark = self.cfg.device.readout.get("nstark", None)
         params_def2 = {
             "length_b_start": 0.1,
             "length_b_end": 10,
             "length_b_expts": 20,
-            "save_shots": False
+            "save_shots": False,
+            # Efficiency reduction: photons per unit buffer gain**2, from Stark
+            # spectroscopy. Without it the buffer gain cannot be converted to a
+            # photon probability, and the efficiency analysis is skipped.
+            "n_photon_per_gain": nstark[qi] if nstark is not None else None,
+            "slope_lo": 0.05,
+            "slope_hi": 0.2,
+            "length_b_min": 40.0,
         }
 
         # Merge default parameters
@@ -920,32 +1028,70 @@ class FWM_gainb_tb_sweep(QickExperiment2DSimple):
         """
         Analyze the acquired data.
 
-        Fits each frequency slice to a Lorentzian model to extract
-        qubit parameters as a function of probe power.
+        Thresholds the shots into P(e), then reduces each buffer length to a
+        conversion efficiency: the slope of P(e) against the incident-photon
+        probability 1 - P(0), measured in the linear window
+        [slope_lo, slope_hi]. See `_efficiency_from_pe`.
 
         Args:
             fit: Whether to fit the data
             **kwargs: Additional arguments for the fit
 
         Returns:
-            Analyzed data with fit parameters
+            Analyzed data. When the photon calibration is available this adds
+            'slopes' (efficiency at each buffer length), 'efficiency' (their
+            average past length_b_min) and 'photon_prob' (the converted gain
+            axis).
         """
+        if data is None:
+            data = self.data
+
         # if fit:
         #     # Fit each frequency slice to a Lorentzian model
         #     super().analyze(fitterfunc=FITTER_FUNC, fitfunc=FIT_FUNC)
-        
+
         if 'shots' in data:
-            qi = self.cfg.expt.qubit[0]
-            threshold = self.cfg.device.readout.threshold[qi]
-            data['p_e'] = np.zeros((data['shots'].shape[0], data['shots'].shape[4]))  # Initialize p_e array
-            for i in range(len(data['length_b_pts'])):
-                i_shots = data['shots'][i, 0, 0, :, :, 0]  # (n_rounds, n_sweep_pts)
-                data['p_e'][i] = np.mean(i_shots > threshold, axis=0)
+            self.add_p_e(data, stacked=True)
 
 
             if not self.cfg.expt.save_shots:
                 data.pop("shots")  # Remove raw shots from data to save space
 
+        if 'p_e' in data:
+            n_photon = self.cfg.expt.n_photon_per_gain
+            if n_photon is None:
+                print(
+                    "Skipping efficiency analysis: n_photon_per_gain is unset, "
+                    "so buffer gain cannot be converted to photon number. Run "
+                    "17_stark_spectroscopy.py with update() to populate "
+                    "device.readout.nstark, or pass n_photon_per_gain."
+                )
+            else:
+                data.update(
+                    _efficiency_from_pe(
+                        data['xpts'],
+                        data['length_b_pts'],
+                        data['p_e'],
+                        n_photon,
+                        slope_lo=self.cfg.expt.slope_lo,
+                        slope_hi=self.cfg.expt.slope_hi,
+                        length_b_min=self.cfg.expt.length_b_min,
+                    )
+                )
+                if data["efficiency_fallback"]:
+                    window = (
+                        "mean slope over all buffer lengths -- none exceed "
+                        f"length_b_min={self.cfg.expt.length_b_min:g} us"
+                    )
+                else:
+                    window = (
+                        f"mean slope past {self.cfg.expt.length_b_min:g} us"
+                    )
+                print(
+                    f"Efficiency {data['efficiency']:.4f} ({window}); "
+                    f"peak {np.nanmax(data['slopes']):.4f} at "
+                    f"{data['length_b_pts'][np.nanargmax(data['slopes'])]:.2f} us"
+                )
 
         return self.data
 
@@ -953,8 +1099,9 @@ class FWM_gainb_tb_sweep(QickExperiment2DSimple):
         """
         Display the results of the 2D pulse probe spectroscopy experiment.
 
-        Creates a 2D color plot showing the qubit response as a function
-        of both frequency and power.
+        Creates 2D color plots showing amplitude, phase, and (if available)
+        the excited-state population P(e) as a function of buffer gain and
+        buffer length.
 
         Args:
             data: Data to display (if None, use self.data)
@@ -963,25 +1110,66 @@ class FWM_gainb_tb_sweep(QickExperiment2DSimple):
             ax: Matplotlib axis to plot on
             **kwargs: Additional arguments for the display
         """
+        if data is None:
+            data = self.data
+
         # Set up plot title
         title = f"pump gain = {self.cfg.expt.gain_p}"
         if self.cfg.expt.checkEF:
             title = f"EF " + title
 
-        # Set axis labels
-        
-
-        # Display the 2D plot
-        super().display(
+        self.display_pe(
             data=data,
             ax=ax,
             plot_amps=plot_amps,
             title=title,
-            xlabel=self.xlabel,
-            ylabel=self.ylabel,
             fit=fit,
             **kwargs,
         )
+
+        if "slopes" in data:
+            self.display_efficiency(data=data)
+
+    def display_efficiency(self, data=None, ax=None):
+        """
+        Plot conversion efficiency against buffer length.
+
+        Each point is the slope of P(e) versus 1 - P(0) at that buffer length;
+        the dashed line marks the average past `length_b_min` that the single
+        efficiency number is taken from.
+
+        Args:
+            data: Data to display (if None, use self.data)
+            ax: Matplotlib axis to plot on, or None to create a figure
+        """
+        if data is None:
+            data = self.data
+
+        save_fig = ax is None
+        if save_fig:
+            fig, ax = plt.subplots(1, 1, figsize=(6, 4.5))
+
+        length_b = data["length_b_pts"]
+        length_b_min = self.cfg.expt.length_b_min
+        fallback = data.get("efficiency_fallback", False)
+
+        ax.plot(length_b, data["slopes"], marker="o", ms=3, lw=1)
+        if fallback:
+            mean_label = f"mean (all lengths) = {data['efficiency']:.3f}"
+        else:
+            mean_label = f"mean past {length_b_min:g} us = {data['efficiency']:.3f}"
+        ax.axhline(data["efficiency"], color="red", ls="--", lw=1, label=mean_label)
+        if not fallback:
+            ax.axvline(length_b_min, color="grey", ls=":", lw=1)
+        ax.set_xlabel("buffer length (us)")
+        ax.set_ylabel("efficiency (slope of P(e) vs 1 - P(0))")
+        ax.legend(fontsize="small")
+
+        if save_fig:
+            # save_fig applies tight_layout and shows the figure; the config
+            # was already written alongside the P(e) panels.
+            self.save_fig(fig, suffix="_efficiency")
+
 
 class FWM_tp_sweep_Program(QickProgram):
     """
@@ -1025,12 +1213,15 @@ class FWM_tp_sweep_Program(QickProgram):
         super()._initialize(cfg, readout="standard")
 
         # Define the probe pulse with variable frequency
+        # The pump goes on the pump line, which is the qubit channel unless
+        # hw.soc.dacs.pump says otherwise.
         qubit_pulse = {
             "freq": cfg.expt.frequency_p,
             "gain": cfg.expt.gain_p,
             "type": cfg.expt.pulse_type_p,
             "sigma": cfg.expt.length_p,
             "phase": 0,
+            "chan": self.pump_ch,
         }
         super().make_pulse(qubit_pulse, "qubit_pulse")
 
@@ -1061,7 +1252,7 @@ class FWM_tp_sweep_Program(QickProgram):
 
         # Apply the probe pulse with variable frequency
         if cfg.expt.do_pump:
-            self.pulse(ch=self.qubit_ch, name="qubit_pulse", t=0)
+            self.pulse(ch=self.pump_ch, name="qubit_pulse", t=0)
 
         # Add delay if separate readout is enabled
         if cfg.expt.sep_readout:
@@ -1099,7 +1290,7 @@ class FWM_tp_sweep(QickExperiment):
     - 'sep_readout': Whether to separate the probe pulse and readout
     - 'readout_length': Length of the readout pulse
     - 'final_delay': Delay time between repetitions
-    - 'active_reset': Whether to use active reset
+    - 'reset_mode': 'passive' | 'active' | 'f0g1'
 
     The style parameter can be:
     - 'huge': Very wide frequency span with high power
@@ -1119,7 +1310,7 @@ class FWM_tp_sweep(QickExperiment):
     - 'qubit': [qi]
     - 'qubit_chan': from config
     - 'sep_readout': True
-    - 'active_reset': False
+    - 'reset_mode': 'passive'
     The 'start' frequency is calculated from the qubit frequency in the config and the span.
     The 'length' can be set to 't1' to be calculated from the T1 time in the config.
     If 'checkEF' is True, 'gain' and 'reps' are increased.
@@ -1159,7 +1350,7 @@ class FWM_tp_sweep(QickExperiment):
 
         # Set prefix based on whether we're checking EF transition
         ef = "ef_" if "checkEF" in params and params["checkEF"] else ""
-        prefix = f"4WM_sweep_tp_{ef}{style}_qubit{qi}"
+        prefix = f"FWM_sweep_tp_{ef}{style}_qubit{qi}"
         super().__init__(cfg_dict=cfg_dict, prefix=prefix, progress=progress, check_params=check_params, qi=qi)
 
         # Define default parameters
@@ -1173,14 +1364,50 @@ class FWM_tp_sweep(QickExperiment):
             "rounds": self.rounds,
             "final_delay": 10,
             "readout_length": self.cfg.device.readout.readout_length[qi],
-            "pulse_type_p": "const",
+            "pulse_type_p": pulse_type_from_config(self.cfg.device.get("fwm"), "pump_pulse_type"),
             "start":1,
             "stop":30,
             "checkEF": False,
             "qubit": [qi],
             "qubit_chan": self.cfg.hw.soc.adcs.readout.ch[qi],
             "sep_readout": True,
-            "active_reset": True,
+            # reset is the round count for reset_mode "active" only;
+            # QickProgram.reset() plays up to that many conditional pi pulses.
+            # setup_reset keeps the long passive inter-shot delay whatever the
+            # mode, so a reset that is not working cannot quietly corrupt the
+            # data.
+            # Which reset runs between shots: "passive" (the full T1
+            # wait), "active" (measurement-based conditional pi pulses)
+            # or "f0g1" (the unconditional all-microwave reset, which
+            # also clears |f> -- see QickProgram.reset_f0g1).
+            "reset_mode": "passive",
+            # "f0g1" only, and all optional -- everything else is
+            # derived from device.f0g1. residual sets the drive length
+            # as ln(1/residual)/(2*pi*Gamma), so it rescales on its own
+            # as Gamma improves; f0g1_reset_length pins the length
+            # instead. None means device.f0g1.reset_*, else derived.
+            "f0g1_reset_residual": None,
+            "f0g1_reset_gain": None,
+            "f0g1_reset_gain_ef": None,
+            "f0g1_reset_length": None,
+            "f0g1_reset_gap": None,
+            "reset": self.cfg.device.readout.reset[qi],
+            "setup_reset": False,
+            # Calibration only: re-measure after the final pi pulse so the
+            # last recorded round is the true post-reset state. Costs one
+            # readout per shot and nothing acts on it, so leave it off in use.
+            "reset_verify": False,
+            # Add a pi_ef ahead of each pi_ge, for sequences that can leave
+            # population in |f>. Needs reset >= 2: |f> clears in one round but
+            # |e> is driven to |f> first and clears on the next.
+            "reset_f": False,
+            # "while excited" semantics at a fixed trip count: once a round
+            # reads ground, a latch suppresses every later pi pulse. Measures
+            # every round, so the trigger count stays fixed.
+            "reset_latch": False,
+            # Mean rounds the while loop takes, for the cycle-time estimate
+            # only; `reset` is its hard cap. See CLAUDE.md.
+            "reset_while_typical": 1,
             "save_shots": False,
             "do_pump": True,
             "threshold": self.cfg.device.readout.threshold[qi]
@@ -1199,11 +1426,15 @@ class FWM_tp_sweep(QickExperiment):
         # Set experiment configuration
         self.cfg.expt = params
 
-        if self.cfg.expt.active_reset:
-            super().configure_reset()
-
         # Check for unexpected parameters
         super().check_params(params_def2)
+
+        # configure_reset() derives threshold / read_wait / extra_delay from
+        # device.readout, which QickProgram.reset() needs. It runs after
+        # check_params so those derived keys are not reported as unexpected,
+        # and here rather than in qubit_run() because the scripts use go=False.
+        if reset_mode_of(self.cfg.expt) != "passive":
+            super().configure_reset()
 
         if print:
             super().print()
@@ -1258,10 +1489,7 @@ class FWM_tp_sweep(QickExperiment):
         
         
         if 'shots' in data:
-            qi = self.cfg.expt.qubit[0]
-            threshold = self.cfg.device.readout.threshold[qi]
-            i_shots = data['shots'][0, 0, :, :, 0]  # (n_rounds, n_sweep_pts)
-            data['p_e'] = np.mean(i_shots > threshold, axis=0)
+            self.add_p_e(data)
             if not self.cfg.expt.save_shots:
                 data.pop("shots")  # Remove raw shots from data to save space
         
@@ -1282,7 +1510,7 @@ class FWM_tp_sweep(QickExperiment):
         xlabel = "pump pulse length (us)"
 
         # Set up plot title
-        title = f"4WM sweep Q{self.cfg.expt.qubit[0]} (Gain {self.cfg.expt.gain_p})"
+        title = f"FWM sweep Q{self.cfg.expt.qubit[0]} (Gain {self.cfg.expt.gain_p})"
         if self.cfg.expt.checkEF:
             title = "EF " + title
 
@@ -1307,3 +1535,440 @@ class FWM_tp_sweep(QickExperiment):
             show_hist=False,
             caption_params=caption_params,  # Pass the new structured parameter list
         )
+
+
+def _efficiency_from_pe(gain_b, length_b, p_e, n_photon_per_gain,
+                        slope_lo=0.05, slope_hi=0.2, length_b_min=40.0):
+    """
+    Reduce one buffer gain/length P(e) map to a single conversion efficiency.
+
+    The buffer gain is first converted to an incident-photon probability using
+    Poisson statistics: a coherent buffer tone of gain g carries
+    n = g**2 * n_photon_per_gain photons on average, so the probability of at
+    least one photon is 1 - P(0) = 1 - exp(-n). The FWM conversion efficiency
+    is the slope of P(e) against that probability, taken in the low-occupancy
+    window [slope_lo, slope_hi] where the response is still linear.
+
+    The slope is measured independently at every buffer length and then
+    averaged over the lengths above `length_b_min`, where the conversion has
+    saturated and the slope has plateaued.
+
+    Args:
+        gain_b: 1D array of buffer gains (the inner sweep's x axis)
+        length_b: 1D array of buffer lengths (us)
+        p_e: 2D array of excited-state population, shape
+            (len(length_b), len(gain_b))
+        n_photon_per_gain: Photons per unit buffer gain squared, i.e. the
+            `nstark` calibration from Stark spectroscopy
+        slope_lo, slope_hi: 1 - P(0) window used for the linear fit
+        length_b_min: Only buffer lengths above this (us) enter the average
+
+    Returns:
+        dict with 'efficiency' (scalar), 'slopes' (per length_b) and
+        'photon_prob' (the converted gain axis)
+    """
+    gain_b = np.asarray(gain_b)
+    length_b = np.asarray(length_b)
+    p_e = np.asarray(p_e)
+
+    n_photons = gain_b**2 * n_photon_per_gain
+    photon_prob = 1 - np.exp(-n_photons)  # == 1 - poisson.pmf(0, n_photons)
+
+    idx_lo = np.argmin(np.abs(photon_prob - slope_lo))
+    idx_hi = np.argmin(np.abs(photon_prob - slope_hi))
+
+    slopes = np.full(len(length_b), np.nan)
+    if idx_hi > idx_lo:
+        for j in range(len(length_b)):
+            slopes[j] = np.polyfit(
+                photon_prob[idx_lo:idx_hi], p_e[j, idx_lo:idx_hi], 1
+            )[0]
+
+    late = length_b > length_b_min
+    fallback = not late.any()
+    if fallback:
+        # Buffer never reaches the plateau window; fall back to all lengths so
+        # a short scan still yields a number rather than a silent NaN.
+        late = np.ones(len(length_b), dtype=bool)
+
+    with np.errstate(invalid="ignore"):
+        efficiency = float(np.nanmean(slopes[late]))
+
+    return {
+        "efficiency": efficiency,
+        "slopes": slopes,
+        "photon_prob": photon_prob,
+        # True when no buffer length passed length_b_min, so `efficiency` is an
+        # average over every length rather than just the plateau.
+        "efficiency_fallback": fallback,
+    }
+
+
+def _efficiency_model(gain_p, scale, kappa_ratio, amplitude):
+    """Four-wave-mixing efficiency versus pump gain; see fit_efficiency_vs_power."""
+    cooperativity = (gain_p / scale) ** 2
+    return 4 * amplitude * cooperativity / (1 + kappa_ratio + cooperativity) ** 2
+
+
+def fit_efficiency_vs_power(gain_p, efficiency):
+    """
+    Fit conversion efficiency versus pump gain to the four-wave-mixing form.
+
+        eta = 4*A*C / (1 + kappa_i/kappa_c + C)**2,    C = (gain_p / scale)**2
+
+    The cooperativity C grows as the square of the pump amplitude, so
+    efficiency peaks at matched coupling and falls off again once the pump
+    overdrives the conversion.
+
+    Returns (popt, perr) with popt = [scale, kappa_ratio, A], or (None, None)
+    if the fit does not converge.
+    """
+    from scipy.optimize import curve_fit
+
+    gain_p = np.asarray(gain_p, dtype=float)
+    efficiency = np.asarray(efficiency, dtype=float)
+    good = np.isfinite(gain_p) & np.isfinite(efficiency)
+    if good.sum() < 4:
+        return None, None
+
+    x, y = gain_p[good], efficiency[good]
+    scale_guess = x[np.argmax(y)] * 1.7
+    if scale_guess <= 0:
+        scale_guess = float(np.max(x))
+    try:
+        popt, pcov = curve_fit(
+            _efficiency_model,
+            x,
+            y,
+            p0=[scale_guess, 0.08, np.max(y)],
+            bounds=(0, np.inf),
+        )
+    except Exception:
+        return None, None
+    return popt, np.sqrt(np.diag(pcov))
+
+
+class FWMEfficiencyVsPower(QickExperiment):
+    """
+    FWM conversion efficiency versus pump power, walking the fitted band.
+
+    At each pump power this runs a full buffer gain/length sweep
+    (`FWM_gainb_tb_sweep`) and reduces the resulting P(e) map to a single
+    efficiency number, giving efficiency as a function of pump gain.
+
+    The pump frequency is not a free axis: the pump must stay on the FWM band,
+    whose position moves with pump power. So the pump gain is stepped and the
+    matching frequency is read off the band fit that `18_fwm_power.py` stores
+    in `device.fwm`:
+
+        quadratic:         frequency_p = a * gain_p**2 + c
+        linear:            frequency_p = a * gain_p + c
+        linear_quadratic:  frequency_p = a * gain_p**2 + b * gain_p + c
+        cubic:             frequency_p = a * gain_p**3 + b * gain_p**2 + c * gain_p + d
+        quartic:           frequency_p = a * gain_p**4 + b * gain_p**3 + c * gain_p**2 + d * gain_p + e
+
+    Parameters:
+    - 'pump_gain_start', 'pump_gain_stop', 'pump_expts': the pump gain walk
+    - 'pump_power_fit', 'pump_power_fit_type': band fit, defaults from config
+    - 'n_photon_per_gain': photons per unit gain**2, defaults to
+      device.readout.nstark[qi] (written by Stark spectroscopy)
+    - 'slope_lo', 'slope_hi': 1 - P(0) window for the efficiency slope
+    - 'length_b_min': buffer lengths above this (us) enter the slope average
+    - everything else is forwarded to `FWM_gainb_tb_sweep`
+
+    Default parameters are defined in the `__init__` method.
+    """
+
+    def __init__(
+        self,
+        cfg_dict,
+        prefix="",
+        progress=True,
+        qi=0,
+        go=True,
+        params={},
+        display=True,
+        min_r2=None,
+        max_err=None,
+    ):
+        """
+        Initialize the efficiency-versus-pump-power experiment.
+
+        Args:
+            cfg_dict: Configuration dictionary
+            prefix: Prefix for data files
+            progress: Whether to show progress bar
+            qi: Qubit index
+            go: Whether to immediately run the experiment
+            params: Additional parameters to override defaults
+            display: Whether to display results
+            min_r2: Minimum R2 value for fit quality
+            max_err: Maximum error for fit quality
+        """
+        prefix = f"FWM_efficiency_vs_power_qubit{qi}"
+        super().__init__(cfg_dict=cfg_dict, prefix=prefix, progress=progress, qi=qi)
+
+        fwm_cfg = self.cfg.device.get("fwm", {})
+        nstark = self.cfg.device.readout.get("nstark", None)
+
+        params_def = {
+            # Pump power walk along the band.
+            "pump_gain_start": 0.05,
+            "pump_gain_stop": self.cfg.device.qubit.max_gain,
+            "pump_expts": 10,
+            "pump_power_fit": fwm_cfg.get("pump_power_fit", None),
+            "pump_power_fit_type": fwm_cfg.get("pump_power_fit_type", None),
+            # Efficiency reduction.
+            "n_photon_per_gain": nstark[qi] if nstark is not None else None,
+            "slope_lo": 0.05,
+            "slope_hi": 0.2,
+            "length_b_min": 40.0,
+            # Forwarded to the nested buffer gain/length sweep.
+            "start": 0.001,
+            "span": 0.2,
+            "expts": 50,
+            "length_p": 50,
+            "length_b_start": 0.1,
+            "length_b_end": 50,
+            "length_b_expts": 50,
+            "frequency_b": self.cfg.device.readout.frequency[0],
+            "reps": 1000,
+            "save_shots": False,
+        }
+        params = {**params_def, **params}
+
+        if params["pump_power_fit"] is None or params["pump_power_fit_type"] is None:
+            raise ValueError(
+                "No FWM band fit in the config. Run 18_fwm_power.py with "
+                "update() first, or pass pump_power_fit and "
+                "pump_power_fit_type explicitly."
+            )
+
+        # Build the nested buffer sweep once and retune its pump at each step,
+        # so the whole walk lands in a single data file.
+        self.expt = FWM_gainb_tb_sweep(cfg_dict, qi=qi, go=False, params=params)
+        # The nested sweep would otherwise rewrite its own file on every pump
+        # step, leaving only the last one behind; this experiment saves the
+        # full walk itself.
+        self.expt.save_interim = False
+
+        self.cfg.expt = {**self.expt.cfg.expt, **params}
+
+        if go:
+            self.run(progress=progress, display=display, min_r2=min_r2, max_err=max_err)
+
+    def _pump_points(self):
+        """Pump gains to visit and the band frequency at each, from the fit."""
+        gains = np.linspace(
+            self.cfg.expt.pump_gain_start,
+            self.cfg.expt.pump_gain_stop,
+            self.cfg.expt.pump_expts,
+        )
+        freqs = band_frequency_from_fit(
+            self.cfg.expt.pump_power_fit,
+            self.cfg.expt.pump_power_fit_type,
+            gains,
+        )
+        return gains, freqs
+
+    def _set_pump(self, gain_p, frequency_p):
+        """
+        Point the pump at one spot on the band.
+
+        The value has to reach the innermost experiment (`FWM_gainb_sweep`),
+        since that is the config the Program actually reads --
+        QickExperiment2DSimple.acquire only propagates its own y-sweep
+        variable. The middle level is set too so its display title matches.
+        """
+        for cfg in (self.expt.cfg.expt, self.expt.expt.cfg.expt):
+            cfg["gain_p"] = gain_p
+            cfg["frequency_p"] = frequency_p
+
+    def acquire(self, progress=False):
+        """
+        Walk the band, running a buffer gain/length sweep at each pump power.
+
+        Args:
+            progress: Whether to show progress bar
+
+        Returns:
+            Acquired data
+        """
+        gains, freqs = self._pump_points()
+
+        self.xlabel = "buffer gain"
+        self.ylabel = "buffer length (us)"
+
+        data = {
+            "gain_p_pts": gains,
+            "frequency_p_pts": freqs,
+            "p_e": [],
+            "length_b_pts": [],
+            "xpts": [],
+            "time": [],
+        }
+
+        for gain_p, frequency_p in zip(tqdm(gains, disable=not progress), freqs):
+            self._set_pump(gain_p, frequency_p)
+            inner = self.expt.acquire(progress=False)
+            inner = self.expt.analyze(inner, fit=False)
+
+            if "p_e" not in inner:
+                raise RuntimeError(
+                    "Nested buffer sweep produced no P(e); it must collect "
+                    "shots for the efficiency reduction to work."
+                )
+
+            data["p_e"].append(inner["p_e"])
+            data["length_b_pts"].append(inner["length_b_pts"])
+            data["xpts"].append(inner["xpts"])
+            data["time"].append(time.time())
+
+        # The buffer axes are identical at every pump power, so collapse them.
+        data["length_b_pts"] = np.array(data["length_b_pts"][0])
+        data["xpts"] = np.array(data["xpts"][0])
+        for key in ("p_e", "time", "gain_p_pts", "frequency_p_pts"):
+            data[key] = np.array(data[key])
+
+        self.data = data
+        return self.data
+
+    def analyze(self, data=None, fit=True, **kwargs):
+        """
+        Reduce each pump power's P(e) map to an efficiency, then fit the trend.
+
+        Args:
+            data: Data to analyze (if None, use self.data)
+            fit: Whether to fit efficiency versus pump gain
+            **kwargs: Unused, accepted for interface compatibility
+
+        Returns:
+            Analyzed data with 'efficiency', 'slopes', 'photon_prob' and, when
+            the fit converges, 'eff_fit' / 'eff_fit_err'
+        """
+        if data is None:
+            data = self.data
+
+        n_photon = self.cfg.expt.n_photon_per_gain
+        if n_photon is None:
+            raise ValueError(
+                "n_photon_per_gain is unset, so buffer gain cannot be "
+                "converted to photon number. Run 17_stark_spectroscopy.py with "
+                "update() to populate device.readout.nstark, or pass "
+                "n_photon_per_gain explicitly."
+            )
+
+        efficiency = np.zeros(len(data["gain_p_pts"]))
+        slopes = np.zeros((len(data["gain_p_pts"]), len(data["length_b_pts"])))
+        for i in range(len(data["gain_p_pts"])):
+            reduced = _efficiency_from_pe(
+                data["xpts"],
+                data["length_b_pts"],
+                data["p_e"][i],
+                n_photon,
+                slope_lo=self.cfg.expt.slope_lo,
+                slope_hi=self.cfg.expt.slope_hi,
+                length_b_min=self.cfg.expt.length_b_min,
+            )
+            efficiency[i] = reduced["efficiency"]
+            slopes[i] = reduced["slopes"]
+            data["photon_prob"] = reduced["photon_prob"]
+
+        data["efficiency"] = efficiency
+        data["slopes"] = slopes
+
+        best = int(np.nanargmax(efficiency)) if np.isfinite(efficiency).any() else 0
+        data["best_idx"] = best
+        print(
+            f"Peak efficiency {efficiency[best]:.4f} at pump gain "
+            f"{data['gain_p_pts'][best]:.4f}, frequency "
+            f"{data['frequency_p_pts'][best]:.3f} MHz"
+        )
+
+        if fit:
+            popt, perr = fit_efficiency_vs_power(data["gain_p_pts"], efficiency)
+            if popt is None:
+                print("Efficiency vs power fit did not converge")
+            else:
+                data["eff_fit"] = popt
+                data["eff_fit_err"] = perr
+                print(
+                    f"Efficiency fit: scale={popt[0]:.4f}, "
+                    f"kappa_i/kappa_c={popt[1]:.4f}, A={popt[2]:.4f}"
+                )
+
+        return data
+
+    def display(self, data=None, fit=True, ax=None, **kwargs):
+        """
+        Plot efficiency versus pump gain, with the per-length slopes alongside.
+
+        Args:
+            data: Data to display (if None, use self.data)
+            fit: Whether to overlay the efficiency model fit
+            ax: Sequence of two axes to plot into, or None to create a figure
+            **kwargs: Unused, accepted for interface compatibility
+        """
+        if data is None:
+            data = self.data
+
+        save_fig = ax is None
+        if save_fig:
+            fig, (ax_eff, ax_slope) = plt.subplots(1, 2, figsize=(11, 4.5))
+        else:
+            ax_eff, ax_slope = ax
+
+        gains = data["gain_p_pts"]
+        ax_eff.plot(gains, data["efficiency"], marker="o", ls="none", label="measured")
+        if fit and "eff_fit" in data:
+            dense = np.linspace(0, gains.max(), 200)
+            popt = data["eff_fit"]
+            ax_eff.plot(
+                dense,
+                _efficiency_model(dense, *popt),
+                color="red",
+                lw=1,
+                label=(
+                    r"$4\mathcal{C}/(1+\kappa_i/\kappa_c+\mathcal{C})^2$"
+                    "\n"
+                    f"scale={popt[0]:.3f}, "
+                    r"$\kappa_i/\kappa_c$="
+                    f"{popt[1]:.3f}, A={popt[2]:.3f}"
+                ),
+            )
+        ax_eff.set_xlabel("pump gain (DAC level)")
+        ax_eff.set_ylabel("efficiency")
+        ax_eff.set_xlim(left=0)
+        ax_eff.legend(fontsize="small")
+
+        # Slope versus buffer length for every pump power, so the plateau the
+        # efficiency average relies on is visible.
+        cmap = plt.get_cmap("viridis")
+        n_gain = len(gains)
+        for i, gain_p in enumerate(gains):
+            label = None
+            if i in (0, n_gain - 1):
+                label = f"{gain_p:.3f}"
+            ax_slope.plot(
+                data["length_b_pts"],
+                data["slopes"][i],
+                color=cmap(i / max(n_gain - 1, 1)),
+                lw=1,
+                label=label,
+            )
+        ax_slope.axvline(
+            self.cfg.expt.length_b_min,
+            color="grey",
+            ls="--",
+            lw=1,
+            label=f"average above {self.cfg.expt.length_b_min:g} us",
+        )
+        ax_slope.set_xlabel("buffer length (us)")
+        ax_slope.set_ylabel("slope of P(e) vs 1 - P(0)")
+        ax_slope.legend(fontsize="small", title="pump gain")
+
+        if save_fig:
+            fig.tight_layout()
+            self.save_fig(fig)
+            self.save_config()
+            plt.show()

@@ -1081,6 +1081,102 @@ def fitdecayslopesin(
     return pOpt, pCov, fitparams
 
 
+def two_decaysin(x: np.ndarray, *p) -> np.ndarray:
+    """
+    Sum of two decaying sinusoids with a shared offset.
+
+    Args:
+        x: X-axis data points
+        p: Parameters [yscale0, freq0, phase_deg0, decay0, y0, yscale1, freq1, phase_deg1, decay1]
+
+    Returns:
+        y = decaysin(x, *p[:5]) + decaysin(x, *p[5:], 0)
+    """
+    return decaysin(x, *p[:5]) + decaysin(x, *p[5:], 0)
+
+
+def fittwo_decaysin(
+    xdata: np.ndarray,
+    ydata: np.ndarray,
+    fitparams: Optional[List[float]] = None,
+    debug: bool = False,
+) -> Tuple[List[float], np.ndarray, List[float]]:
+    """
+    Fit data to a sum of two decaying sinusoids (e.g. a line split by charge parity).
+
+    The frequencies start at the two largest FFT peaks. Unless given, the
+    phases are tried on a 60 degree grid and the lowest-residual fit is kept.
+
+    Args:
+        xdata: X-axis data points
+        ydata: Y-axis data points
+        fitparams: Optional initial parameters
+            [yscale0, freq0, phase_deg0, decay0, y0, yscale1, freq1, phase_deg1, decay1]
+        debug: Unused, for signature compatibility with the other fitters
+
+    Returns:
+        Tuple of (optimized_parameters, covariance_matrix, initial_parameters)
+    """
+    if fitparams is None:
+        fitparams = [None] * 9
+
+    # Two largest peaks of the zero-padded, windowed spectrum
+    n_pad = 8 * len(ydata)
+    spectrum = np.abs(
+        np.fft.rfft((ydata - np.mean(ydata)) * np.hanning(len(ydata)), n_pad)
+    )
+    freqs = np.fft.rfftfreq(n_pad, d=xdata[1] - xdata[0])
+    peaks = [
+        i
+        for i in range(1, len(spectrum) - 1)
+        if spectrum[i] > spectrum[i - 1] and spectrum[i] > spectrum[i + 1]
+    ]
+    freq0, freq1 = freqs[sorted(peaks, key=lambda i: -spectrum[i])[:2]]
+
+    defaults = [
+        (max(ydata) - min(ydata)) / 4,  # yscale0
+        freq0,
+        None,  # phase_deg0, from the grid
+        (max(xdata) - min(xdata)) / 2,  # decay0
+        np.mean(ydata),  # y0
+        (max(ydata) - min(ydata)) / 4,  # yscale1
+        freq1,
+        None,  # phase_deg1, from the grid
+        (max(xdata) - min(xdata)) / 2,  # decay1
+    ]
+    fitparams = [d if p is None else p for p, d in zip(fitparams, defaults)]
+    phase_grid = np.arange(0, 360, 60)
+    phases0 = [fitparams[2]] if fitparams[2] is not None else phase_grid
+    phases1 = [fitparams[7]] if fitparams[7] is not None else phase_grid
+
+    # Frequencies capped at Nyquist: above it they alias onto the same samples
+    nyquist = 0.5 / (xdata[1] - xdata[0])
+    bounds = (
+        [-np.inf, 0, -np.inf, 0.05, -np.inf, -np.inf, 0, -np.inf, 0.05],
+        [np.inf, nyquist, np.inf, np.inf, np.inf, np.inf, nyquist, np.inf, np.inf],
+    )
+
+    best = None
+    for phase0 in phases0:
+        for phase1 in phases1:
+            p0 = list(fitparams)
+            p0[2], p0[7] = phase0, phase1
+            try:
+                pOpt, pCov = sp.optimize.curve_fit(
+                    two_decaysin, xdata, ydata, p0=p0, bounds=bounds
+                )
+            except RuntimeError:
+                continue
+            resid = np.sum((ydata - two_decaysin(xdata, *pOpt)) ** 2)
+            if best is None or resid < best[0]:
+                best = (resid, pOpt, pCov, p0)
+
+    if best is None:
+        print("Warning: Fit two decaying sines failed!")
+        return [np.nan] * 9, np.full((9, 9), np.inf), fitparams
+    return best[1], best[2], best[3]
+
+
 def twofreq_decaysin(x: np.ndarray, *p) -> np.ndarray:
     """
     Two-frequency decaying sinusoidal function.
@@ -1703,3 +1799,144 @@ def flux_converter_from_config(cfg_flux, cfg_qubit, qi, direction="pos"):
         if a != 0 or b != 0:
             return QuadraticFluxConverter(a, b, c, direction)
     return None
+
+
+# ====================================================== #
+# f0-g1 Rabi with resonator loss
+# ====================================================== #
+
+
+def f0g1_rabi_func(x: np.ndarray, *p) -> np.ndarray:
+    """
+    |f> population during an f0-g1 Rabi, including resonator decay.
+
+    Equation C2 of Magnard et al., arXiv:1801.07689. The two-level system
+    {|f,0>, |g,1>} with coupling g~ and loss kappa out of |g,1> is described by
+    the non-Hermitian Hamiltonian H = [[0, g~], [g~, i*kappa/2]], giving
+
+        Pf(t) = exp(-kappa*t/2) * |cosh(W*t/2) + kappa/(2W) * sinh(W*t/2)|^2
+        W     = sqrt(kappa^2/4 - (2*g~)^2)
+
+    W is real (overdamped, a pure decay) or imaginary (underdamped, a damped
+    oscillation) depending on whether 2*g~ exceeds kappa/2, so the complex
+    square root covers both regimes with one expression. That is why this model
+    is needed at all rather than a decaying sine: the reset's kappa/3 plateau
+    lives in the overdamped regime, where there is no oscillation frequency for
+    a sine fit to read g~ off.
+
+    The transmon decay gamma_ef of the paper's Eq. C2 is dropped. It enters only
+    as (kappa - gamma) and (kappa + gamma), and gamma_ef = 1/T1_ef is of order
+    0.04/us against kappa ~ 7/us on this device -- a 0.5% correction, far below
+    the scatter on g~.
+
+    Args:
+        x: pulse duration (us)
+        p: Parameters [g_tilde, kappa, amp, y0, t0], with g_tilde and kappa as
+           nu = omega/2*pi in MHz (matching how every rate in the configs is
+           stored), amp and y0 the readout scale and offset, and t0 a time
+           offset absorbing the flat-top ramps.
+
+    Returns:
+        y = amp * Pf(x - t0) + y0
+    """
+    g_tilde, kappa, amp, y0, t0 = p
+
+    # Angular rates for the dynamics; the arguments are nu = omega/2pi.
+    k = 2 * np.pi * kappa
+    g = 2 * np.pi * g_tilde
+
+    # Clamp before t0 rather than letting Pf grow backwards, which is
+    # unphysical and something a least-squares fit will happily exploit.
+    t = np.maximum(np.asarray(x, dtype=float) - t0, 0.0)
+
+    # Complex sqrt covers both damping regimes; the epsilon keeps the
+    # critically damped point (2*g == k/2) from dividing by zero, where the
+    # limit of kappa/(2W)*sinh(W*t/2) is kappa*t/4 anyway.
+    W = np.sqrt(complex(k**2 / 4 - (2 * g) ** 2)) + 1e-12
+    val = np.cosh(W * t / 2) + (k / (2 * W)) * np.sinh(W * t / 2)
+    pf = np.exp(-k * t / 2) * np.abs(val) ** 2
+
+    return amp * pf + y0
+
+
+def fit_f0g1_rabi(
+    xdata: np.ndarray,
+    ydata: np.ndarray,
+    fitparams: Optional[List[float]] = None,
+) -> Tuple[List[float], np.ndarray, List[float]]:
+    """
+    Fit an f0-g1 Rabi trace to f0g1_rabi_func, returning g~ and kappa.
+
+    Seeding is a coarse grid search over g_tilde rather than an FFT peak,
+    because the interesting regime is overdamped: there is no peak to find, and
+    an FFT seed there lands on noise. The grid holds kappa at a decay-time
+    estimate and the linear parameters at their endpoint values, which is
+    enough to get curve_fit into the right basin.
+
+    Args:
+        xdata: pulse durations (us)
+        ydata: measured signal
+        fitparams: optional initial [g_tilde, kappa, amp, y0, t0]
+
+    Returns:
+        Tuple of (optimized_parameters, covariance_matrix, initial_parameters)
+    """
+    xdata = np.asarray(xdata, dtype=float)
+    ydata = np.asarray(ydata, dtype=float)
+    span = float(xdata.max() - xdata.min())
+
+    if fitparams is None:
+        fitparams = [None] * 5
+
+    # amp/y0 from the endpoints: Pf runs 1 -> 0, so the signal runs amp+y0 ->
+    # y0. Either sign of amp is allowed, so this works for both readout
+    # polarities.
+    y_start = float(np.mean(ydata[: max(1, len(ydata) // 10)]))
+    y_end = float(np.mean(ydata[-max(1, len(ydata) // 10):]))
+    if fitparams[2] is None:
+        fitparams[2] = y_start - y_end
+    if fitparams[3] is None:
+        fitparams[3] = y_end
+    if fitparams[4] is None:
+        fitparams[4] = 0.0
+
+    # kappa from where |signal - final| has fallen to 1/e of its initial value.
+    if fitparams[1] is None:
+        env = np.abs(ydata - y_end)
+        if env[0] > 0:
+            below = np.flatnonzero(env < env[0] / np.e)
+            tau = float(xdata[below[0]] - xdata[0]) if len(below) else span / 2
+        else:
+            tau = span / 2
+        tau = max(tau, span / len(xdata))
+        # Pf decays as exp(-kappa_ang*t/2), so kappa_ang = 2/tau.
+        fitparams[1] = 2 / tau / (2 * np.pi)
+
+    # Coarse grid over g_tilde, keeping everything else at the seeds above.
+    if fitparams[0] is None:
+        best, best_resid = 1 / (4 * max(span, 1e-9)), np.inf
+        for g_try in np.logspace(np.log10(0.02), np.log10(20.0), 60):
+            trial = [g_try, fitparams[1], fitparams[2], fitparams[3], fitparams[4]]
+            resid = np.sum((ydata - f0g1_rabi_func(xdata, *trial)) ** 2)
+            if resid < best_resid:
+                best, best_resid = g_try, resid
+        fitparams[0] = best
+
+    amp_seed = fitparams[2] if fitparams[2] != 0 else 1.0
+    bounds = (
+        [1e-3, 1e-3, -10 * abs(amp_seed), np.min(ydata) - abs(amp_seed),
+         -span / 5],
+        [50.0, 500.0, 10 * abs(amp_seed), np.max(ydata) + abs(amp_seed),
+         span / 5],
+    )
+
+    fitparams = validate_bounds(fitparams, bounds)
+
+    return generic_fit(
+        f0g1_rabi_func,
+        xdata,
+        ydata,
+        fitparams,
+        bounds=bounds,
+        error_message="Warning: Fit f0-g1 Rabi failed!",
+    )

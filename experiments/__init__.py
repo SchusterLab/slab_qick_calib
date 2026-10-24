@@ -23,7 +23,6 @@ def import_modules_from_files(module_path, f):
     if f[0] != "_" and f[0] != ".":
         module_name = module_path + "." + f.split(".")[0]
         m = importlib.import_module(module_name)
-        print("imported", module_name)
         for name, obj in inspect.getmembers(m):
             if inspect.isclass(obj):
                 setattr(thismodule, name, getattr(m, name))
@@ -34,8 +33,6 @@ def import_modules_from_files(module_path, f):
 
 path = Path(__path__[0])
 thismodule = sys.modules[__name__]
-print(thismodule)
-print(path)
 files = [f.name for f in path.iterdir() if not f.name.endswith(".ini")]
 module_path = __name__
 # Import general first so that it can be a superclass
@@ -47,7 +44,6 @@ for subf in subfiles:
 
 for f in files:
     fpath = path / f
-    print(fpath)
     if f[0] == "_" or f[0] == "." or f == "general":
         continue
     if fpath.is_dir():

@@ -103,7 +103,7 @@ from slab_qick_calib.exp_handling.instrumentmanager import InstrumentManager
     - `t2.py`: Measures phase coherence time (Ramsey and Echo)
     - `t2_ramsey_stark.py`: Ramsey T2 with Stark shifts
     - `tof_calibration.py`: Calibrates time of flight for readout
-    - `4WM_sweeps.py`, `qubit_spec_shot.py`, `qubit_buffer_spec_shot.py`, `photon_number_splitting.py`: Four-wave mixing and photon-number experiments (work in progress)
+    - `FWM_sweeps.py`, `qubit_spec_shot.py`, `qubit_buffer_spec_shot.py`, `photon_number_splitting.py`: Four-wave mixing and photon-number experiments (work in progress)
   - `two_qubit/`: Two qubit experiments
     - `rabi_2q.py`: Two-qubit Rabi oscillations
     - `t1_2q.py`: Two-qubit T1 measurements

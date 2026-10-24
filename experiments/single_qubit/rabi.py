@@ -24,7 +24,7 @@ from ..general.qick_experiment import (
     QickExperiment,
     QickExperiment2DSimple
 )
-from ..general.qick_program import QickProgram
+from ..general.qick_program import QickProgram, reset_mode_of, reset_plays_pi_pulses
 
 from ...exp_handling.datamanagement import AttrDict
 from ...helpers import config
@@ -76,9 +76,14 @@ class RabiProgram(QickProgram):
         pulse_params = self._get_pulse_params(cfg)
         super().make_pulse(pulse_params, "qubit_pulse")
 
-        # If checking EF transition and using ge pulse, create a pi pulse
-        if (cfg.expt.checkEF and cfg.expt.pulse_ge) or cfg.expt.active_reset:
+        # pi_ge is needed whenever checking EF/FH (shelving fires regardless of
+        # pulse_ge -- only the prep step is conditional on it), or for a reset
+        if cfg.expt.checkEF or cfg.expt.checkFH or reset_plays_pi_pulses(cfg.expt):
             super().make_cfg_pulse(q, cfg.device.qubit.f_ge, "pi_ge")
+
+        # FH also needs a pi_ef pulse for the g->e->f prep chain and the shelving step
+        if cfg.expt.checkFH or cfg.expt.reset_f:
+            super().make_cfg_pulse(q, cfg.device.qubit.f_ef, "pi_ef")
 
 
     def _get_pulse_params(self, cfg):
@@ -124,8 +129,13 @@ class RabiProgram(QickProgram):
         if self.adc_type == "dyn":
             self.send_readoutconfig(ch=self.adc_ch, name="readout", t=0)
 
-        # If checking EF transition with ge pulse, apply first pi pulse
-        if cfg.expt.checkEF and cfg.expt.pulse_ge:
+        # Prep: FH needs the full g->e->f chain, EF just needs g->e
+        if cfg.expt.checkFH and cfg.expt.pulse_ge:
+            self.pulse(ch=self.qubit_ch, name="pi_ge", t=0)
+            self.delay_auto(t=0.01, tag="wait fh prep1")
+            self.pulse(ch=self.qubit_ch, name="pi_ef", t=0)
+            self.delay_auto(t=0.01, tag="wait fh prep2")
+        elif cfg.expt.checkEF and cfg.expt.pulse_ge:
             self.pulse(ch=self.qubit_ch, name="pi_ge", t=0)
             self.delay_auto(t=0.01, tag="wait ef")
 
@@ -135,8 +145,19 @@ class RabiProgram(QickProgram):
             if i < cfg.expt.n_pulses - 1:  # Don't add delay after last pulse
                 self.delay_auto(t=0.01)
 
-        # If checking EF transition with ge pulse, apply second pi pulse
-        if cfg.expt.checkEF and cfg.expt.pulse_ge:
+        # Shelve back toward g: FH shelves f->e->g (leaving anything in h untouched),
+        # EF shelves e->g directly, so the readout only ever needs g-vs-"not g".
+        # Fires regardless of pulse_ge -- with no prep, this converts the tiny
+        # thermal e/f (or f/h) population onto the well-resolved g-vs-f (or
+        # g-vs-h) contrast scale instead of the marginal e-vs-f one, and the
+        # untouched, dominant ground population just becomes a constant offset
+        # that curve-fitting ignores.
+        if cfg.expt.checkFH:
+            self.delay_auto(t=0.01, tag="wait fh shelve1")
+            self.pulse(ch=self.qubit_ch, name="pi_ef", t=0)
+            self.delay_auto(t=0.01, tag="wait fh shelve2")
+            self.pulse(ch=self.qubit_ch, name="pi_ge", t=0)
+        elif cfg.expt.checkEF:
             self.delay_auto(t=0.01, tag="wait ef 2")
             self.pulse(ch=self.qubit_ch, name="pi_ge", t=0)
 
@@ -165,6 +186,8 @@ class RabiExperiment(QickExperiment):
     - 'sigma': Standard deviation of the Gaussian pulse (default: cfg pip pulse sigma)
     - 'max_length': Maximum length used in length sweep (if specified, used instead of sigma)
     - 'checkEF': Boolean flag to check EF interaction (default: False)
+    - 'checkFH': Boolean flag to check FH interaction; drives f-h with a g->e->f prep
+      chain and shelves back to g afterward (default: False)
     - 'pulse_ge': Boolean flag to indicate if pulse is for ground to excited state transition (default: True)
     - 'start': Starting point for the experiment, either in time or gain (default: as close to 0 as is linear/allowed)
     - 'step': Step size for the gain (calculated as int(params['gain']/params['expts']))
@@ -176,7 +199,7 @@ class RabiExperiment(QickExperiment):
     - 'freq': Frequency of the qubit pulse (default: self.cfg.device.qubit.f_ge[qi])
     - 'num_osc': Try to set max gain or length for this number of oscillations (default: 2.5)
     - 'n_pulses': Number of Rabi pulses to apply (default: 1)
-    - 'active_reset': If True, uses active reset (default: from `cfg.device.readout.active_reset[qi]`)
+    - 'reset_mode': "passive" (default), "active" or "f0g1" (see reset_mode_of)
     - 'loop': If True, uses loop-based acquisition (default: False)
     - 'temp': Temperature parameter for temperature-dependent measurements (default: 40)
     """
@@ -212,11 +235,32 @@ class RabiExperiment(QickExperiment):
             "reps": self.reps,
             "rounds": self.rounds,
             "checkEF": False,
+            "checkFH": False,
             "pulse_ge": True,
             "num_osc": 2.5,
             "n_pulses": 1,
             "sweep": "amp",
-            "active_reset": self.cfg.device.readout.active_reset[qi],
+            "reset_mode": "passive",  # "passive" | "active" | "f0g1"
+            # Active reset. QickProgram.reset() plays up to `reset`
+            # conditional pi pulses; setup_reset keeps the long passive
+            # inter-shot delay so a reset that is not working is still safe.
+            "reset": self.cfg.device.readout.reset[qi],
+            "setup_reset": False,
+            # Calibration only: re-measure after the final pi pulse so the
+            # last recorded round is the true post-reset state. Costs one
+            # readout per shot and nothing acts on it, so leave it off in use.
+            "reset_verify": False,
+            # Add a pi_ef ahead of each pi_ge, for sequences that can leave
+            # population in |f>. Needs reset >= 2: |f> clears in one round but
+            # |e> is driven to |f> first and clears on the next.
+            "reset_f": False,
+            # "while excited" semantics at a fixed trip count: once a round
+            # reads ground, a latch suppresses every later pi pulse. Measures
+            # every round, so the trigger count stays fixed.
+            "reset_latch": False,
+            # Mean rounds the while loop takes, for the cycle-time estimate
+            # only; `reset` is its hard cap. See CLAUDE.md.
+            "reset_while_typical": 1,
             "qubit": [qi],
             "qubit_chan": self.cfg.hw.soc.adcs.readout.ch[qi],
             "loop": False,
@@ -229,13 +273,24 @@ class RabiExperiment(QickExperiment):
         elif style == "fast":
             params_def["expts"] = 25
         elif style == "temp":
-            # Special configuration for temperature-dependent measurements
+            # Special configuration for temperature-dependent measurements.
+            # Same formula for checkEF and checkFH -- no extra FH-specific boost
+            # here, since the no-pulse/thermal run's actual population isn't
+            # assumed to be tiny (may be heavily populated for F).
             params_def["reps"] = int(40 * params_def["reps"])
             params_def["rounds"] = int(
                 np.ceil(20 * params_def["rounds"] * np.exp( 2*(40 / params.get("temp", 40)-1)))
             )
             params_def["pulse_ge"] = False
-        
+
+        # FH's full-contrast run (pulse_ge=True) does g->e->f prep AND f->e->g
+        # shelving -- twice as many pulses as EF's single prep/shelve pair -- so
+        # give it more averaging too, independent of style (style="temp" only
+        # covers the no-pulse/thermal run above, which has pulse_ge=False).
+        if params.get("checkFH") and params.get("pulse_ge", True):
+            params_def["reps"] = int(3 * params_def["reps"])
+            params_def["rounds"] = int(3 * params_def["rounds"])
+
         params = {**params_def, **params}
         
         # Configure pulse parameters based on transition type
@@ -263,7 +318,9 @@ class RabiExperiment(QickExperiment):
 
     def _generate_prefix(self, params, qi):
         """Generate experiment prefix based on parameters."""
-        if "checkEF" in params and params["checkEF"]:
+        if "checkFH" in params and params["checkFH"]:
+            ef = "fh_" if params.get("pulse_ge", True) else "fh_no_gef_"
+        elif "checkEF" in params and params["checkEF"]:
             ef = "ef_" if params.get("pulse_ge", True) else "ef_no_ge_"
         else:
             ef = ""
@@ -275,21 +332,42 @@ class RabiExperiment(QickExperiment):
 
     def _configure_pulse_params(self, params, params_def, qi):
         """Configure pulse parameters based on transition type."""
-        if params["checkEF"]:
+        if params.get("checkFH"):
+            # No pi_fh calibrated yet -- reuse pi_ef's pulse shape as a starting guess
+            pulse_config = self.cfg.device.qubit.pulses.pi_ef
+            params_def["freq"] = self.cfg.device.qubit.f_fh[qi]
+        elif params["checkEF"]:
             pulse_config = self.cfg.device.qubit.pulses.pi_ef
             params_def["freq"] = self.cfg.device.qubit.f_ef[qi]
         else:
             pulse_config = self.cfg.device.qubit.pulses.pi_ge
             params_def["freq"] = self.cfg.device.qubit.f_ge[qi]
         
-        # Copy pulse parameters from device config
+        # Copy pulse parameters from device config. Populated unconditionally:
+        # params_def is the defaults dict and every later merge is
+        # {**params_def, **params}, so a caller's value still wins. Skipping
+        # keys the caller supplied left params_def incomplete, which raised
+        # KeyError on "type" below and made check_params report those keys as
+        # unexpected.
         for key in pulse_config:
-            if key not in params:  # Don't override user-provided parameters
-                params_def[key] = pulse_config[key][qi]
+            params_def[key] = pulse_config[key][qi]
 
-        # Handle pulse_type parameter as alias for type
-
+        # "type" and "pulse_type" are aliases: the Program, _configure_sweep_params
+        # and acquire() read pulse_type, while the prefix and display labels read
+        # type. Default both from the config, then let whichever one the caller
+        # supplied set the other, so they cannot disagree.
         params_def["pulse_type"] = params_def["type"]
+        if "type" in params and "pulse_type" in params:
+            if params["type"] != params["pulse_type"]:
+                raise ValueError(
+                    f"type={params['type']!r} and pulse_type="
+                    f"{params['pulse_type']!r} are aliases and must agree"
+                )
+        elif "type" in params:
+            params["pulse_type"] = params["type"]
+        elif "pulse_type" in params:
+            params["type"] = params["pulse_type"]
+
         params = {**params_def, **params}
 
         # Resolve length from pulse type so downstream code can use direct access
@@ -298,6 +376,7 @@ class RabiExperiment(QickExperiment):
                 params["length"] = params["sigma"] * params["sigma_inc"]
             else:
                 params["length"] = params["sigma"]
+        params_def["length"] = params["length"]
 
         # Resolve flat_top ramp defaults
         if params["pulse_type"] == "flat_top":
@@ -305,6 +384,8 @@ class RabiExperiment(QickExperiment):
                 params["ramp_sigma"] = 0.02
             if "ramp_sigma_inc" not in params:
                 params["ramp_sigma_inc"] = 3
+            params_def["ramp_sigma"] = params["ramp_sigma"]
+            params_def["ramp_sigma_inc"] = params["ramp_sigma_inc"]
 
         return params
         
@@ -589,7 +670,27 @@ class ReadoutCheck(QickExperiment):
             "rounds": self.rounds,
             "checkEF": False,
             "pulse_ge": True,
-            "active_reset": self.cfg.device.readout.active_reset[qi],
+            "reset_mode": "passive",  # "passive" | "active" | "f0g1"
+            # Active reset. QickProgram.reset() plays up to `reset`
+            # conditional pi pulses; setup_reset keeps the long passive
+            # inter-shot delay so a reset that is not working is still safe.
+            "reset": self.cfg.device.readout.reset[qi],
+            "setup_reset": False,
+            # Calibration only: re-measure after the final pi pulse so the
+            # last recorded round is the true post-reset state. Costs one
+            # readout per shot and nothing acts on it, so leave it off in use.
+            "reset_verify": False,
+            # Add a pi_ef ahead of each pi_ge, for sequences that can leave
+            # population in |f>. Needs reset >= 2: |f> clears in one round but
+            # |e> is driven to |f> first and clears on the next.
+            "reset_f": False,
+            # "while excited" semantics at a fixed trip count: once a round
+            # reads ground, a latch suppresses every later pi pulse. Measures
+            # every round, so the trigger count stays fixed.
+            "reset_latch": False,
+            # Mean rounds the while loop takes, for the cycle-time estimate
+            # only; `reset` is its hard cap. See CLAUDE.md.
+            "reset_while_typical": 1,
             "qubit": [qi],
             "qubit_chan": self.cfg.hw.soc.adcs.readout.ch[qi],
             "df": 50,
@@ -620,7 +721,7 @@ class ReadoutCheck(QickExperiment):
 
         # Check parameters and configure reset if needed
         super().check_params(params_def)
-        if self.cfg.expt.active_reset:
+        if reset_mode_of(self.cfg.expt) != "passive":
             super().configure_reset()
 
         # Run the experiment if requested

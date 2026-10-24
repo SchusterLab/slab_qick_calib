@@ -6,7 +6,7 @@ from ...calib import readout_helpers as helpers
 
 from ...exp_handling.datamanagement import AttrDict
 from ..general.qick_experiment import QickExperiment, QickExperiment2DSimple
-from ..general.qick_program import QickProgram
+from ..general.qick_program import QickProgram, pulse_type_from_config
 
 from ...analysis import fitting as fitter
 FIT_FUNC = fitter.lorfunc
@@ -82,9 +82,14 @@ class QubitBufferSpecShotProgram(QickProgram):
         self.add_loop("freq_loop", cfg.expt.expts)
         self.add_loop("freq_b_loop", cfg.expt.expts_b)
 
-        # If checking EF transition, create a pi pulse for |g>-|e> transition
-        if cfg.expt.checkEF:
+        # If checking EF transition, create a pi pulse for |g>-|e> transition.
+        # pi_ge is also what QickProgram.reset() plays, so it has to be
+        # declared whenever active reset is on.
+        if cfg.expt.checkEF or cfg.expt.active_reset:
             super().make_cfg_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
+        # reset_f plays pi_ef ahead of each pi_ge, so it needs the pulse too.
+        if cfg.expt.reset_f:
+            super().make_cfg_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ef, "pi_ef")
 
     def _body(self, cfg):
         """
@@ -259,15 +264,36 @@ class QubitBufferSpecShot(QickExperiment):
             "final_delay": 10,
             "length_p": 10,
             "readout_length": self.cfg.device.readout.readout_length[qi],
-            "pulse_type_p": "const",
+            "pulse_type_p": pulse_type_from_config(self.cfg.device.get("fwm"), "pump_pulse_type"),
             "gain_b": params_def['gain_p'],
             "length_b": 10,
-            "pulse_type_b": "const",
+            "pulse_type_b": pulse_type_from_config(self.cfg.device.get("fwm"), "buffer_pulse_type"),
             "checkEF": False,
             "qubit": [qi],
             "qubit_chan": self.cfg.hw.soc.adcs.readout.ch[qi],
             "sep_readout": True,
+            # Active reset. QickProgram.measure() reads active_reset, and
+            # QickProgram.reset() then plays up to `reset` conditional pi
+            # pulses. setup_reset keeps the long passive inter-shot delay so
+            # a reset that is not working cannot quietly corrupt the data.
             "active_reset": False,
+            "reset": self.cfg.device.readout.reset[qi],
+            "setup_reset": False,
+            # Calibration only: re-measure after the final pi pulse so the
+            # last recorded round is the true post-reset state. Costs one
+            # readout per shot and nothing acts on it, so leave it off in use.
+            "reset_verify": False,
+            # Add a pi_ef ahead of each pi_ge, for sequences that can leave
+            # population in |f>. Needs reset >= 2: |f> clears in one round but
+            # |e> is driven to |f> first and clears on the next.
+            "reset_f": False,
+            # "while excited" semantics at a fixed trip count: once a round
+            # reads ground, a latch suppresses every later pi pulse. Measures
+            # every round, so the trigger count stays fixed.
+            "reset_latch": False,
+            # Mean rounds the while loop takes, for the cycle-time estimate
+            # only; `reset` is its hard cap. See CLAUDE.md.
+            "reset_while_typical": 1,
         }
         params_def = {**params_def2, **params_def}
 
@@ -308,6 +334,13 @@ class QubitBufferSpecShot(QickExperiment):
 
         # Check for unexpected parameters
         super().check_params(params_def)
+
+        # configure_reset() derives threshold / read_wait / extra_delay from
+        # device.readout, which QickProgram.reset() needs. It runs after
+        # check_params so those derived keys are not reported as unexpected,
+        # and here rather than in qubit_run() because the scripts use go=False.
+        if self.cfg.expt.active_reset:
+            super().configure_reset()
 
         if print:
             super().print()

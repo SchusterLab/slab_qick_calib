@@ -27,7 +27,8 @@ from ...analysis import fitting as fitter
 from ...exp_handling.datamanagement import AttrDict
 from ..general.qick_experiment import QickExperiment, QickExperiment2DSimple
 from ..general.qick_flux_experiment import QickFluxSweep
-from ..general.qick_program import QickProgram
+from ..general.qick_program import QickProgram, reset_mode_of, pulse_type_from_config
+from .qubit_spec_shot import band_frequency_from_fit, band_gain_from_fit
 
 FIT_FUNC = fitter.expfunc
 FITTER_FUNC = fitter.fitexp
@@ -44,7 +45,8 @@ class T1Program(QickProgram):
     2. Wait for a variable time (the wait_time parameter)
     3. Measure the qubit state
 
-    Optional AC Stark shift can be applied during the wait time.
+    Optional AC Stark shift, flux pulse, or FWM pump can be applied during the
+    wait time.
     """
 
     def __init__(self, soccfg, final_delay, cfg):
@@ -74,6 +76,10 @@ class T1Program(QickProgram):
 
         # Create a π pulse to excite the qubit from |0⟩ to |1⟩
         super().make_cfg_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
+
+        # Optionally create an e-f π pulse to apply just before readout
+        if cfg.expt.pulse_ef or cfg.expt.reset_f:
+            super().make_cfg_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ef, "pi_ef")
 
         # If AC Stark shift is enabled, create a constant pulse to apply during wait time
         if cfg.expt.acStark:
@@ -108,6 +114,21 @@ class T1Program(QickProgram):
                     "type": 'const'
                 }
                 super().make_pulse(neg_pulse, "neg_flux_pulse")
+        elif cfg.expt.pump:
+            # FWM pump held on for the whole wait. Goes on the pump line,
+            # which is the qubit channel unless hw.soc.dacs.pump says otherwise;
+            # QickProgram._initialize has already declared that generator.
+            pulse = {
+                "chan": self.pump_ch,
+                "freq": cfg.expt.frequency_p,
+                "phase": 0,
+                "gain": cfg.expt.gain_p,
+                # For flat_top this is the flat part; make_pulse's default
+                # ramps (the same as the FWM experiments') add to it.
+                "length": cfg.expt.wait_time,
+                "type": cfg.expt.pulse_type_p,
+            }
+            super().make_pulse(pulse, "pump_pulse")
 
     def _body(self, cfg):
         """
@@ -129,6 +150,11 @@ class T1Program(QickProgram):
         # Apply π pulse to excite qubit from |0⟩ to |1⟩
         self.pulse(ch=self.qubit_ch, name="pi_ge", t=0)
 
+        # Optionally apply an e-f π pulse to prepare |f⟩ before the wait
+        # (so the wait measures relaxation of the f state)
+        if cfg.expt.pulse_ef:
+            self.pulse(ch=self.qubit_ch, name="pi_ef", t=0)
+
         # Handle wait time with or without AC Stark shift
         if cfg.expt.acStark:
             # Small buffer delay before AC Stark pulse
@@ -144,6 +170,11 @@ class T1Program(QickProgram):
             self.pulse(ch=cfg.expt.flux_chan, name="flux_pulse", t=0)
             # Small buffer delay after flux pulse
             self.delay_auto(t=cfg.expt.flux_readout_wait, tag="wait")
+        elif cfg.expt.pump:
+            self.delay_auto(t=0.01, tag="wait_pump")
+            # Pump on for the whole wait time
+            self.pulse(ch=self.pump_ch, name="pump_pulse", t=0)
+            self.delay_auto(t=cfg.expt.pump_readout_wait, tag="wait")
         else:
             # Simple delay for standard T1 measurement
             self.delay_auto(t=cfg.expt["wait_time"] + 0.03, tag="wait")
@@ -175,7 +206,12 @@ class T1Experiment(QickExperiment):
         - qubit (int): The index of the qubit being used in the experiment.
         - qubit_chan (int): The channel of the qubit being read out.
         - acStark (bool): Whether to apply AC Stark shift during wait time
-        - active_reset (bool): Whether to use active qubit reset
+        - pump (bool): Whether to hold the FWM pump on during the wait time.
+          Give frequency_p or gain_p and the other is taken from
+          device.fwm.pump_power_fit; give both to sit off the band.
+          pump_readout_wait is the gap between the pump turning off and readout.
+          pulse_type_p is "flat_top" (default) or "const".
+        - reset_mode (str): "passive", "active" or "f0g1" (see reset_mode_of)
 
     Default values are defined in the `params_def` dictionary in the __init__ function.
     The default values are:
@@ -185,7 +221,7 @@ class T1Experiment(QickExperiment):
         - start (float): 0
         - span (float): 3.7 * self.cfg.device.qubit.T1[qi]
         - acStark (bool): False
-        - active_reset (bool): self.cfg.device.readout.active_reset[qi]
+        - reset_mode (str): "passive"
         - qubit (list): [qi]
         - qubit_chan (int): self.cfg.hw.soc.adcs.readout.ch[qi]
     """
@@ -247,15 +283,45 @@ class T1Experiment(QickExperiment):
                 qi
             ],  # Total span of wait times (μs), set to ~3.7*T1
             "acStark": False,  # Whether to apply AC Stark shift
-            "active_reset": self.cfg.device.readout.active_reset[
-                qi
-            ],  # Use active qubit reset
+            "reset_mode": "passive",  # "passive" | "active" | "f0g1"
+            # Active reset. QickProgram.reset() plays up to `reset`
+            # conditional pi pulses; setup_reset keeps the long passive
+            # inter-shot delay so a reset that is not working is still safe.
+            "reset": self.cfg.device.readout.reset[qi],
+            "setup_reset": False,
+            # Calibration only: re-measure after the final pi pulse so the
+            # last recorded round is the true post-reset state. Costs one
+            # readout per shot and nothing acts on it, so leave it off in use.
+            "reset_verify": False,
+            # Add a pi_ef ahead of each pi_ge, for sequences that can leave
+            # population in |f>. Needs reset >= 2: |f> clears in one round but
+            # |e> is driven to |f> first and clears on the next.
+            "reset_f": False,
+            # "while excited" semantics at a fixed trip count: once a round
+            # reads ground, a latch suppresses every later pi pulse. Measures
+            # every round, so the trigger count stays fixed.
+            "reset_latch": False,
+            # Mean rounds the while loop takes, for the cycle-time estimate
+            # only; `reset` is its hard cap. See CLAUDE.md.
+            "reset_while_typical": 1,
             "qubit": [qi],  # Qubit index as a list
             "qubit_chan": self.cfg.hw.soc.adcs.readout.ch[
                 qi
             ],  # Readout channel for this qubit
             "flux": False, # Whether to apply flux pulse during wait time
+            "pulse_ef": False, # Add an e-f pi pulse after pi_ge to prepare |f> (T1 of the f state)
+            "pump": False, # Whether to apply the FWM pump during wait time
         }
+        if params.get("pump", False):
+            # Give one of frequency_p / gain_p and the other is read off
+            # device.fwm.pump_power_fit; give both to sit off the band.
+            pump_params = {
+                "frequency_p": None,
+                "gain_p": None,
+                "pump_readout_wait": 0.01,
+                "pulse_type_p": pulse_type_from_config(self.cfg.device.get("fwm"), "pump_pulse_type"),  # "flat_top" or "const"
+            }
+            params_def = {**params_def, **pump_params}
         if params.get("flux", False):
             flux_params = {
                 "flux_chan": self.cfg.hw.soc.dacs.flux.ch[qi],
@@ -277,6 +343,23 @@ class T1Experiment(QickExperiment):
         # Merge default parameters with user-provided parameters
         self.cfg.expt = {**params_def, **params}
         super().check_params(params_def)
+        if self.cfg.expt.pump:
+            fwm = self.cfg.device.fwm
+            if self.cfg.expt.frequency_p is None and self.cfg.expt.gain_p is None:
+                raise ValueError("pump=True needs frequency_p or gain_p (or both).")
+            if self.cfg.expt.gain_p is None:
+                self.cfg.expt.gain_p = band_gain_from_fit(
+                    fwm.pump_power_fit, fwm.pump_power_fit_type, self.cfg.expt.frequency_p
+                )
+            elif self.cfg.expt.frequency_p is None:
+                self.cfg.expt.frequency_p = band_frequency_from_fit(
+                    fwm.pump_power_fit, fwm.pump_power_fit_type, self.cfg.expt.gain_p
+                )
+
+        # qubit_run() would do this, but it is only reached when go=True and
+        # the scripts all use go=False + finish_experiment.
+        if reset_mode_of(self.cfg.expt) != "passive":
+            super().configure_reset()
 
         if go:
             super().qubit_run(
@@ -309,6 +392,23 @@ class T1Experiment(QickExperiment):
 
         # Ensure sweep step size is above DAC minimum resolution
         self.check_dac_timing(num_segments=1)
+
+        # The pump (flat part, for flat_top) lasts wait_time, and QICK rejects
+        # segments shorter than 3 or longer than 2**16 - 1 generator cycles.
+        # So the sweep cannot start at 0, and a span past the longest pump is
+        # cut back to end there.
+        if self.cfg.expt.pump:
+            qi = self.cfg.expt.qubit[0]
+            pump_ch = self.cfg.hw.soc.dacs.get("pump", self.cfg.hw.soc.dacs.qubit).ch[qi]
+            min_len = self.soccfg.cycles2us(3, gen_ch=pump_ch)
+            if self.cfg.expt.start < min_len:
+                self.cfg.expt.start = min_len
+            max_len = self.soccfg.cycles2us(2**16 - 1, gen_ch=pump_ch)
+            if self.cfg.expt.start + self.cfg.expt.span > max_len:
+                new_span = max_len - self.cfg.expt.start
+                print(f"Pump can last at most {max_len:.3f} us on DAC {pump_ch}: "
+                      f"span cut from {self.cfg.expt.span:.3f} to {new_span:.3f} us.")
+                self.cfg.expt.span = new_span
 
         # Create a 1D sweep for the wait time from start to start+span
         self.cfg.expt.wait_time = QickSweep1D(
@@ -346,10 +446,7 @@ class T1Experiment(QickExperiment):
 
         if 'shots' in data:
             # Calculate excited state probability from shots
-            qi = self.cfg.expt.qubit[0]
-            threshold = self.cfg.device.readout.threshold[qi]
-            i_shots = data['shots'][0, 0, :, :, 0]  # (n_rounds, n_sweep_pts)
-            data['p_e'] = np.mean(i_shots > threshold, axis=0)
+            self.add_p_e(data)
 
             data.pop("shots")  # Remove raw shots from data to save space
 
@@ -416,9 +513,54 @@ class T1Experiment(QickExperiment):
         )
 
     def update(self, rng_vals=[0.5, 500], first_time=False, no_final=False, verbose=True):
-        """Write the fitted T1 (and derived final_delay) back to the config file."""
+        """
+        Write the fitted T1 (and derived final_delay) back to the config file.
+
+        With ``pulse_ef`` the sequence prepares |f> and the wait measures the
+        *f*-state lifetime, which is a different quantity and belongs in a
+        different field. It used to be written to ``device.qubit.T1``
+        regardless, which silently overwrote the g-e value -- and since
+        ``final_delay`` (and T2r/T2e on first_time) are derived from it, one
+        f-state run corrupted three g-e quantities at once. On run 33 that
+        left T1 = 72 us in the config where the e-state value is ~42, making
+        every passive `final_delay` ~1.7x longer than needed and the reset's
+        "Nx faster than doing nothing" comparison read 85x instead of 48x.
+
+        So: ``pulse_ef`` routes to ``T1_ef`` and touches nothing else, since
+        final_delay and the coherence times are all g-e quantities.
+
+        Likewise ``pump`` routes to ``device.fwm.T1_pump`` (``T1_ef_pump``
+        with ``pulse_ef``), plus ``_gain_p`` / ``_frequency_p`` /
+        ``_pulse_type_p`` recording the pump it was measured under.
+        """
         qi = self.cfg.expt.qubit[0]
+        if self.cfg.expt.pump:
+            # T1 under the pump is not the device T1 (and final_delay derives
+            # from that), so it goes to device.fwm instead, alongside the pump
+            # setting it was taken at -- the number means nothing without it.
+            if self.status:
+                name = "T1_ef_pump" if self.cfg.expt.pulse_ef else "T1_pump"
+                config.update_fwm(self.config_file, name, self.data["new_t1_i"],
+                                  sig=2, rng_vals=rng_vals, verbose=verbose)
+                config.update_fwm(self.config_file, f"{name}_gain_p",
+                                  self.cfg.expt.gain_p, verbose=verbose)
+                config.update_fwm(self.config_file, f"{name}_frequency_p",
+                                  self.cfg.expt.frequency_p, verbose=verbose)
+                config.update_fwm(self.config_file, f"{name}_pulse_type_p",
+                                  self.cfg.expt.pulse_type_p, verbose=verbose)
+            return
         if self.status:
+            if self.cfg.expt.pulse_ef:
+                config.update_qubit(
+                    self.config_file,
+                    "T1_ef",
+                    self.data["new_t1_i"],
+                    qi,
+                    sig=2,
+                    rng_vals=rng_vals,
+                    verbose=verbose,
+                )
+                return
             config.update_qubit(
                 self.config_file,
                 "T1",

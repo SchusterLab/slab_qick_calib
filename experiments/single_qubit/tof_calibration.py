@@ -69,6 +69,12 @@ class LoopbackProgram(QickProgram):
         self.phase = cfg.expt.phase
         super()._initialize(cfg, readout="custom")
 
+        # Optional shorter drive inside the capture window, to record the resonator's free ring-down
+        if cfg.expt.drive_length is not None:
+            self.add_pulse(ch=self.res_ch, name="drive_pulse", style="const", ro_ch=self.adc_ch,
+                           freq=self.frequency, phase=self.phase, gain=self.gain,
+                           length=cfg.expt.drive_length)
+
         # Create a π pulse to excite the qubit from |0⟩ to |1⟩
         if cfg.expt.check_e:
             super().make_cfg_pulse(cfg.expt.qubit[0], cfg.device.qubit.f_ge, "pi_ge")
@@ -95,7 +101,8 @@ class LoopbackProgram(QickProgram):
             self.delay_auto(t=0.01, tag="wait")
         if self.lo_ch is not None:
             self.pulse(ch=self.lo_ch, name="mix_pulse", t=0.0)
-        self.pulse(ch=self.res_ch, name="readout_pulse", t=0)
+        pulse_name = "readout_pulse" if cfg.expt.drive_length is None else "drive_pulse"
+        self.pulse(ch=self.res_ch, name=pulse_name, t=0)
         self.trigger(
             ros=[self.adc_ch],
             pins=[0],
@@ -171,6 +178,11 @@ class ToFCalibrationExperiment(QickExperiment):
             "final_delay": 0.1,  # Final delay after sequence
             "check_e": False,  # Whether to excite qubit before measurement
             "use_readout": False,  # Whether to use existing readout parameters
+            "noise_fraction": 0.1,  # Fraction of initial amplitude data used for noise estimate
+            "threshold_sigma": 5,  # Required adjacent amplitude jump in noise standard deviations
+            # If set (us), play a const pulse this long and keep capturing for readout_length:
+            # the tail is the resonator's free ring-down (script 42)
+            "drive_length": None,
         }
 
         # If use_readout is True, use the existing readout gain and phase
@@ -258,10 +270,15 @@ class ToFCalibrationExperiment(QickExperiment):
             data = self.data
 
         if not fit:
-            # Compute trig_offset: find half-max crossing point + 10 ns
-            half_max = np.max(data['amps']) / 2
-            crossing_idx = np.argmin(np.abs(data['amps'] - half_max))
-            data['trig_offset'] = data['xpts'][crossing_idx] + 0.02  # +20 ns in µs
+            amps = data["amps"]
+            noise_end = max(1, int(len(amps) * self.cfg.expt.noise_fraction))
+            noise_std = np.std(amps[:noise_end])
+            threshold = self.cfg.expt.threshold_sigma * noise_std
+
+            for i in range(1, len(amps)):
+                if amps[i] - amps[i - 1] > threshold:
+                    data["trig_offset"] = data["xpts"][i]
+                    break
 
         if fit:
             qi = self.cfg.expt.qubit[0]

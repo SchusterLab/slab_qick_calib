@@ -249,11 +249,23 @@ class RabiFluxExperiment(QickExperiment):
             pulse_config = self.cfg.device.qubit.pulses.pi_ge
             params_def["freq"] = self.cfg.device.qubit.f_ge_max[qi]
 
+        # Unconditional, and the type/pulse_type aliasing below: see the same
+        # block in single_qubit/rabi.py, which this class mirrors.
         for key in pulse_config:
-            if key not in params:
-                params_def[key] = pulse_config[key][qi]
+            params_def[key] = pulse_config[key][qi]
 
         params_def["pulse_type"] = params_def["type"]
+        if "type" in params and "pulse_type" in params:
+            if params["type"] != params["pulse_type"]:
+                raise ValueError(
+                    f"type={params['type']!r} and pulse_type="
+                    f"{params['pulse_type']!r} are aliases and must agree"
+                )
+        elif "type" in params:
+            params["pulse_type"] = params["type"]
+        elif "pulse_type" in params:
+            params["type"] = params["pulse_type"]
+
         params = {**params_def, **params}
 
         # Resolve length from pulse type so downstream code can use direct access
@@ -262,6 +274,7 @@ class RabiFluxExperiment(QickExperiment):
                 params["length"] = params["sigma"] * params["sigma_inc"]
             else:
                 params["length"] = params["sigma"]
+        params_def["length"] = params["length"]
 
         # Resolve flat_top ramp defaults
         if params["pulse_type"] == "flat_top":
@@ -269,6 +282,8 @@ class RabiFluxExperiment(QickExperiment):
                 params["ramp_sigma"] = 0.02
             if "ramp_sigma_inc" not in params:
                 params["ramp_sigma_inc"] = 3
+            params_def["ramp_sigma"] = params["ramp_sigma"]
+            params_def["ramp_sigma_inc"] = params["ramp_sigma_inc"]
 
         return params
 

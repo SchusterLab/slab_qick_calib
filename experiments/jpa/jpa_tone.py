@@ -90,6 +90,20 @@ def _jpa_value(jpa, name, idx, default=None):
     return value
 
 
+def _set_jpa_value(jpa, name, idx, value):
+    if not hasattr(jpa, name):
+        return
+    current = getattr(jpa, name)
+    if isinstance(current, list):
+        current[idx] = value
+    elif isinstance(current, tuple):
+        updated = list(current)
+        updated[idx] = value
+        setattr(jpa, name, tuple(updated))
+    else:
+        setattr(jpa, name, value)
+
+
 def turn_on_jpa(
     soc,
     soccfg,
@@ -98,9 +112,21 @@ def turn_on_jpa(
     dc_bias_v=None,
     idx=1,
     verbose=True,
+    pump_ch=None,
+    pump_freq_mhz=None,
+    mixer_freq_mhz=None,
+    pump_nqz=None,
+    attn1_db=None,
+    attn2_db=None,
+    filter_fc_mhz=None,
+    filter_bw_mhz=None,
+    filter_type=None,
 ):
     """
     Apply JPA RF/DC settings from cfg.hw.soc.dacs.jpa and start the pump tone.
+
+    Optional keyword overrides let a notebook park the exact point found by a
+    fine-tuning scan without first writing it to YAML.
 
     This is intended for manual parking/checking. It launches a periodic QICK
     tone, so later QICK programs may overwrite or stop it when they configure
@@ -108,15 +134,19 @@ def turn_on_jpa(
     """
     jpa = cfg.hw.soc.dacs.jpa
 
-    pump_ch = int(_jpa_value(jpa, "ch", idx))
-    pump_freq = float(_jpa_value(jpa, "pump_freq", idx))
-    mixer_freq = float(_jpa_value(jpa, "mixing_freq", idx, pump_freq - 400.0))
-    nqz = int(_jpa_value(jpa, "nyquist", idx, 2))
-    attn1 = float(_jpa_value(jpa, "attn1", idx, 15.0))
-    attn2 = float(_jpa_value(jpa, "attn2", idx, 0.0))
-    filter_fc = float(_jpa_value(jpa, "filter_fc", idx, pump_freq))
-    filter_bw = float(_jpa_value(jpa, "filter_bw", idx, 1000.0))
-    filter_type = _jpa_value(jpa, "filter_type", idx, "bandpass")
+    pump_ch = int(_jpa_value(jpa, "ch", idx) if pump_ch is None else pump_ch)
+    pump_freq = float(_jpa_value(jpa, "pump_freq", idx) if pump_freq_mhz is None else pump_freq_mhz)
+    mixer_freq = float(
+        _jpa_value(jpa, "mixing_freq", idx, pump_freq - 400.0)
+        if mixer_freq_mhz is None
+        else mixer_freq_mhz
+    )
+    nqz = int(_jpa_value(jpa, "nyquist", idx, 2) if pump_nqz is None else pump_nqz)
+    attn1 = float(_jpa_value(jpa, "attn1", idx, 15.0) if attn1_db is None else attn1_db)
+    attn2 = float(_jpa_value(jpa, "attn2", idx, 0.0) if attn2_db is None else attn2_db)
+    filter_fc = float(_jpa_value(jpa, "filter_fc", idx, pump_freq) if filter_fc_mhz is None else filter_fc_mhz)
+    filter_bw = float(_jpa_value(jpa, "filter_bw", idx, 1000.0) if filter_bw_mhz is None else filter_bw_mhz)
+    filter_type = _jpa_value(jpa, "filter_type", idx, "bandpass") if filter_type is None else filter_type
     dc_ch = int(_jpa_value(jpa, "jpa_dc_ch", idx))
 
     if pump_gain is None:
@@ -146,6 +176,18 @@ def turn_on_jpa(
         nqz=nqz,
         mixer_freq_mhz=mixer_freq,
     )
+
+    _set_jpa_value(jpa, "ch", idx, pump_ch)
+    _set_jpa_value(jpa, "pump_freq", idx, pump_freq)
+    _set_jpa_value(jpa, "mixing_freq", idx, mixer_freq)
+    _set_jpa_value(jpa, "nyquist", idx, nqz)
+    _set_jpa_value(jpa, "attn1", idx, attn1)
+    _set_jpa_value(jpa, "attn2", idx, attn2)
+    _set_jpa_value(jpa, "filter_fc", idx, filter_fc)
+    _set_jpa_value(jpa, "filter_bw", idx, filter_bw)
+    _set_jpa_value(jpa, "filter_type", idx, filter_type)
+    _set_jpa_value(jpa, "pump_gain", idx, float(pump_gain))
+    _set_jpa_value(jpa, "jpa_dc_val", idx, float(dc_bias_v))
 
     state = {
         "pump_ch": pump_ch,
@@ -224,3 +266,4 @@ def turn_off_jpa(soc, soccfg, cfg, idx=1, off_bias_v=0.0, verbose=True):
 
     if verbose:
         print(f"JPA OFF: bias={1e3 * float(off_bias_v):.3f} mV, pump gain=0")
+

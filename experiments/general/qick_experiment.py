@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 import copy
 import functools
 import numpy as np
-from tqdm import tqdm_notebook as tqdm
+from tqdm.auto import tqdm
 from datetime import datetime
 import time
 from pathlib import Path
@@ -29,6 +29,8 @@ from ...exp_handling.experiment import Experiment
 from ...exp_handling.experiment import NpEncoder, YamlNpEncoder
 from ...analysis import fitting as fitter
 from ...calib import readout_helpers as helpers
+from ...helpers import f0g1 as f0g1_helpers
+from .qick_program import RESET_MODES, ramp_length, reset_mode_of
 
 
 def get_current_time_string():
@@ -354,6 +356,82 @@ These classes work with the QickProgram classes to implement complete quantum ex
 """
 
 
+def effective_final_delay(cfg):
+    """
+    The inter-shot tail a sequence actually spends, in microseconds.
+
+    With `reset_mode` "passive" this is just `final_delay`, the T1 wait. For
+    the other two modes `QickExperiment._get_final_delay()` drops that to 1 us
+    and the reset sequence takes its place:
+
+    - "active": `reset` rounds of `read_wait + extra_delay`, plus the
+      `reset - 1` re-measurements `QickProgram.reset()` inserts between them
+      (the last round is not re-measured, so it costs no readout).
+      `reset_latch` measures every round instead, so it costs one more
+      readout than the plain form.
+    - "f0g1": one fixed drive of both tones plus the photon's escape window,
+      and no conditional readouts at all. On run 33 that is ~10 us against
+      ~19 us for "active" and ~313 us passive.
+
+    `setup_reset` runs the reset but keeps the passive delay, so it is the
+    slow case plus the reset sequence.
+
+    Approximate -- the pi pulses and the small delay_auto(0.01) after each are
+    not counted -- but the error is well under a microsecond, against the
+    ~300 us this is correcting for. Script 26 feeds the result to
+    `fwm_qc.reduce_to_nep`, where using the passive value under reset would
+    overstate the cycle time by two orders of magnitude and understate the
+    duty cycle by the same factor.
+
+    Lives here rather than in scripts/SMPD/common.py because the offline
+    re-analyses need it too. fit_shared_means.py built its cycle time from the
+    raw `final_delay` and so reported run 33 #383 at 8.06% duty when the f0g1
+    reset actually made it 72.23%, overstating the NEP threefold. One
+    implementation, imported by both, is what keeps that fixed.
+    """
+    passive = cfg.final_delay
+    mode = reset_mode_of(cfg)
+    if mode == "passive":
+        return passive
+
+    base = passive if cfg.setup_reset else 1.0
+
+    if mode == "f0g1":
+        # One fixed drive of both tones, then the photon's escape window. No
+        # conditional readouts at all, which is why this beats the "active"
+        # tail despite a longer single pulse: ~10 us against ~19 us on run 33.
+        ramp = ramp_length(cfg.f0g1_reset_pulse_type,
+                           cfg.f0g1_reset_ramp_sigma,
+                           cfg.f0g1_reset_ramp_sigma_inc)
+        reset_tail = (
+            cfg.read_wait
+            + cfg.extra_delay
+            + cfg.f0g1_reset_length
+            + ramp
+            + cfg.f0g1_reset_gap
+        )
+        return base + reset_tail
+
+    if mode == "while":
+        # Data-dependent: the loop exits as soon as a read says ground, so the
+        # tail is a distribution, not a number. Run 34 measured a mean of 1.0
+        # rounds from |e> and 0.01 from |g>, and FWM shots are nearly all
+        # ground, so one round is the typical cost. `reset` is only the cap.
+        # Anything quoting a duty cycle from this is reporting the mean.
+        per_round = cfg.read_wait + cfg.extra_delay + cfg.readout_length
+        return base + per_round * (1 + cfg.reset_while_typical)
+
+    rounds = cfg.reset
+    # reset_verify re-measures after the final pulse too, and reset_latch
+    # measures every round by construction ("reset + measure" is the loop
+    # body), so both give a readout per round instead of all but the last.
+    n_reads = (rounds if (cfg.reset_verify or cfg.reset_latch)
+               else rounds - 1)
+    per_round = cfg.read_wait + cfg.extra_delay
+    reset_tail = rounds * per_round + n_reads * cfg.readout_length
+    return base + reset_tail
+
+
 class QickExperiment(Experiment):
     """
     Base class for quantum experiments using the QICK framework.
@@ -434,6 +512,8 @@ class QickExperiment(Experiment):
         path = cfg_dict["expt_path"]
         config_file = cfg_dict["cfg_file"]
         im = cfg_dict["im"]
+        data_path = cfg_dict.get("data_path")
+        metadata_path = cfg_dict.get("metadata_path")
         super().__init__(
             soccfg=soccfg,
             path=path,
@@ -442,6 +522,8 @@ class QickExperiment(Experiment):
             config_file=config_file,
             progress=progress,
             im=im,
+            data_path=data_path,
+            metadata_path=metadata_path,
         )
         # Store the check_params parameter for use in child classes
         self._check_params = check_params
@@ -563,13 +645,30 @@ class QickExperiment(Experiment):
         return data
 
     def _get_final_delay(self):
-        """Get appropriate final delay based on active reset configuration."""
-        if "active_reset" in self.cfg.expt and self.cfg.expt.active_reset:
-            #return self.cfg.device.readout.readout_length[self.cfg.expt.qubit[0]]+4
-            #return 10
+        """
+        Get the inter-shot delay, which active reset is allowed to shorten.
+
+        Active reset returns the qubit to |g> in a few microseconds, so the
+        long passive T1 wait is no longer needed and the shot rate goes up by
+        roughly two orders of magnitude.
+
+        `setup_reset` is the staging mode: run the reset sequence but keep the
+        passive delay anyway, so the data is still valid if the reset turns out
+        not to be working. That is how `12b_active_reset.py` measures whether
+        it works before anything relies on it.
+
+        The `in` guards are deliberate -- many experiments outside the SMPD
+        tree never define these keys.
+        """
+        passive = self.cfg.device.readout.final_delay[self.cfg.expt.qubit[0]]
+        # Any reset mode other than passive replaces the T1 wait with its own
+        # (much shorter) sequence. setup_reset keeps the long delay anyway, so
+        # a reset that is not working cannot quietly corrupt the data.
+        reset_on = reset_mode_of(self.cfg.expt) != "passive"
+        staging = "setup_reset" in self.cfg.expt and self.cfg.expt.setup_reset
+        if reset_on and not staging:
             return 1
-        else:
-            return self.cfg.device.readout.final_delay[self.cfg.expt.qubit[0]]
+        return passive
 
     def analyze(
         self,
@@ -762,7 +861,7 @@ class QickExperiment(Experiment):
 
         file_path = Path(self.fname)
         new_filename = file_path.name.rsplit(".", 1)[0] + suffix + ".png"
-        output_path = Path(self.path) / "images" / new_filename
+        output_path = Path(self.metadata_path or Path(self.path) / "metadata_and_images") / new_filename
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         fig.savefig(output_path)
@@ -772,7 +871,7 @@ class QickExperiment(Experiment):
         """Save the experiment's config as a YAML file alongside the saved images."""
         file_path = Path(self.fname)
         new_filename = file_path.name.rsplit(".", 1)[0] + suffix + ".yml"
-        output_path = Path(self.path) / "images" / new_filename
+        output_path = Path(self.metadata_path or Path(self.path) / "metadata_and_images") / new_filename
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         with open(output_path, "w") as f:
@@ -839,7 +938,7 @@ class QickExperiment(Experiment):
             **kwargs: Additional arguments passed to the run method
         """
         # Configure active reset if enabled
-        if self.cfg.expt.active_reset:
+        if reset_mode_of(self.cfg.expt) != "passive":
             self.configure_reset()
 
         # Configure display options based on qubit state
@@ -976,28 +1075,138 @@ class QickExperiment(Experiment):
             )
         return xpts
 
+    # configure_reset() derives these, so they are legitimate in a script's
+    # params even though no params_def declares them -- scripts 26/37 pass
+    # extra_delay and f0g1_reset_gap. They must NOT be added to a params_def
+    # instead: configure_reset merges as {derived, **cfg.expt}, so a
+    # params_def entry would win and pin the value the ring-down derives.
+    RESET_DERIVED_PARAMS = frozenset((
+        "read_wait", "extra_delay", "threshold", "threshold_v", "reset",
+        "f0g1_reset_gain", "f0g1_reset_gain_ef", "f0g1_reset_length",
+        "f0g1_reset_gap", "f0g1_reset_residual",
+    ))
+
     def check_params(self, params_def):
         """Check for unexpected parameters in the experiment configuration."""
         if self._check_params:
-            unexpected_params = set(self.cfg.expt.keys()) - set(params_def.keys())
+            unexpected_params = (set(self.cfg.expt.keys())
+                                 - set(params_def.keys())
+                                 - self.RESET_DERIVED_PARAMS)
             if unexpected_params:
                 print(f"Unexpected parameters found in params: {unexpected_params}")
 
-    def configure_reset(self):
-        """Configure active reset parameters for the experiment."""
+    def reset_threshold(self, qi):
+        """
+        Threshold the reset branch discriminates on, in volts.
+
+        `device.readout.reset_threshold` when it is set, otherwise
+        `device.readout.threshold`. The two answer different questions and
+        their optima differ by order a sigma:
+
+        - `threshold` maximises readout *fidelity*, i.e. minimises
+          `P(g read as e) + P(e read as g)` with equal weight. The e blob's
+          T1-decay tail drags it down towards g so those decayed shots are
+          still labelled excited.
+        - Reset cares about `P(g read as e)` far more: that error fires a pi
+          pulse on a ground shot and *creates* an excited state, and it is
+          re-injected every round, so it sets the floor. The other error only
+          costs an extra round. And a shot that decayed mid-readout is in |g>
+          by the time the pulse would land, so reset must *not* pulse exactly
+          the population `threshold` is pulled down to capture.
+
+        Missing or NaN falls back, so old configs keep working.
+        """
+        readout = self.cfg.device.readout
+        if "reset_threshold" in readout:
+            value = readout.reset_threshold[qi]
+            if value is not None and not np.isnan(value):
+                return value
+        return readout.threshold[qi]
+
+    def configure_reset(self, verbose=True):
+        """
+        Fill in the derived parameters the selected reset mode needs.
+
+        Both modes share the ring-down timing (`read_wait`, `extra_delay`),
+        because both have to let the readout finish before doing anything.
+        Beyond that they diverge:
+
+        - "active" needs the discrimination `threshold` and the round count.
+        - "f0g1" needs the two drive tones, derived from `device.f0g1` by
+          `helpers.f0g1.f0g1_reset_params`. It needs no threshold at all --
+          nothing is measured -- so `reset_threshold` is not consulted.
+
+        Precedence for every parameter: a script's `params` > the config >
+        derived. The config keys are `device.readout.reset[qi]` (rounds),
+        `device.readout.reset_ringdown[qi]` (read_wait + extra_delay) and
+        `device.f0g1.reset_*`; a missing, None or NaN config value means
+        "derive it". Called after `check_params` so the derived keys are not
+        reported as unexpected.
+        """
         qi = self.cfg.expt.qubit[0]
+        mode = reset_mode_of(self.cfg.expt)
+
+        def unset(value):
+            return value is None or (
+                isinstance(value, float) and np.isnan(value)
+            )
+
+        read_wait = 0.1
+        ringdown = self.cfg.device.readout.get("reset_ringdown", None)
+        ringdown = None if ringdown is None else ringdown[qi]
+        if unset(ringdown):
+            extra_delay = 0.2 + 1.55 / self.cfg.device.readout.kappa[qi]
+        else:
+            extra_delay = ringdown - read_wait
         params_def = dict(
-            threshold_v=self.cfg.device.readout.threshold[qi],
-            read_wait=0.1,
-            extra_delay=0.2 + 1.55/self.cfg.device.readout.kappa[qi],
+            read_wait=read_wait,
+            extra_delay=extra_delay,
             reset=self.cfg.device.readout.reset[qi],
         )
+
+        if mode == "f0g1":
+            # None means "fall through to the config, then derive". Strip those
+            # before the merge below, or a None sitting in cfg.expt would win
+            # over the derived value and the Program would read it.
+            f0g1_cfg = self.cfg.device.get("f0g1", {})
+            overrides = {}
+            for key in ("gain", "gain_ef", "length", "gap", "residual"):
+                expt_key = f"f0g1_reset_{key}"
+                value = self.cfg.expt.get(expt_key, None)
+                if value is None:
+                    self.cfg.expt.pop(expt_key, None)
+                    value = f0g1_cfg.get(f"reset_{key}", None)
+                overrides[key] = None if unset(value) else value
+            params_def.update(
+                f0g1_helpers.f0g1_reset_params(
+                    self.cfg,
+                    qi,
+                    gain_f0g1=overrides["gain"],
+                    gain_ef=overrides["gain_ef"],
+                    residual_target=overrides["residual"],
+                    length=overrides["length"],
+                    gap=overrides["gap"],
+                    verbose=verbose,
+                )
+            )
+            self.cfg.expt = {**params_def, **self.cfg.expt}
+            return
+
+        params_def["threshold_v"] = self.reset_threshold(qi)
         self.cfg.expt = {**params_def, **self.cfg.expt}
 
         adc = self.cfg.hw.soc.adcs.readout.ch[qi]
+        # Normalize with the length the readout is actually played at, not the
+        # config's. The accumulated I scales with the integration length, so a
+        # sweep that overrides readout_length (12d, 12e) would otherwise branch
+        # on a threshold off by that ratio -- 2.8x over 12e's length range,
+        # which reads as "reset everything" at the long end and "reset nothing"
+        # at the short end, with no sign of it in the saved shots.
+        readout_length = self.cfg.expt.get(
+            "readout_length", self.cfg.device.readout.readout_length[qi])
         self.cfg.expt["threshold"] = int(
             self.cfg.expt["threshold_v"]
-            * self.cfg.device.readout.readout_length[qi]
+            * readout_length
             * self.soccfg._get_ch_cfg(ro_ch=adc)['f_fabric']
         )
 
@@ -1066,6 +1275,60 @@ class QickExperiment(Experiment):
         e_mean = self.cfg.device.readout.e_mean[qi]
         dv = e_mean - g_mean
         self.data["scale_data"] = (self.data["avgi"] - g_mean) / dv
+
+    def add_p_e(self, data=None, stacked=False, ro_index=0, read_index=0):
+        """
+        Threshold raw shots into P(e) and store the result in data['p_e'].
+
+        This is the single protocol every experiment should use: take the I
+        quadrature of one read on one readout channel, compare each shot to
+        `device.readout.threshold[qi]`, and average the booleans over the reps
+        loop.
+
+        Shot layout comes from qick: `prog.get_raw()` returns
+        `(*loop_dims, n_reads, 2)` per readout channel with
+        `loop_dims = (reps, *sweep dims)` -- reps is always the outermost loop
+        in asm_v2 -- and `collect_shots` stacks I and Q, so `data['shots']` is
+
+            (2, n_ro, reps, *sweep dims, n_reads)
+
+        or, for 2D experiments that append one entry per y step (`stacked`),
+
+            (n_y, 2, n_ro, reps, *sweep dims, n_reads)
+
+        Averaging over the reps axis therefore always leaves P(e) on the sweep
+        grid, whatever the number of sweep loops.
+
+        Args:
+            data: Data dict to read 'shots' from and write 'p_e' into
+                (defaults to self.data)
+            stacked: True when 'shots' has a leading per-y-step axis
+            ro_index: Which readout channel's shots to threshold
+            read_index: Which read within a shot to use
+
+        Returns:
+            The data dict. A no-op if 'shots' is absent.
+        """
+        if data is None:
+            data = self.data
+        if "shots" not in data:
+            return data
+
+        qi = self.cfg.expt.qubit[0]
+        threshold = self.cfg.device.readout.threshold[qi]
+        shots = np.asarray(data["shots"])
+
+        if stacked:
+            # (n_y, 2, n_ro, reps, *sweep, n_reads) -> (n_y, reps, *sweep)
+            i_shots = shots[:, 0, ro_index, ..., read_index]
+            reps_axis = 1
+        else:
+            # (2, n_ro, reps, *sweep, n_reads) -> (reps, *sweep)
+            i_shots = shots[0, ro_index, ..., read_index]
+            reps_axis = 0
+
+        data["p_e"] = np.mean(i_shots > threshold, axis=reps_axis)
+        return data
 
 
 class QickExperimentLoop(QickExperiment):
@@ -1298,6 +1561,109 @@ class QickExperiment2DBase(QickExperimentLoop):
             self.save_config()
             plt.show()
 
+    def display_pe(
+        self,
+        data=None,
+        ax=None,
+        plot_amps=True,
+        title="",
+        fit=True,
+        display=None,
+        **kwargs,
+    ):
+        """
+        2D display with amplitude/phase stacked at left and P(e) at right.
+
+        The P(e) panel spans both rows of the gridspec, so it sits vertically
+        centered beside the amp/phase pair. Axis labels come from self.xlabel
+        and self.ylabel (set in acquire()).
+
+        Falls back to the standard 2D display when `data` has no 'p_e' entry,
+        so experiments that did not collect shots still plot. If the data
+        carries a fitted band trajectory ('band_freq'), it is overlaid on the
+        P(e) panel.
+
+        Args:
+            data: Data dictionary to display
+            ax: Sequence of three axes (amp, phase, P(e)) to plot into, or None
+                to create a new figure
+            plot_amps: Whether to plot amplitude/phase (passed to the fallback)
+            title: Figure suptitle
+            fit: Whether to show the fit (passed to the fallback)
+            display: Display mode for plots
+            **kwargs: Additional arguments for the fallback display
+        """
+        if data is None:
+            data = self.data
+
+        if "p_e" not in data:
+            # No shot data available, fall back to the standard amp/phase display
+            QickExperiment2DBase.display(
+                self,
+                data=data,
+                ax=ax,
+                plot_amps=plot_amps,
+                title=title,
+                xlabel=self.xlabel,
+                ylabel=self.ylabel,
+                fit=fit,
+                display=display,
+                **kwargs,
+            )
+            return
+
+        display = display or getattr(self, "_display_mode", None)
+
+        # Amp/phase panels on the left, P(e) spanning both rows on the right.
+        save_fig = ax is None
+        if save_fig:
+            fig = plt.figure(figsize=DisplayManager.scale_figsize((11, 6), display))
+            gs = fig.add_gridspec(2, 2, width_ratios=[3, 2])
+            ax_amp = fig.add_subplot(gs[0, 0])
+            ax_phase = fig.add_subplot(gs[1, 0])
+            ax_pe = fig.add_subplot(gs[:, 1])
+            fig.suptitle(title)
+        else:
+            ax_amp, ax_phase, ax_pe = ax
+
+        x_sweep = data["xpts"]
+        if np.ndim(x_sweep) > 1:
+            x_sweep = x_sweep[0]
+        y_sweep = data["ypts"]
+        logy = "log" in self.cfg.expt and self.cfg.expt.log
+
+        for cur_ax, ydata, ylabel in zip(
+            [ax_amp, ax_phase, ax_pe],
+            ["amps", "phases", "p_e"],
+            ["Amplitude (ADC level)", "Phase (radians)", "P(e)"],
+        ):
+            pcm = cur_ax.pcolormesh(
+                x_sweep, y_sweep, data[ydata], cmap="viridis", shading="auto", rasterized=True
+            )
+            plt.colorbar(pcm, ax=cur_ax, label=ylabel)
+            cur_ax.set_xlabel(self.xlabel)
+            cur_ax.set_ylabel(self.ylabel)
+            if logy:
+                cur_ax.set_yscale("log")
+
+        if "band_freq" in data:
+            # Overlay the robustly fit band trajectory used to extract band_p_e.
+            ax_pe.plot(
+                data["band_freq"],
+                y_sweep,
+                color="red",
+                lw=1,
+                label=f"{data['band_fit_type']} band fit",
+            )
+            ax_pe.set_xlim(np.min(x_sweep), np.max(x_sweep))
+            ax_pe.legend(loc="upper right", fontsize="small")
+
+        if save_fig:
+            fig.tight_layout()
+            self.save_fig(fig)
+            self.save_config()
+            plt.show()
+
     def analyze(self, fitfunc=None, fitterfunc=None, data=None, fit=True, rescale=False, **kwargs):
         """
         Analyze 2D experiment data by fitting each row.
@@ -1405,7 +1771,12 @@ class QickExperiment2D(QickExperiment2DBase):
         current_time = get_current_time_string()
 
         # Iterate through each point in the y-axis parameter sweep
-        for i in tqdm(yvals, disable=not progress):
+        for i in tqdm(
+            yvals,
+            disable=not progress,
+            desc=getattr(self, "progress_desc", None),
+            position=0,
+        ):
             # Update configuration with current y-axis parameter value
             for j in range(len(y_sweep)):
                 self.cfg.expt[y_sweep[j]["var"]] = y_sweep[j]["pts"][i]
@@ -1801,7 +2172,9 @@ class QickExperiment2DSimple(QickExperiment2DBase):
                 self.expt.cfg.expt[y_sweep[j]["var"]] = y_sweep[j]["pts"][i]
 
             # Run the nested experiment (suppress inner progress bar)
-            data_new = self.expt.acquire(progress=False)
+            data_new = self.expt.acquire(
+                progress=progress and getattr(self, "nested_progress", False)
+            )
 
             # Store all data from the nested experiment
             for key in data_new:
@@ -1812,6 +2185,8 @@ class QickExperiment2DSimple(QickExperiment2DBase):
             data["time"].append(time.time())
             
             # Live update heatmap plot
+            if hasattr(self, "_update_power_live_plots"):
+                self._update_power_live_plots(data)
             if self.live_plot and i>0:
                 self.live_plotter.update(data, y_sweep, step=int(i)+1, total=len(yvals))
             if self.save_interim:

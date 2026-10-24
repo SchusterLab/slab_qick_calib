@@ -81,14 +81,16 @@ class JPABiasScan(QickExperiment):
             "long_pulse": False,
             "loop": False,
             "phase_const": False,
-            "active_reset": False,
+            "reset_mode": "passive",
             "flux": False,
         }
         dc_defaults = {
             "dc_start": 112e-3,
             "dc_stop": 122e-3,
             "expts_dc": 21,
-            "bias_chan": self.cfg.hw.soc.dacs.flux.dc_ch[qi],
+            # The JPA has its own DC bias channel; it does not use the qubit
+            # flux line, which may not exist at all.
+            "bias_chan": self.cfg.hw.soc.dacs.jpa.jpa_dc_ch[qi],
             "jpa_dc_val": 117e-3,
             "dc_settle": 0.25,
             "dc_verify_print": True,

@@ -154,6 +154,8 @@ class Experiment:
         config_file=None,
         liveplot_enabled=False,
         im=None,
+        data_path=None,
+        metadata_path=None,
         **kwargs,
     ):
         """
@@ -181,6 +183,7 @@ class Experiment:
         self.path = path
         self.prefix = prefix
         self.cfg = None
+        self.metadata_path = metadata_path
         
         # Configure config file path
         if config_file is not None:
@@ -196,7 +199,9 @@ class Experiment:
 
         # Set up data file name - save to 'data' subdirectory
         # For absolute paths: path/data, for relative paths: data/path
-        if Path(path).is_absolute():
+        if data_path is not None:
+            data_path = Path(data_path)
+        elif Path(path).is_absolute():
             data_path = Path(path) / "data"
         else:
             data_path = Path("data") / path
