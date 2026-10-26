@@ -781,6 +781,20 @@ The bias also pulls 41's free κ toward 0.207.
 χ: 25_chi gives −1.293, the comb −1.283, 41 −1.28 to −1.30, and the config
 holds −1.3029. The earlier −1.36 was never measured in run 34.
 
+**Photon-calibration analysis tools** (all in `analysis/`, run from there with
+run numbers; `--run run<N>_<Device>` picks the data folder):
+
+| script | does |
+|---|---|
+| `compare_photon_cal.py` | Stark comb and Ramsey runs on the on-resonance axis; probe saturation from a 17b run |
+| `pns_global.py` | global PNS fit (shared area scale, n̄ = c0 + c2·gain², finite-pulse lines, `--voigt`) |
+| `pns_lineshape.py` | finite-pulse and Voigt line shapes, the comb, a per-row fit (shared vs free amplitude) |
+| `pns_line_areas.py` | main-line area vs buffer gain (e.g. #555 off resonance) |
+| `refit_dephasing_spec.py` | script-41 refit with κ fixed (`--kappa`) or free; both / shift / dephasing only |
+| `ramsey_envelope_refit.py` | script-38 traces with exp × Gaussian envelopes (removes the window bias) |
+| `sim_photon_cal.py` | master-equation check of the Ramsey formula and the PNS fit (qutip) |
+| `combine_t2_photon_cal.py` | pool several script-38 runs on one slope |
+
 **Comparing them.** `analysis/compare_photon_cal.py --stark N --ramsey N ...
 [--exclude RUN:i-j] [--saturation N]` puts Stark (both comb normalizations)
 and Ramsey (1/T2 and shift, config vs PNS chi, config vs self-consistent κ) on
@@ -822,8 +836,9 @@ free amplitude per row) is underdetermined: #549 gave 153 (height) vs 377
 - χ′ fixed to 0.
 
 On master-equation-simulated spectra it recovers c2 to about 5%. On
-#549–#551 it gives ~326, matching the κ = 0.182 routes. It exists only as a
-scratch prototype (pns_global.py), not in refit_two_peak.
+#549–#551 it gives ~326, matching the κ = 0.182 routes. It is
+`analysis/pns_global.py` (`python pns_global.py 549 550 551 [--voigt]`);
+refit_two_peak still does the per-row fit.
 
 Checks that came out negative:
 - A Voigt line (Gaussian qubit frequency noise) leaves c2 unchanged.
